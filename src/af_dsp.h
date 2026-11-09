@@ -28,7 +28,6 @@ uint32_t af_dsp_cw_noise(void);
 bool     af_dsp_agc_on(void);
 
 // Управление (Core 0, редкие операции).  
-void     af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz);  
 uint32_t af_dsp_af_lo_hz(void);  
 uint32_t af_dsp_af_hi_hz(void);  
 void     af_dsp_set_notch(bool on);  
@@ -60,9 +59,10 @@ uint32_t af_dsp_max_block_us(void);   // пиковое время блока, �
 void     af_dsp_set_notch(bool on);  
 void     af_dsp_set_nr(bool on);  
 bool     af_dsp_nr_on(void);  
-void     af_dsp_set_band(uint32_t lo_hz, uint32_t hi_hz);  
 uint32_t af_dsp_band_lo_hz(void);  
 uint32_t af_dsp_band_hi_hz(void);
 uint8_t  af_dsp_out_fill_pwm(void);
 
+// Установка полосы ПФ. Возвращает false, если команда отклонена  
+// (при включённом CW полоса следует за f0±250 Гц).  
 bool af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz);
