@@ -12,3 +12,6 @@ void af_led_init(void);                          // пины на выход, в
 void af_led_poll(void);                          // heartbeat, вызывать из loop()  
 void af_led_set(uint8_t r, uint8_t g, uint8_t b);// произвольный цвет 0..255  
 void af_led_off(void);
+// Сообщить LED текущий банк (0=ручной, 1..7=ячейки). Вызывать из af_gpio_ctl  
+// при смене кода на GP2..GP4 и из af_cli при 'load x'.  
+void af_led_set_bank(uint8_t bank);

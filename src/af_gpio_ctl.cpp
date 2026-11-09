@@ -14,7 +14,8 @@
 #include "af_gpio_ctl.h"  
 #include "af_config.h"  
 #include "af_dsp.h"  
-#include "af_store.h"  
+#include "af_store.h"
+#include "af_led.h"
   
 struct gpio_ctl_t {  
     uint8_t  pin;  
@@ -50,11 +51,13 @@ static void apply_nt(bool grounded) {
   
 static void apply_bank(uint8_t code) {  
     bank_code = code;  
-    if (code == 0) {  
-        Serial.println("[GPIO] bank=0 -> manual mode (console)");  
-        return;  
-    }  
-    if (af_store_load(code)) {  
+    if (code == 0) {    
+        af_led_set_bank(0);          // зелёный — ручной режим  
+        Serial.println("[GPIO] bank=0 -> manual mode (console)");    
+        return;    
+    }
+    if (af_store_load(code)) {
+        af_led_set_bank(code);   // code = 0..7 с GP2..GP4
         Serial.printf("[GPIO] bank=%u -> loaded band=%lu..%lu cw=%s f0=%lu bw=%lu\n",  
                       code,  
                       (unsigned long)af_dsp_band_lo_hz(),  
