@@ -253,29 +253,47 @@ static inline int32_t __not_in_flash_func(cw_push)(int32_t x) {
 // NOTCH_N=24, NOTCH_DELAY=96 — 1:1 из приёмника, работает на 15.625 ksps.  
 // ---------------------------------------------------------------------------  
   
-static volatile bool notch_on = false;  
-static int16_t notch_w[NOTCH_N]                  = {};  
-static int32_t notch_buf[NOTCH_N + NOTCH_DELAY]  = {};  
-static int     notch_idx = 0;  
-static int64_t notch_pow = 0;   // EMA мощности опорного вектора  
+static volatile bool notch_on = false;    
+static int16_t notch_w[NOTCH_N]                  = {};    
+static int32_t notch_buf[NOTCH_N + NOTCH_DELAY]  = {};    
+static int     notch_idx = 0;    
+static int64_t notch_pow = 0;   // EMA мощности опорного вектора    
+  
+// Скользящее окно энергии: кольцо последних NOTCH_N опорных отсчётов    
+// и бегущая сумма их квадратов — вместо O(N) пересчёта на каждый отсчёт.    
+static int32_t  notch_v[NOTCH_N] = {};    
+static int      notch_vidx = 0;    
+static int64_t  notch_energy = 0;
   
 // Один отсчёт автонотча. Возвращает ОШИБКУ e = x - y (тон вычтен).  
 static inline int32_t __not_in_flash_func(notch_lms_push)(int32_t x) {  
     notch_buf[notch_idx] = x;  
   
-    // предсказание y по задержанным отсчётам + мощность опорного вектора  
-    int64_t acc = 0, energy = 0;  
-    int p = notch_idx - NOTCH_DELAY;  
-    if (p < 0) p += NOTCH_N + NOTCH_DELAY;  
-    int32_t taps[NOTCH_N];  
-    for (int k = 0; k < NOTCH_N; k++) {  
-        int32_t v = notch_buf[p];  
-        taps[k] = v;  
-        acc    += (int64_t)notch_w[k] * v;        // y в Q15  
-        energy += (int64_t)v * v;                 // Σ v²  
-        if (--p < 0) p += NOTCH_N + NOTCH_DELAY;  
-    }  
-    int32_t y = (int32_t)(acc >> 15);  
+    // предсказание y по задержанным отсчётам; энергия — скользящим окном    
+    int64_t acc = 0;    
+    int p = notch_idx - NOTCH_DELAY;    
+    if (p < 0) p += NOTCH_N + NOTCH_DELAY;    
+    int32_t taps[NOTCH_N];    
+    for (int k = 0; k < NOTCH_N; k++) {    
+        int32_t v = notch_buf[p];    
+        taps[k] = v;    
+        acc += (int64_t)notch_w[k] * v;           // y в Q15    
+        if (--p < 0) p += NOTCH_N + NOTCH_DELAY;    
+    }    
+    int32_t y = (int32_t)(acc >> 15);    
+    
+    // Скользящая энергия: вычесть ушедший отсчёт, добавить новый.    
+    // Опорный вектор — отсчёты с задержкой NOTCH_DELAY, т.е. v = taps[0]    
+    // (самый свежий из окна).    
+    {    
+        int32_t v_new = taps[0];    
+        int32_t v_old = notch_v[notch_vidx];    
+        notch_v[notch_vidx] = v_new;    
+        notch_vidx = (notch_vidx + 1) % NOTCH_N;    
+        notch_energy += (int64_t)v_new * v_new - (int64_t)v_old * v_old;    
+        if (notch_energy < 0) notch_energy = 0;   // защита от дрейфа    
+    }    
+    int64_t energy = notch_energy;
   
     int32_t e = x - y;                            // ошибка = выход нотча  
   
@@ -383,7 +401,9 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
   
     int32_t avg = (int32_t)(agc_avg_q16 >> 16);  
     if (avg < 1) avg = 1;  
-    int32_t y1 = (int32_t)(((int64_t)x * AGC_REF) / avg);  
+    int64_t den = avg;  
+    int k = 63 - __builtin_clzll((uint64_t)den);  
+    int32_t y1 = (int32_t)(((int64_t)x * AGC_REF) >> k);
   
     if (cw_on) {                       // CW: без лимитера, только насыщение  
         if (y1 >  32767) y1 =  32767;  
@@ -511,12 +531,15 @@ uint32_t af_dsp_af_lo_hz(void) { return af_lo_hz; }
 uint32_t af_dsp_af_hi_hz(void) { return af_hi_hz; }  
   
 void af_dsp_set_notch(bool on) {  
-    if (on && !notch_on) {           // сброс состояния при включении — без щелчка  
-        memset(notch_buf, 0, sizeof(notch_buf));  
-        memset(notch_w,   0, sizeof(notch_w));  
-        notch_idx = 0;  
-        notch_pow = 0;  
-    }  
+    if (on && !notch_on) {           // сброс состояния при включении — без щелчка    
+        memset(notch_buf, 0, sizeof(notch_buf));    
+        memset(notch_w,   0, sizeof(notch_w));    
+        memset(notch_v,   0, sizeof(notch_v));    
+        notch_idx = 0;    
+        notch_vidx = 0;    
+        notch_energy = 0;    
+        notch_pow = 0;    
+    }
     notch_on = on;  
 }  
   
