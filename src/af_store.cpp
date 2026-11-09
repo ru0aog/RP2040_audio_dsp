@@ -79,7 +79,11 @@ void af_store_init(void) {
         s_sector_img[0] = AF_STORE_MAGIC0;  
         s_sector_img[1] = AF_STORE_MAGIC1;  
         s_sector_img[2] = AF_STORE_VER;  
-        int rc = flash_safe_execute(do_flash_write, NULL, 500);  
+        // Паркуем Core 1 заранее — иначе flash_safe_execute может не    
+        // дождаться handshake за 500 мс и вернуть PICO_ERROR_TIMEOUT (-4).    
+        rp2040.idleOtherCore();    
+        int rc = flash_safe_execute(do_flash_write, NULL, 500);    
+        rp2040.resumeOtherCore();
         if (rc == PICO_OK) {  
             // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
             for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
@@ -117,9 +121,11 @@ bool af_store_save(uint8_t idx) {
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));  
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));  
   
-    // Erase+program: flash_safe_execute сам паркует Core 1 и гоняет  
-    // запись из RAM — безопасно при любом clk_sys.  
-    int rc = flash_safe_execute(do_flash_write, NULL, 500);  
+    // Паркуем Core 1 заранее — иначе flash_safe_execute может не    
+    // дождаться handshake за 500 мс и вернуть PICO_ERROR_TIMEOUT (-4).    
+    rp2040.idleOtherCore();    
+    int rc = flash_safe_execute(do_flash_write, NULL, 500);    
+    rp2040.resumeOtherCore();
     if (rc != PICO_OK) {  
         Serial.printf("# save: flash write failed rc=%d\n", rc);  
         return false;  
