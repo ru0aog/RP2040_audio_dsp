@@ -82,13 +82,15 @@ static void cli_stats(void) {
 // ---------------------------------------------------------------------------  
 // Разбор одной строки  
 // ---------------------------------------------------------------------------  
-static void cli_exec(char* line) {  
-    // Пропуск ведущих пробелов; пустые строки и комментарии — мимо.  
-    while (*line == ' ' || *line == '\t') ++line;  
-    if (*line == '\0' || *line == '#') return;  
-  
-    char* cmd = strtok(line, " \t");  
-    if (cmd == NULL) return;  
+static void cli_exec(char* line) {    
+    // Пропуск ведущих пробелов; пустые строки и комментарии — мимо.    
+    while (*line == ' ' || *line == '\t') ++line;    
+    if (*line == '\0' || *line == '#') return;    
+    
+    Serial.printf("# > %s\n", line);      // эхо введённой команды    
+    
+    char* cmd = strtok(line, " \t");    
+    if (cmd == NULL) return;
   
     if (strcasecmp(cmd, "help") == 0 ||    
         strcasecmp(cmd, "h") == 0 ||    

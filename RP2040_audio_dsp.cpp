@@ -82,6 +82,7 @@ void setup()
     af_gpio_ctl_init();     // применит банк/фильтры по пинам
     af_capture_start();   // DMA_IRQ_0 живёт на Core 0
   
+    watchdog_enable(3000, true);   // WDT 3 с; true = пауза WDT при отладке  
     // Захват ADC+DMA стартует в setup1() на Core 1 —  
     // там же живёт DMA_IRQ_0 и DSP-поллинг.  
     Serial.println("# INIT_DONE (core0)");  
@@ -114,6 +115,8 @@ void loop()
     const uint32_t busy_start = now;  
   
     // --- Прикладные задачи Core 0 ---  
+
+    watchdog_update();      // сброс WDT — Core 0 жив  
   
     // Выгрузка обработанных блоков в PWM-DMA.  
     af_pwm_poll();  
