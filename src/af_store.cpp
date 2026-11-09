@@ -109,12 +109,17 @@ void af_store_init(void) {
         s_sector_img[0] = AF_STORE_MAGIC0;  
         s_sector_img[1] = AF_STORE_MAGIC1;  
         s_sector_img[2] = AF_STORE_VER;  
-        // Паркуем Core 1 заранее — иначе flash_safe_execute может не    
-        // дождаться handshake за 500 мс и вернуть PICO_ERROR_TIMEOUT (-4).    
-        noInterrupts();  
-        flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
-        flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
-        interrupts();
+        // Паркуем Core 1 — во время erase/program flash недоступна,  
+        // а af_dsp_poll исполняется из неё. Без парковки Core 1 виснет.  
+        if (!park_core1()) {  
+            Serial.println("[STORE] core1 park timeout, format skipped");  
+            return;   // не форматируем — чтение покажет мусор, но плата жива  
+        }  
+        noInterrupts();    
+        flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);    
+        flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);    
+        interrupts();  
+        g_park_req = false;   // отпустить Core 1
   
         // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
         for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
