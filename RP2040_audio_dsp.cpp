@@ -177,7 +177,8 @@ void setup1()
     // Таймаут 10 с по времени (как в радиомодеме): счётный цикл на nop  
     // сгорает раньше, чем Core 0 поднимет флаг.  
     const uint32_t t0 = millis();  
-    while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {  
+    while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {
+        af_store_core1_park_poll();   // отвечаем на park_core1 из af_store_init 
         tight_loop_contents();  
     }  
   
