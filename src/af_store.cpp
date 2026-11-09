@@ -81,16 +81,16 @@ void af_store_init(void) {
         s_sector_img[2] = AF_STORE_VER;  
         // Паркуем Core 1 заранее — иначе flash_safe_execute может не    
         // дождаться handshake за 500 мс и вернуть PICO_ERROR_TIMEOUT (-4).    
-        rp2040.idleOtherCore();    
-        int rc = flash_safe_execute(do_flash_write, NULL, 500);    
-        rp2040.resumeOtherCore();
-        if (rc == PICO_OK) {  
-            // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
-            for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
-            Serial.println("[STORE] flash formatted (7 banks empty)");  
-        } else {  
-            Serial.printf("[STORE] format FAILED rc=%d\n", rc);  
-        }  
+        rp2040.idleOtherCore();          // Core 1 припаркован — flash свободен  
+        noInterrupts();                  // Core 0: запретить IRQ на время erase/program  
+        flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
+        flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
+        interrupts();  
+        rp2040.resumeOtherCore();  
+  
+        // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
+        for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
+        Serial.println("[STORE] flash formatted (7 banks empty)");
     }  
 }  
   
@@ -123,13 +123,12 @@ bool af_store_save(uint8_t idx) {
   
     // Паркуем Core 1 заранее — иначе flash_safe_execute может не    
     // дождаться handshake за 500 мс и вернуть PICO_ERROR_TIMEOUT (-4).    
-    rp2040.idleOtherCore();    
-    int rc = flash_safe_execute(do_flash_write, NULL, 500);    
+    rp2040.idleOtherCore();          // Core 1 припаркован — flash свободен  
+    noInterrupts();                  // Core 0: запретить IRQ на время erase/program  
+    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
+    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
+    interrupts();  
     rp2040.resumeOtherCore();
-    if (rc != PICO_OK) {  
-        Serial.printf("# save: flash write failed rc=%d\n", rc);  
-        return false;  
-    }  
   
     // Синхронизируем RAM-буфер EEPROM, чтобы af_store_read видел запись.  
     for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
