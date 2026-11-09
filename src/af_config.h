@@ -127,3 +127,6 @@
 // Дебаунс: период опроса и число стабильных чтений для смены состояния  
 #define AF_GPIO_POLL_MS         10u  
 #define AF_GPIO_STABLE          4           // ~40 мс устойчивого уровня
+
+#define AF_BAND_NARROW_LO_HZ    300u  
+#define AF_BAND_NARROW_HI_HZ    2400u

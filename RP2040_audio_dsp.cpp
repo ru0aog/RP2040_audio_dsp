@@ -31,7 +31,8 @@
 #include "src/af_pwm.h"  
 #include "src/af_usb.h"  
 #include "src/af_cli.h"  
-#include "src/af_gpio_ctl.h"  
+#include "src/af_gpio_ctl.h"
+#include "src/af_store.h"
   
 // ---------------------------------------------------------------------------  
 // Флаг готовности Core 0. Core 1 в setup1() ждёт его перед стартом захвата.  

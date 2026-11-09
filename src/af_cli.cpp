@@ -197,7 +197,7 @@ static void cli_exec(char* line) {
             if (af_store_read(i, &b)) {  
                 Serial.printf("# bank %u: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu%%\n",  
                               (unsigned)i,  
-                              (unsigned long)b.band_lo, (unsigned long)b.band_hi,  
+                              (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,
                               b.cw_on ? "on" : "off",  
                               (unsigned long)b.cw_f0,  
                               (unsigned long)b.cw_bw,  
