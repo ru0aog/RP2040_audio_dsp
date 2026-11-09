@@ -111,8 +111,8 @@ void af_led_poll(void) {
     uint8_t b = (uint8_t)((g * c[2]) / 255);  
   
     // Подмес фильтров: NR -> +синий, NT -> +красный (оба -> фиолетовый).  
-    if (af_dsp_nr_on())    b = (uint8_t)(b + (g * 128) / 255);  
-    if (af_dsp_notch_on()) r = (uint8_t)(r + (g * 128) / 255);  
+    if (af_dsp_nr_on())    b = (uint8_t)(b + (g * 128) / 255);   // NR -> +синий  
+    if (af_dsp_notch_on()) r = (uint8_t)(r + g);                 // NT -> красный на полную
   
     if (r != last_r || gg != last_g || b != last_b) {  
         af_led_set(r, gg, b);  

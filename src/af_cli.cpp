@@ -23,6 +23,7 @@
 #include "af_pwm.h"  
 #include "af_usb.h"
 #include "af_store.h"
+#include "af_led.h"
   
 // ---------------------------------------------------------------------------  
 // Справка  
@@ -89,9 +90,11 @@ static void cli_exec(char* line) {
     char* cmd = strtok(line, " \t");  
     if (cmd == NULL) return;  
   
-    if (strcmp(cmd, "help") == 0) {  
-        cli_help();  
-    }  
+    if (strcasecmp(cmd, "help") == 0 ||    
+        strcasecmp(cmd, "h") == 0 ||    
+        strcmp(cmd, "?") == 0) {    
+        cli_help();    
+    }
     else if (strcmp(cmd, "stats") == 0) {  
         cli_stats();  
     }  
@@ -179,14 +182,20 @@ static void cli_exec(char* line) {
     }  
     else if (strcmp(cmd, "load") == 0) {  
         char* v = strtok(NULL, " \t");  
-        if (v == NULL) { Serial.println("# ERR: load <1..7>"); return; }  
+        if (v == NULL) { Serial.println("# ERR: load <0..7>"); return; }  
         int idx = (int)strtoul(v, NULL, 10);  
-        if (idx < 1 || idx > AF_STORE_BANKS) {  
-            Serial.println("# ERR: load <1..7>");  
+        if (idx == 0) {                          // выход в ручной режим  
+            af_led_set_bank(0);  
+            Serial.println("# OK manual mode (bank 0)");  
             return;  
         }  
-        if (af_store_load((uint8_t)idx)) {  
-            Serial.printf("# OK loaded bank %d\n", idx);  
+        if (idx < 1 || idx > AF_STORE_BANKS) {  
+            Serial.println("# ERR: load <0..7>");  
+            return;  
+        } 
+        if (af_store_load(idx)) {  
+            af_led_set_bank((uint8_t)idx);   // цвет вспышки = загруженный банк  
+            Serial.printf("# OK loaded bank %d\n", idx);
         } else {  
             Serial.printf("# bank %d: empty — ignored\n", idx);  
         }  
