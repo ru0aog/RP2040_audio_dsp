@@ -42,21 +42,26 @@ static volatile bool g_parked   = false;
   
 // Вызывается с Core 1 из af_dsp_poll. Вся функция в RAM — во время  
 // erase/program flash недоступен, spin-цикл обязан быть не во flash.  
-void __not_in_flash_func(af_store_core1_park_poll)(void) {  
-    if (!g_park_req) return;  
-    g_parked = true;  
-    while (g_park_req) { /* spin в RAM */ }  
-    g_parked = false;  
-}  
+void __not_in_flash_func(af_store_core1_park_poll)(void) {    
+    if (!g_park_req) return;    
+    uint32_t irq = save_and_disable_interrupts();  // IRQ Core 1 off —    
+                                                   // ISR лежит во flash    
+    g_parked = true;    
+    __dmb();    
+    while (g_park_req) { /* spin в RAM, без IRQ */ }    
+    g_parked = false;    
+    restore_interrupts(irq);    
+}
   
 // Core 0: запросить парковку, ждать ack с таймаутом.  
-static bool park_core1(void) {  
-    g_park_req = true;  
-    uint32_t t0 = millis();  
-    while (!g_parked) {  
-        if (millis() - t0 > 500) { g_park_req = false; return false; }  
-    }  
-    return true;  
+static bool park_core1(void) {    
+    g_park_req = true;    
+    __dmb();    
+    uint32_t t0 = millis();    
+    while (!g_parked) {    
+        if (millis() - t0 > 500) { g_park_req = false; return false; }    
+    }    
+    return true;    
 }
   
 #pragma pack(push, 1)  
