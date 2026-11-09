@@ -17,7 +17,7 @@ struct af_bank_t {
     uint8_t  cw_on;      // 0/1  
     uint16_t cw_f0;      // центральная частота CW, Гц  
     uint16_t cw_bw;      // полоса CW, Гц  
-    uint8_t  cw_noise;   // примесь шума, %  
+    uint16_t cw_noise;   // уровень добавки шума 0..2000 (не проценты!)
 };  
   
 // Инициализация EEPROM. Вызывать из setup() до af_gpio_ctl_init().  
@@ -36,3 +36,7 @@ bool af_store_load(uint8_t idx);
 // Вызывать из af_dsp_poll (Core 1) каждую итерацию — обработка запроса  
 // на парковку перед записью flash.  
 void af_store_core1_park_poll(void);
+
+// Записать массив из AF_STORE_BANKS записей разом (команда 'bank clr').  
+// После записи — watchdog_reboot, функция не возвращается.  
+void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]);

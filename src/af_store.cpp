@@ -142,7 +142,7 @@ bool af_store_save(uint8_t idx) {
     r.d.cw_on    = af_dsp_cw_on() ? 1 : 0;  
     r.d.cw_f0    = (uint16_t)af_dsp_cw_freq();  
     r.d.cw_bw    = (uint16_t)af_dsp_cw_bw();  
-    r.d.cw_noise = (uint8_t)af_dsp_cw_noise();  
+    r.d.cw_noise = (uint16_t)af_dsp_cw_noise();
     r.crc = crc8(&r.d, sizeof(r.d));  
   
     // Читаем текущий сектор из flash напрямую (XIP), патчим запись.  
@@ -178,4 +178,33 @@ bool af_store_load(uint8_t idx) {
     af_dsp_set_cw(b.cw_on != 0);  
     if (!b.cw_on) af_dsp_set_band(b.lo_hz, b.hi_hz);  
     return true;  
+}
+
+void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {  
+    // Читаем текущий сектор, патчим все записи, пишем целиком.  
+    memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), FLASH_SECTOR_SIZE);  
+  
+    s_sector_img[0] = 'A';  
+    s_sector_img[1] = 'F';  
+    s_sector_img[2] = AF_STORE_VER;  
+    s_sector_img[3] = 0xFF;  
+  
+    for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {  
+        af_bank_rec_t r;  
+        r.d = banks[i - 1];  
+        r.crc = crc8((const uint8_t*)&r.d, sizeof(r.d));  
+        memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));  
+    }  
+  
+    if (!park_core1()) {  
+        Serial.println("# bank clr: core1 park timeout");  
+        return;  
+    }  
+    noInterrupts();  
+    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
+    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
+    interrupts();  
+  
+    Serial.flush();  
+    watchdog_reboot(0, 0, 0);   // не возвращается  
 }

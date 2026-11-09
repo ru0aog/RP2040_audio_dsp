@@ -3,15 +3,16 @@
 // af_cli.cpp — Serial CLI (Core 0)  
 //  
 // Команды (по одной на строку, завершение \n):  
-//   band <lo> <hi>   — полоса ПФ в Гц, напр. "band 300 3000"  
-//   nt on|off        — автонотч (подавление тональников)  
-//   nr on|off        — шумоподавление  
-//   cw on|off        — телеграфный фильтр (АРУ -> медленный профиль)  
-//   cw freq <hz>     — центральная частота CW (300..3000)  
-//   cw bw <hz>       — полоса CW (80..500)  
-//   cw noise <0..100>— примесь шума эфира в CW, %  
-//   stats            — диагностика: загрузка ядер, потери, клипы  
-//   help             — справка  
+//   band <lo> <hi>     — полоса ПФ в Гц, напр. "band 300 3000"  
+//   nt on|off          — автонотч (подавление тональников)  
+//   nr on|off          — шумоподавление  
+//   cw on|off          — телеграфный фильтр (АРУ -> медленный профиль)  
+//   cw freq <hz>       — центральная частота CW (300..3000)  
+//   cw bw <hz>         — полоса CW (80..500)  
+//   cw noise <0..2000> — примесь шума эфира в CW
+//   stats              — диагностика: загрузка ядер, потери, клипы  
+//   banks clr          — перезаписать все банки заводскими пресетами (ребут)
+//   help               — справка  
 // ============================================================================  
 #include <Arduino.h>  
 #include <string.h>  
@@ -30,18 +31,19 @@
 // ---------------------------------------------------------------------------  
 static void cli_help(void) {  
     Serial.println("# Команды:");  
-    Serial.println("#   band <lo> <hi>   — полоса ПФ, Гц (напр. band 300 3000)");  
-    Serial.println("#   nt on|off        — автонотч NT");  
-    Serial.println("#   nr on|off        — шумоподавление NR");  
-    Serial.println("#   cw on|off        — телеграфный фильтр");  
-    Serial.println("#   cw freq <hz>     — центральная частота CW (300..3000)");  
-    Serial.println("#   cw bw <hz>       — полоса CW (80..500)");  
-    Serial.println("#   cw noise <0..100>— примесь шума эфира в CW, %");  
-    Serial.println("#   stats            — диагностика");  
-    Serial.println("#   help             — эта справка");  
-    Serial.println("#   save <1..7>        — сохранить настройки в ячейку");  
-    Serial.println("#   load <1..7>        — применить ячейку");  
-    Serial.println("#   banks              — показать все ячейки");  
+    Serial.println("#   band <lo> <hi>    — полоса ПФ, Гц (напр. band 300 3000)");  
+    Serial.println("#   nt on|off         — автонотч NT");  
+    Serial.println("#   nr on|off         — шумоподавление NR");  
+    Serial.println("#   cw on|off         — телеграфный фильтр");  
+    Serial.println("#   cw freq <hz>      — центральная частота CW (300..3000)");  
+    Serial.println("#   cw bw <hz>        — полоса CW (80..500)");  
+    Serial.println("#   cw noise <0..100> — примесь шума эфира в CW, %");  
+    Serial.println("#   stats             — диагностика");  
+    Serial.println("#   help / h / ?      — эта справка");  
+    Serial.println("#   save <1..7>       — сохранить настройки в ячейку");  
+    Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");  
+    Serial.println("#   banks             — показать все ячейки");  
+    Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)"); 
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT (LOW=on)");
 }  
   
@@ -50,8 +52,8 @@ static void cli_help(void) {
 // ---------------------------------------------------------------------------  
 static void cli_stats(void) {  
     Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu%%\n",  
-                  (unsigned long)af_dsp_af_lo_hz(),  
-                  (unsigned long)af_dsp_af_hi_hz(),  
+                  (unsigned long)af_dsp_band_lo_hz(),  
+                  (unsigned long)af_dsp_band_hi_hz(),
                   af_dsp_notch_on() ? "on" : "off",  
                   af_dsp_nr_on()    ? "on" : "off",  
                   af_dsp_cw_on()    ? "on" : "off",  
@@ -111,12 +113,13 @@ static void cli_exec(char* line) {
         uint32_t hi = (uint32_t)strtoul(s_hi, NULL, 10);  
         if (af_dsp_set_band(lo, hi)) {    
             Serial.printf("# OK band=%lu..%lu Hz\n",    
-                          (unsigned long)af_dsp_af_lo_hz(),    
-                          (unsigned long)af_dsp_af_hi_hz());    
+                          (unsigned long)af_dsp_band_lo_hz(),    
+                          (unsigned long)af_dsp_band_hi_hz());    
         } else {    
             Serial.println("# band: rejected (CW on — полоса следует за f0)");    
         } 
-    }  
+    }
+
     else if (strcmp(cmd, "nt") == 0) {  
         char* s = strtok(NULL, " \t");  
         if (s == NULL) { Serial.println("# ERR: nt on|off"); return; }  
@@ -203,18 +206,33 @@ static void cli_exec(char* line) {
         }  
     }  
     else if (strcmp(cmd, "banks") == 0) {  
+        char* sub = strtok(NULL, " \t");  
+        if (sub && strcmp(sub, "clr") == 0) {  
+            // Перезаписать все 7 ячеек заводскими пресетами (ребут).  
+            static const af_bank_t preset[AF_STORE_BANKS] = {  
+                {  100, 4000, 0, 700, 150, 400 },  // 1: широкая  
+                {  300, 2400, 0, 700, 150, 400 },  // 2: нормальная  
+                {  300, 1800, 0, 700, 150, 400 },  // 3: узкая  
+                {  500, 1100, 1, 800, 150, 400 },  // 4: CW 800 Гц  
+                {  300,  900, 0, 700, 150, 400 },  // 5: узкая  
+                {  300, 3000, 1, 800, 200, 400 },  // 6: CW 800 Гц  
+                {  200, 3500, 0, 700, 150, 400 },  // 7: резерв/широкая  
+            };  
+            Serial.println("# banks clr: writing 7 banks, rebooting...");  
+            Serial.flush();  
+            af_store_write_all(preset);   // не возвращается — ребут  
+        }  
+        // Без аргументов — список ячеек, как раньше.  
         for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {  
             af_bank_t b;  
             if (af_store_read(i, &b)) {  
-                Serial.printf("# bank %u: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu%%\n",  
-                              (unsigned)i,  
-                              (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,
+                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu\n",  
+                              i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,  
                               b.cw_on ? "on" : "off",  
-                              (unsigned long)b.cw_f0,  
-                              (unsigned long)b.cw_bw,  
+                              (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,  
                               (unsigned long)b.cw_noise);  
             } else {  
-                Serial.printf("# bank %u: empty\n", (unsigned)i);  
+                Serial.printf("# bank %d: empty\n", i);  
             }  
         }  
     }
