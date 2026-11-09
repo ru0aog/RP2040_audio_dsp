@@ -1,0 +1,31 @@
+// src/af_store.h  
+//  
+// Хранилище банков настроек во flash (EEPROM-эмуляция, Core 0).  
+// 7 ячеек; в каждой: полоса ПФ, CW on/off, f0, bw, noise.  
+// NT/NR в банке не хранятся — управляются пинами GP5/GP6 и консолью.  
+  
+#pragma once  
+  
+#include <Arduino.h>  
+  
+struct af_bank_t {  
+    uint16_t lo_hz;      // нижний срез ПФ, Гц  
+    uint16_t hi_hz;      // верхний срез ПФ, Гц  
+    uint8_t  cw_on;      // 0/1  
+    uint16_t cw_f0;      // центральная частота CW, Гц  
+    uint16_t cw_bw;      // полоса CW, Гц  
+    uint8_t  cw_noise;   // примесь шума, %  
+};  
+  
+// Инициализация EEPROM. Вызывать из setup() до af_gpio_ctl_init().  
+void af_store_init(void);  
+  
+// Записать текущие настройки DSP в ячейку idx (1..AF_BANK_COUNT).  
+// Возвращает false при неверном idx.  
+bool af_store_save(uint8_t idx);  
+  
+// Прочитать ячейку idx в out. Возвращает false, если ячейка пустая/битая.  
+bool af_store_read(uint8_t idx, af_bank_t* out);  
+  
+// Применить ячейку idx к DSP. Возвращает false, если ячейка пустая.  
+bool af_store_load(uint8_t idx);

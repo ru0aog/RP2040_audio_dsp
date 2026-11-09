@@ -21,7 +21,8 @@
 #include "af_dsp.h"  
 #include "af_capture.h"  
 #include "af_pwm.h"  
-#include "af_usb.h"  
+#include "af_usb.h"
+#include "af_store.h"
   
 // ---------------------------------------------------------------------------  
 // Справка  
@@ -37,7 +38,10 @@ static void cli_help(void) {
     Serial.println("#   cw noise <0..100>— примесь шума эфира в CW, %");  
     Serial.println("#   stats            — диагностика");  
     Serial.println("#   help             — эта справка");  
-    Serial.println("# GPIO: GP2=NT, GP3=NR, GP4=полоса (LOW=on/wide)");  
+    Serial.println("#   save <1..7>        — сохранить настройки в ячейку");  
+    Serial.println("#   load <1..7>        — применить ячейку");  
+    Serial.println("#   banks              — показать все ячейки");  
+    Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT (LOW=on)");
 }  
   
 // ---------------------------------------------------------------------------  
@@ -160,7 +164,52 @@ static void cli_exec(char* line) {
         else {  
             Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>");  
         }  
+    }
+
+    else if (strcmp(cmd, "save") == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v == NULL) { Serial.println("# ERR: save <1..7>"); return; }  
+        int idx = (int)strtoul(v, NULL, 10);  
+        if (idx < 1 || idx > AF_STORE_BANKS) {  
+            Serial.println("# ERR: save <1..7>");  
+            return;  
+        }  
+        af_store_save((uint8_t)idx);  
+        Serial.printf("# OK saved bank %d\n", idx);  
     }  
+    else if (strcmp(cmd, "load") == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v == NULL) { Serial.println("# ERR: load <1..7>"); return; }  
+        int idx = (int)strtoul(v, NULL, 10);  
+        if (idx < 1 || idx > AF_STORE_BANKS) {  
+            Serial.println("# ERR: load <1..7>");  
+            return;  
+        }  
+        if (af_store_load((uint8_t)idx)) {  
+            Serial.printf("# OK loaded bank %d\n", idx);  
+        } else {  
+            Serial.printf("# bank %d: empty — ignored\n", idx);  
+        }  
+    }  
+    else if (strcmp(cmd, "banks") == 0) {  
+        for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {  
+            af_bank_t b;  
+            if (af_store_read(i, &b)) {  
+                Serial.printf("# bank %u: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu%%\n",  
+                              (unsigned)i,  
+                              (unsigned long)b.band_lo, (unsigned long)b.band_hi,  
+                              b.cw_on ? "on" : "off",  
+                              (unsigned long)b.cw_f0,  
+                              (unsigned long)b.cw_bw,  
+                              (unsigned long)b.cw_noise);  
+            } else {  
+                Serial.printf("# bank %u: empty\n", (unsigned)i);  
+            }  
+        }  
+    }
+
+    // вставлять сюда
+
     else {  
         Serial.printf("# ERR: unknown '%s' (help — справка)\n", cmd);  
     }  

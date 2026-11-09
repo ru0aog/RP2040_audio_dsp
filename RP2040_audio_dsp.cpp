@@ -75,10 +75,9 @@ void setup()
   
     // CLI по Serial (команды: band/nt/nr/stats/help).  
     af_cli_init();  
-  
-    // Управление функциями по GPIO (замыкание на GND).  
-    // Применяет начальное состояние пинов до старта захвата.  
-    af_gpio_ctl_init();  
+
+    af_store_init();        // EEPROM + формат при первом старте  
+    af_gpio_ctl_init();     // применит банк/фильтры по пинам
 
     af_capture_start();   // DMA_IRQ_0 живёт на Core 0
   

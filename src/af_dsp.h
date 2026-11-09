@@ -61,3 +61,7 @@ uint32_t af_dsp_load_permille(void);   // загрузка Core 1, ‰
 uint32_t af_dsp_out_dropped(void);     // блоки, не влезшие в выходную очередь  
 uint32_t af_dsp_clip_count(void);      // срабатывания ограничителя int16  
 uint32_t af_dsp_max_block_us(void);    // пиковое время блока, мкс (чтение сбрасывает)
+
+uint32_t af_dsp_cw_freq(void);  
+uint32_t af_dsp_cw_bw(void);  
+uint32_t af_dsp_cw_noise(void);

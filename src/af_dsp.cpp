@@ -615,6 +615,10 @@ uint32_t af_dsp_cw_noise(void) { return cw_noise; }
   
 bool af_dsp_notch_on(void) { return notch_on; }  
 bool af_dsp_nr_on(void)    { return nr_on; }  
+
+uint32_t af_dsp_cw_freq(void)  { return cw_f0; }  
+uint32_t af_dsp_cw_bw(void)    { return cw_bw; }  
+uint32_t af_dsp_cw_noise(void) { return cw_noise_pct; }   // имя переменной — как у вас
   
 // ---------------------------------------------------------------------------  
 // Инициализация (Core 0, до af_capture_start)  

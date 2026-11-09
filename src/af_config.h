@@ -112,15 +112,17 @@
 // ---------------------------------------------------------------------------  
 // Управление по GPIO (замыкание на GND = функция включена)  
 // ---------------------------------------------------------------------------  
-#define AF_PIN_NT               2           // GP2  — LOW -> автонотч NT on  
-#define AF_PIN_NR               3           // GP3  — LOW -> шумоподавление NR on  
-#define AF_PIN_BAND_WIDE        4           // GP4  — LOW -> широкая полоса  
+// Селектор банка настроек: 3 бита, двоичный код (LOW=1).  
+// Код 000 = ручной режим (консоль), коды 001..111 = ячейки 1..7.  
+#define AF_PIN_BANK0            2           // GP2 — младший бит  
+#define AF_PIN_BANK1            3           // GP3  
+#define AF_PIN_BANK2            4           // GP4 — старший бит  
   
-// Пресеты полосы ПФ для пина AF_PIN_BAND_WIDE  
-#define AF_BAND_WIDE_LO_HZ      300  
-#define AF_BAND_WIDE_HI_HZ      3000  
-#define AF_BAND_NARROW_LO_HZ    300  
-#define AF_BAND_NARROW_HI_HZ    2400  
+// Выключатели фильтров: LOW = фильтр включён.  
+#define AF_PIN_NR               5           // GP5 — LOW -> NR on  
+#define AF_PIN_NT               6           // GP6 — LOW -> NT on  
+  
+#define AF_BANK_COUNT           7           // ячеек настроек во flash
   
 // Дебаунс: период опроса и число стабильных чтений для смены состояния  
 #define AF_GPIO_POLL_MS         10u  
