@@ -15,7 +15,11 @@
 #include <EEPROM.h>  
 #include "af_store.h"  
 #include "af_config.h"  
-#include "af_dsp.h"  
+#include "af_dsp.h"
+
+#include "pico/stdlib.h"  
+#include "hardware/clocks.h"  
+#include "pico/multicore.h" 
   
 #define AF_STORE_MAGIC0   'A'  
 #define AF_STORE_MAGIC1   'F'  
@@ -75,12 +79,8 @@ bool af_store_save(uint8_t idx) {
     r.d.cw_bw    = (uint16_t)af_dsp_cw_bw();  
     r.d.cw_noise = (uint8_t)af_dsp_cw_noise();  
     r.crc = crc8(&r.d, sizeof(r.d));  
-    EEPROM.put(rec_addr(idx), r);  
-  
-    rp2040.idleOtherCore();      // Core 1 на паузу — flash будет недоступен  
-    EEPROM.commit();  
-    rp2040.resumeOtherCore();  
-  
+    EEPROM.put(rec_addr(idx), r);    
+    EEPROM.commit();   // внутри уже idleOtherCore/resumeOtherCore — не оборачивать    
     return true;
 }  
   
