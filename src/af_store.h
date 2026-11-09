@@ -32,3 +32,7 @@ bool af_store_read(uint8_t idx, af_bank_t* out);
   
 // Применить ячейку idx к DSP. Возвращает false, если ячейка пустая.  
 bool af_store_load(uint8_t idx);
+
+// Вызывать из af_dsp_poll (Core 1) каждую итерацию — обработка запроса  
+// на парковку перед записью flash.  
+void af_store_core1_park_poll(void);

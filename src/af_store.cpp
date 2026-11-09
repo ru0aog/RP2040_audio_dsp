@@ -34,6 +34,30 @@
   
 // Смещение сектора EEPROM от начала flash (последний сектор).  
 #define AF_FLASH_OFF      (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)  
+
+// Кооперативная парковка Core 1: idleOtherCore не работает, т.к. loop1  
+// не возвращается в Arduino-обёртку и не обрабатывает FIFO-handshake.  
+static volatile bool g_park_req = false;  
+static volatile bool g_parked   = false;  
+  
+// Вызывается с Core 1 из af_dsp_poll. Вся функция в RAM — во время  
+// erase/program flash недоступен, spin-цикл обязан быть не во flash.  
+void __not_in_flash_func(af_store_core1_park_poll)(void) {  
+    if (!g_park_req) return;  
+    g_parked = true;  
+    while (g_park_req) { /* spin в RAM */ }  
+    g_parked = false;  
+}  
+  
+// Core 0: запросить парковку, ждать ack с таймаутом.  
+static bool park_core1(void) {  
+    g_park_req = true;  
+    uint32_t t0 = millis();  
+    while (!g_parked) {  
+        if (millis() - t0 > 500) { g_park_req = false; return false; }  
+    }  
+    return true;  
+}
   
 #pragma pack(push, 1)  
 struct af_bank_rec_t {  
@@ -81,12 +105,10 @@ void af_store_init(void) {
         s_sector_img[2] = AF_STORE_VER;  
         // Паркуем Core 1 заранее — иначе flash_safe_execute может не    
         // дождаться handshake за 500 мс и вернуть PICO_ERROR_TIMEOUT (-4).    
-        rp2040.idleOtherCore();          // Core 1 припаркован — flash свободен  
-        noInterrupts();                  // Core 0: запретить IRQ на время erase/program  
+        noInterrupts();  
         flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
         flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
-        interrupts();  
-        rp2040.resumeOtherCore();  
+        interrupts();
   
         // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
         for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
@@ -123,12 +145,15 @@ bool af_store_save(uint8_t idx) {
   
     // Паркуем Core 1 заранее — иначе flash_safe_execute может не    
     // дождаться handshake за 500 мс и вернуть PICO_ERROR_TIMEOUT (-4).    
-    rp2040.idleOtherCore();          // Core 1 припаркован — flash свободен  
-    noInterrupts();                  // Core 0: запретить IRQ на время erase/program  
+    if (!park_core1()) {  
+        Serial.println("# save: core1 park timeout");  
+        return false;  
+    }  
+    noInterrupts();  
     flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
     flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
     interrupts();  
-    rp2040.resumeOtherCore();
+    g_park_req = false;              // отпустить Core 1
   
     // Синхронизируем RAM-буфер EEPROM, чтобы af_store_read видел запись.  
     for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  

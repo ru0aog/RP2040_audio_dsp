@@ -16,7 +16,8 @@
 #include <string.h>  
 #include "af_dsp.h"  
 #include "af_config.h"  
-#include "af_capture.h"  
+#include "af_capture.h"
+#include "af_store.h"
   
 // ---------------------------------------------------------------------------  
 // Half-band дециматоры — коэффициенты 1:1 из rx_dsp.cpp приёмника  
@@ -661,12 +662,14 @@ static inline void core1_update_load(uint32_t now_us) {
 // ---------------------------------------------------------------------------  
 // Главный поллинг (Core 1): блоки ADC -> весь тракт -> выходные очереди  
 // ---------------------------------------------------------------------------  
-void __not_in_flash_func(af_dsp_poll)(void) {  
-    // DC-смещение ADC: EMA k=1/256 (порт dc_i/dc_q из rx_dsp.cpp).  
-    static int32_t dc_est = 0;  
-  
-    const volatile uint16_t* blk;  
-    while ((blk = af_capture_get_block()) != NULL) {  
+void __not_in_flash_func(af_dsp_poll)(void) {    
+    // DC-смещение ADC: EMA k=1/256 (порт dc_i/dc_q из rx_dsp.cpp).    
+    static int32_t dc_est = 0;    
+    
+    af_store_core1_park_poll();   // если Core 0 просит парковку — встаём в RAM-spin    
+    
+    const volatile uint16_t* blk;    
+    while ((blk = af_capture_get_block()) != NULL) {
         const uint32_t t0 = time_us_32();   // busy = только обработка блока  
   
         for (uint32_t i = 0; i < AF_BLOCK_SAMPLES; i++) {  
