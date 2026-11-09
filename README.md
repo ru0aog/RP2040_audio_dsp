@@ -1,9 +1,10 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ru0aog/RP2040_audio_dsp)    
   
 # RP2040_audio_dsp    
+
+Моноканальный НЧ аудио DSP-тракт радиостанции на Raspberry Pi Pico (RP2040).  
+
 ![ADV](doc/Adv_DSP.png)  
-  
-Моноканальный НЧ аудио DSP-тракт радиостанции на Raspberry Pi Pico (RP2040).    
   
 Оцифровка звука встроенным АЦП с оверсэмплингом и децимацией, полосовая    
 фильтрация, автонотч (подавление тональников), шумоподавление, АРУ —    
