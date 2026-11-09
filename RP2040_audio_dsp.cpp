@@ -33,6 +33,7 @@
 #include "src/af_cli.h"  
 #include "src/af_gpio_ctl.h"
 #include "src/af_store.h"
+#include "src/af_led.h"
   
 // ---------------------------------------------------------------------------  
 // Флаг готовности Core 0. Core 1 в setup1() ждёт его перед стартом захвата.  
@@ -75,11 +76,10 @@ void setup()
     af_pwm_init();
   
     // CLI по Serial (команды: band/nt/nr/stats/help).  
-    af_cli_init();  
-
+    af_cli_init(); 
+    af_led_init();
     af_store_init();        // EEPROM + формат при первом старте  
     af_gpio_ctl_init();     // применит банк/фильтры по пинам
-
     af_capture_start();   // DMA_IRQ_0 живёт на Core 0
   
     // Захват ADC+DMA стартует в setup1() на Core 1 —  
@@ -125,7 +125,9 @@ void loop()
     af_cli_poll();  
   
     // Опрос управляющих пинов (NT/NR/полоса), внутри свой таймер ~10 мс.  
-    af_gpio_ctl_poll();  
+    af_gpio_ctl_poll();
+
+    af_led_poll();
   
     // --- Конец измеряемой работы ---  
     now = time_us_32();  

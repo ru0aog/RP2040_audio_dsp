@@ -20,12 +20,13 @@
 #include <Arduino.h>  
 #include <EEPROM.h>  
 #include "af_store.h"  
-#include "af_config.h"  
-#include "af_dsp.h"  
+#include "af_config.h"
+#include "af_dsp.h"
   
-#include "pico/stdlib.h"  
-#include "hardware/flash.h"  
-#include "pico/flash.h"  
+#include "pico/stdlib.h"
+#include "hardware/flash.h"
+#include "pico/flash.h"
+#include "hardware/watchdog.h"
   
 #define AF_STORE_MAGIC0   'A'  
 #define AF_STORE_MAGIC1   'F'  
@@ -148,23 +149,20 @@ bool af_store_save(uint8_t idx) {
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));  
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));  
   
-    // Паркуем Core 1 заранее — иначе flash_safe_execute может не    
-    // дождаться handshake за 500 мс и вернуть PICO_ERROR_TIMEOUT (-4).    
+    // Паркуем Core 1 и пишем сектор. После записи — ребут:  
+    // возврат на 220 МГц и выход из парковки ненадёжны,  
+    // а данные уже во flash — после ребута всё поднимется чисто.  
     if (!park_core1()) {  
         Serial.println("# save: core1 park timeout");  
         return false;  
     }  
-    Serial.println("# save: parked");          // маркер 1  
     noInterrupts();  
     flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
     flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
-    interrupts();  
-    Serial.println("# save: flash done");      // маркер 2  
-    g_park_req = false;
   
-    // Синхронизируем RAM-буфер EEPROM, чтобы af_store_read видел запись.  
-    for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
-    return true;  
+    // Сюда доходим только если запись завершилась.  
+    watchdog_reboot(0, 0, 0);  
+    while (true) { tight_loop_contents(); }   // на случай задержки ребута
 }  
   
 bool af_store_load(uint8_t idx) {  
