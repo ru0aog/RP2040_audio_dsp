@@ -62,7 +62,7 @@ static void cli_stats(void) {
                   af_dsp_cw_on()    ? "on" : "off",  
                   (unsigned long)af_dsp_cw_freq(),  
                   (unsigned long)af_dsp_cw_bw(),  
-                  (unsigned long)af_dsp_cw_noise()
+                  (unsigned long)af_dsp_cw_noise(),
                   af_dsp_agc_on() ? "on" : "off",
                   (unsigned long)af_dsp_gain_pct(),
                   af_dsp_bypass_on() ? "on" : "off");  
