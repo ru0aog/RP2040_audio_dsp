@@ -530,28 +530,38 @@ bool af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz) {
 uint32_t af_dsp_af_lo_hz(void) { return af_lo_hz; }  
 uint32_t af_dsp_af_hi_hz(void) { return af_hi_hz; }  
   
-void af_dsp_set_notch(bool on) {  
-    if (on && !notch_on) {           // сброс состояния при включении — без щелчка    
-        memset(notch_buf, 0, sizeof(notch_buf));    
-        memset(notch_w,   0, sizeof(notch_w));    
-        memset(notch_v,   0, sizeof(notch_v));    
-        notch_idx = 0;    
-        notch_vidx = 0;    
-        notch_energy = 0;    
-        notch_pow = 0;    
-    }
-    notch_on = on;  
-}  
-  
-void af_dsp_set_nr(bool on) {  
-    if (on && !nr_on) {              // чистый старт → без щелчка  
-        memset(nr_buf, 0, sizeof(nr_buf));  
-        memset(nr_w,   0, sizeof(nr_w));  
-        nr_idx = 0;  
-        nr_pow = 0;  
+// Возврат: 0 = выключено, 1 = включено, 2 = включено и NR снят (приоритет NT).  
+int af_dsp_set_notch(bool on) {  
+    int rc = on ? 1 : 0;  
+    if (on && nr_on) {              // NT имеет приоритет — снимаем NR  
+        af_dsp_set_nr(false);  
+        rc = 2;  
     }  
-    nr_on = on;  
-}  
+    if (on && !notch_on) {          // сброс состояния при включении — без щелчка  
+        memset(notch_buf, 0, sizeof(notch_buf));  
+        memset(notch_w,   0, sizeof(notch_w));  
+        memset(notch_v,   0, sizeof(notch_v));  
+        notch_idx = 0;  
+        notch_vidx = 0;  
+        notch_energy = 0;  
+        notch_pow = 0;  
+    }  
+    notch_on = on;  
+    return rc;  
+}
+  
+// Возвращает false, если команда отклонена (NT on — приоритет NT).  
+bool af_dsp_set_nr(bool on) {    
+    if (on && notch_on) return false;   // NT и NR взаимоисключающие  
+    if (on && !nr_on) {              // чистый старт → без щелчка    
+        memset(nr_buf, 0, sizeof(nr_buf));    
+        memset(nr_w,   0, sizeof(nr_w));    
+        nr_idx = 0;    
+        nr_pow = 0;    
+    }    
+    nr_on = on;    
+    return true;  
+}
   
 void af_dsp_set_cw(bool on) {  
     if (on && !cw_on) {  

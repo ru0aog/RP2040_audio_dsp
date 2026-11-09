@@ -112,15 +112,20 @@ static void cli_exec(char* line) {
         char* s = strtok(NULL, " \t");  
         if (s == NULL) { Serial.println("# ERR: nt on|off"); return; }  
         bool on = (strcmp(s, "on") == 0);  
-        af_dsp_set_notch(on);  
-        Serial.printf("# OK nt=%s\n", on ? "on" : "off");  
+        int rc = af_dsp_set_notch(on);    
+        Serial.printf("# OK nt=%s\n", on ? "on" : "off");    
+        if (rc == 2)    
+            Serial.println("# note: NR off (приоритет NT, совместная работа не поддерживается)");
     }  
     else if (strcmp(cmd, "nr") == 0) {  
         char* s = strtok(NULL, " \t");  
         if (s == NULL) { Serial.println("# ERR: nr on|off"); return; }  
         bool on = (strcmp(s, "on") == 0);  
-        af_dsp_set_nr(on);  
-        Serial.printf("# OK nr=%s\n", on ? "on" : "off");  
+        if (af_dsp_set_nr(on)) {    
+            Serial.printf("# OK nr=%s\n", on ? "on" : "off");    
+        } else {    
+            Serial.println("# nr: rejected (NT on — приоритет NT)");    
+        }
     }  
     else if (strcmp(cmd, "cw") == 0) {  
         char* sub = strtok(NULL, " \t");  
@@ -232,11 +237,18 @@ static void cat_execute(const char* cmd) {
     if (cmd[0] == 'R' && cmd[1] == 'X' && n == 2) { return; }  
   
     // NT — автонотч: NT1 вкл, NT0 выкл  
-    if (cmd[0] == 'N' && cmd[1] == 'T') {  
-        if (n == 3) { af_dsp_set_notch(cmd[2] != '0'); return; }  
-        cat_send("?;");  
-        return;  
-    }  
+    if (cmd[0] == 'N' && cmd[1] == 'T') {    
+        if (n == 2 || n == 3) {  
+            if (n == 3) af_dsp_set_notch(cmd[2] != '0');  
+            char buf[12];  
+            snprintf(buf, sizeof(buf), "NT%d;NR%d;",  
+                     af_dsp_notch_on() ? 1 : 0, af_dsp_nr_on() ? 1 : 0);  
+            cat_send(buf);  
+            return;  
+        }  
+        cat_send("?;");    
+        return;    
+    }
   
     // NR — шумоподавление: NR; запрос, NR1/NR0  
     if (cmd[0] == 'N' && cmd[1] == 'R') {  
@@ -246,10 +258,15 @@ static void cat_execute(const char* cmd) {
             cat_send(buf);  
             return;  
         }  
-        if (n == 3) { af_dsp_set_nr(cmd[2] == '1'); return; }  
-        cat_send("?;");  
-        return;  
-    }  
+        if (n == 3) {  
+            af_dsp_set_nr(cmd[2] == '1');   // false при NT on — состояние не меняется  
+            char buf[12];  
+            snprintf(buf, sizeof(buf), "NR%d;NT%d;",  
+                     af_dsp_nr_on() ? 1 : 0, af_dsp_notch_on() ? 1 : 0);  
+            cat_send(buf);  
+            return;  
+        }
+    }
   
     // SH — верхний срез: SH; запрос, SHnn индекс, SHnnnn Гц  
     if (cmd[0] == 'S' && cmd[1] == 'H') {  
