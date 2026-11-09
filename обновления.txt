@@ -1,0 +1,39 @@
+git add .
+git commit -m "Update"
+git push origin main
+
+git diff origin/main
+git rm -r --cached .
+git add --all
+git commit -m "Enforce local files sync"
+git push origin main --force
+
+# 1. Полностью очищаем внутренний кэш отслеживания Git
+git rm -r --cached .
+
+# 2. Начисто сканируем всю папку на диске и добавляем ВСЕ файлы заново
+git add --all
+
+# 3. Создаем коммит тотальной локальной версии
+git commit -m "Total enforce: overwrite GitHub with 100% local state"
+
+# 4. Принудительно выталкиваем всё на GitHub, стирая старую историю на сервере
+git push origin main --force
+
+удалить файл
+git rm --cached firmware.map  
+git commit -m "Remove firmware.map build artifact"
+git push --force
+
+Принудительно перезаписать все локальные файлы версией с GitHub
+git reset --hard HEAD
+git clean -fd
+git pull origin main
+
+Забрать изменения с гитхаб
+git pull origin main
+
+Залить локальные изменения на GitHub
+git add .
+git commit -m "Update"
+git push origin main

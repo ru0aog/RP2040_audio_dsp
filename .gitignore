@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+*.zip
+*.tar.gz
+firmware.map
