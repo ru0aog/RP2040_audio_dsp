@@ -1,8 +1,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ru0aog/RP2040_audio_dsp)    
   
 # RP2040_audio_dsp    
-  
-![Signal Chain Architecture](doc/Signal%20Chain%20Architecture_audio_dsp.png)  
+![ADV](doc/Adv_DSP.png)  
   
 Моноканальный НЧ аудио DSP-тракт радиостанции на Raspberry Pi Pico (RP2040).    
   
@@ -13,6 +12,8 @@
 Управление функциями — замыканием пинов на GND, через Serial CLI    
 и Kenwood-подобные CAT-команды.    
   
+![Signal Chain Architecture](doc/Signal%20Chain%20Architecture_audio_dsp.png)  
+
 ## Тракт обработки
 ```
 ADC0 (GP26, 250 ksps, DMA, два канала с chain_to)
