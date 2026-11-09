@@ -6,7 +6,10 @@
   
 #pragma once  
   
-#include <Arduino.h>  
+#include <Arduino.h>
+
+// Число ячеек банка (коды 001..111 на GP2..GP4; 000 = ручной режим).  
+#define AF_STORE_BANKS  7
   
 struct af_bank_t {  
     uint16_t lo_hz;      // нижний срез ПФ, Гц  
