@@ -100,10 +100,13 @@ static void cli_exec(char* line) {
         }  
         uint32_t lo = (uint32_t)strtoul(s_lo, NULL, 10);  
         uint32_t hi = (uint32_t)strtoul(s_hi, NULL, 10);  
-        af_dsp_set_band(lo, hi);  
-        Serial.printf("# OK band=%lu..%lu Hz\n",  
-                      (unsigned long)af_dsp_af_lo_hz(),  
-                      (unsigned long)af_dsp_af_hi_hz());  
+        if (af_dsp_set_band(lo, hi)) {    
+            Serial.printf("# OK band=%lu..%lu Hz\n",    
+                          (unsigned long)af_dsp_af_lo_hz(),    
+                          (unsigned long)af_dsp_af_hi_hz());    
+        } else {    
+            Serial.println("# band: rejected (CW on — полоса следует за f0)");    
+        } 
     }  
     else if (strcmp(cmd, "nt") == 0) {  
         char* s = strtok(NULL, " \t");  
@@ -264,8 +267,10 @@ static void cat_execute(const char* cmd) {
         } else if (n == 6) {  
             f_hi = (uint32_t)strtoul(cmd + 2, NULL, 10);  
         } else { cat_send("?;"); return; }  
-        af_dsp_set_band(af_dsp_band_lo_hz(), f_hi);  
-        return;  
+        if (!af_dsp_set_band(af_dsp_band_lo_hz(), f_hi)) {    
+            cat_send("?;");   // CW on — полоса следует за f0    
+        }    
+        return;
     }  
   
     // SL — нижний срез: SL; запрос, SLnn индекс, SLnnnn Гц  
@@ -284,8 +289,10 @@ static void cat_execute(const char* cmd) {
         } else if (n == 6) {  
             f_lo = (uint32_t)strtoul(cmd + 2, NULL, 10);  
         } else { cat_send("?;"); return; }  
-        af_dsp_set_band(f_lo, af_dsp_band_hi_hz());  
-        return;  
+        if (!af_dsp_set_band(f_lo, af_dsp_band_hi_hz())) {    
+            cat_send("?;");   // CW on — полоса следует за f0    
+        }    
+        return;
     }  
   
     cat_send("?;");  

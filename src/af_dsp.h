@@ -64,3 +64,5 @@ void     af_dsp_set_band(uint32_t lo_hz, uint32_t hi_hz);
 uint32_t af_dsp_band_lo_hz(void);  
 uint32_t af_dsp_band_hi_hz(void);
 uint8_t  af_dsp_out_fill_pwm(void);
+
+bool af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz);
