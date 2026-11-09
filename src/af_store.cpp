@@ -76,8 +76,12 @@ bool af_store_save(uint8_t idx) {
     r.d.cw_noise = (uint8_t)af_dsp_cw_noise();  
     r.crc = crc8(&r.d, sizeof(r.d));  
     EEPROM.put(rec_addr(idx), r);  
+  
+    rp2040.idleOtherCore();      // Core 1 на паузу — flash будет недоступен  
     EEPROM.commit();  
-    return true;  
+    rp2040.resumeOtherCore();  
+  
+    return true;
 }  
   
 bool af_store_load(uint8_t idx) {  
