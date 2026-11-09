@@ -154,11 +154,13 @@ bool af_store_save(uint8_t idx) {
         Serial.println("# save: core1 park timeout");  
         return false;  
     }  
+    Serial.println("# save: parked");          // маркер 1  
     noInterrupts();  
     flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
     flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
     interrupts();  
-    g_park_req = false;              // отпустить Core 1
+    Serial.println("# save: flash done");      // маркер 2  
+    g_park_req = false;
   
     // Синхронизируем RAM-буфер EEPROM, чтобы af_store_read видел запись.  
     for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
