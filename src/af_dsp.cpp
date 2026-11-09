@@ -384,7 +384,11 @@ static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {
 // На 15.625 ksps все постоянные времени вдвое длиннее в секундах.  
 // ---------------------------------------------------------------------------  
 static int64_t agc_avg_q16  = (int64_t)4096 << 16;   // среднее уровня, Q16  
-static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера, Q16  
+static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера, Q16
+
+static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)  
+static volatile uint32_t gain_pct  = AF_GAIN_DEFAULT_PCT;  // ручное усиление, %  
+static volatile bool     bypass_on = false;   // обход всего тракта
   
 static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {  
     // --- Контур A: медленное среднее |x| ---  
@@ -400,11 +404,17 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
                                  : (int64_t)dec_q24)) >> 24;  
     if (agc_avg_q16 < AGC_AVG_MIN) agc_avg_q16 = AGC_AVG_MIN;  
   
-    int32_t avg = (int32_t)(agc_avg_q16 >> 16);  
-    if (avg < 1) avg = 1;  
-    int64_t den = avg;  
-    int k = 63 - __builtin_clzll((uint64_t)den);  
-    int32_t y1 = (int32_t)(((int64_t)x * AGC_REF) >> k);
+    int32_t y1;  
+    if (agc_on) {  
+        int32_t avg = (int32_t)(agc_avg_q16 >> 16);  
+        if (avg < 1) avg = 1;  
+        int64_t den = avg;  
+        int k = 63 - __builtin_clzll((uint64_t)den);  
+        y1 = (int32_t)(((int64_t)x * AGC_REF) >> k);  
+    } else {  
+        // АРУ off: фиксированное ручное усиление 0..400% (Q15: pct*32768/100).  
+        y1 = (int32_t)(((int64_t)x * (int64_t)gain_pct * 32768) / 100 >> 15);  
+    }  
   
     if (cw_on) {                       // CW: без лимитера, только насыщение  
         if (y1 >  32767) y1 =  32767;  
@@ -412,7 +422,7 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
         return (int16_t)y1;  
     }  
   
-    // --- Контур B: быстрый лимитер ---  
+    // Контур B (быстрый лимитер) работает всегда — и при agc off.
     int64_t ay  = (y1 < 0) ? -y1 : y1;  
     int64_t tp  = ay << 16;  
     int64_t dp  = tp - lim_peak_q16;  
@@ -606,6 +616,22 @@ void af_dsp_set_cw_noise(uint32_t lvl) {
     if (lvl > 2000) lvl = 2000;  
     cw_noise = lvl;  
 }
+
+void af_dsp_set_agc(bool on) {  
+    agc_on = on;  
+    if (on) agc_avg_q16 = (int64_t)4096 << 16;   // чистый старт контура A  
+}  
+  
+void af_dsp_set_gain(uint32_t pct) {  
+    if (pct > AF_GAIN_MAX_PCT) pct = AF_GAIN_MAX_PCT;  
+    gain_pct = pct;  
+}  
+  
+void af_dsp_set_bypass(bool on) { bypass_on = on; }  
+  
+bool     af_dsp_agc_on(void)     { return agc_on; }  
+uint32_t af_dsp_gain_pct(void)   { return gain_pct; }  
+bool     af_dsp_bypass_on(void)  { return bypass_on; }
   
 bool     af_dsp_cw_on(void)    { return cw_on; }  
 uint32_t af_dsp_cw_freq(void)  { return cw_f0; }  
@@ -687,9 +713,15 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             if (!hb_push(&hb[1], y, &y)) continue;  
             if (!hb_push(&hb[2], y, &y)) continue;  
   
-            // НЧ-тракт на 15.625 ksps.  
-            y = af_fir_push(y);  
-            if (cw_on) {  
+            // НЧ-тракт на 15.625 ksps.    
+            if (bypass_on) {    
+                // Обход: децимированный вход напрямую на выход,    
+                // без FIR/CW/NT/NR/АРУ/лимитера.    
+                out_emit(sat16(y));    
+                continue;    
+            }    
+            y = af_fir_push(y);    
+            if (cw_on) {
                 // Добавка шума: LFSR xorshift32, уровень из `cw noise`.  
                 // Фильтр всегда возбуждён — не звенит на тишине;  
                 // сигнал проходит без порогов (сквелча нет).  

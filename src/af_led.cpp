@@ -114,6 +114,15 @@ void af_led_poll(void) {
     if (af_dsp_nr_on())    b = (uint8_t)(b + (g * 128) / 255);   // NR -> +синий  
     if (af_dsp_notch_on()) r = (uint8_t)(r + g);                 // NT -> красный на полную
   
+    // АРУ off -> оранжевый подмес (красный + половина зелёного).  
+    if (!af_dsp_agc_on()) {  
+        r  = (uint8_t)(r  + (g * 100) / 255);  
+        gg = (uint8_t)(gg + (g * 40)  / 255);  
+    }  
+  
+    // Bypass -> доминирующий белый, поверх всего.  
+    if (af_dsp_bypass_on()) { r = g; gg = g; b = g; }
+  
     if (r != last_r || gg != last_g || b != last_b) {  
         af_led_set(r, gg, b);  
         last_r = r; last_g = gg; last_b = b;  

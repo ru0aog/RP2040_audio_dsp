@@ -121,7 +121,13 @@
 // Выключатели фильтров: LOW = фильтр включён.  
 #define AF_PIN_NR               5           // GP5 — LOW -> NR on  
 #define AF_PIN_NT               6           // GP6 — LOW -> NT on  
+#define AF_PIN_BYPASS           7           // GP7 — LOW -> bypass (выход = вход)  
   
+// Ручное усиление тракта при выключенной АРУ, % (100 = единичное).  
+#define AF_GAIN_MIN_PCT         0  
+#define AF_GAIN_MAX_PCT         400  
+#define AF_GAIN_DEFAULT_PCT     100
+
 #define AF_BANK_COUNT           7           // ячеек настроек во flash
   
 // Дебаунс: период опроса и число стабильных чтений для смены состояния  

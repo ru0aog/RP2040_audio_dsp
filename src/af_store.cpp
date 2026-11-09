@@ -30,8 +30,8 @@
   
 #define AF_STORE_MAGIC0   'A'  
 #define AF_STORE_MAGIC1   'F'  
-#define AF_STORE_VER      1  
-#define AF_EEPROM_SIZE    256  
+#define AF_STORE_VER      2   // было 1: добавлены agc_on/gain_pct
+#define AF_EEPROM_SIZE    256
   
 // Смещение сектора EEPROM от начала flash (последний сектор).  
 #define AF_FLASH_OFF      (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)  
@@ -143,6 +143,8 @@ bool af_store_save(uint8_t idx) {
     r.d.cw_f0    = (uint16_t)af_dsp_cw_freq();  
     r.d.cw_bw    = (uint16_t)af_dsp_cw_bw();  
     r.d.cw_noise = (uint16_t)af_dsp_cw_noise();
+    r.d.agc_on   = af_dsp_agc_on() ? 1 : 0;  
+    r.d.gain_pct = (uint16_t)af_dsp_gain_pct();
     r.crc = crc8(&r.d, sizeof(r.d));  
   
     // Читаем текущий сектор из flash напрямую (XIP), патчим запись.  
@@ -174,7 +176,9 @@ bool af_store_load(uint8_t idx) {
     // сохранённая, при cw on set_band отклонится и сработает follow.  
     af_dsp_set_cw_freq(b.cw_f0);  
     af_dsp_set_cw_bw(b.cw_bw);  
-    af_dsp_set_cw_noise(b.cw_noise);  
+    af_dsp_set_cw_noise(b.cw_noise);
+    af_dsp_set_agc(b.agc_on != 0);  
+    af_dsp_set_gain(b.gain_pct);
     af_dsp_set_cw(b.cw_on != 0);  
     if (!b.cw_on) af_dsp_set_band(b.lo_hz, b.hi_hz);  
     return true;  

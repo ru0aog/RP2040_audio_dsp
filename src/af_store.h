@@ -18,6 +18,8 @@ struct af_bank_t {
     uint16_t cw_f0;      // центральная частота CW, Гц  
     uint16_t cw_bw;      // полоса CW, Гц  
     uint16_t cw_noise;   // уровень добавки шума 0..2000 (не проценты!)
+    uint8_t  agc_on;      // 0/1 — АРУ; при 0 действует gain_pct  
+    uint16_t gain_pct;    // ручное усиление 0..400%  
 };  
   
 // Инициализация EEPROM. Вызывать из setup() до af_gpio_ctl_init().  

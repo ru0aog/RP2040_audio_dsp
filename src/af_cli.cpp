@@ -42,8 +42,11 @@ static void cli_help(void) {
     Serial.println("#   help / h / ?      — эта справка");  
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");  
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");  
-    Serial.println("#   banks             — показать все ячейки");  
-    Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)"); 
+    Serial.println("#   banks             — показать все ячейки");
+    Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)");
+    Serial.println("#   agc on|off       — АРУ (off -> ручное усиление, лимитер остаётся)");
+    Serial.println("#   gain <0..400>    — ручное усиление тракта при agc off, % ");
+    Serial.println("#   bypass on|off    — обход: выход = вход");
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT (LOW=on)");
 }  
   
@@ -51,7 +54,7 @@ static void cli_help(void) {
 // Диагностика  
 // ---------------------------------------------------------------------------  
 static void cli_stats(void) {  
-    Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu%%\n",  
+    Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu%%  bypass=%s\n",
                   (unsigned long)af_dsp_band_lo_hz(),  
                   (unsigned long)af_dsp_band_hi_hz(),
                   af_dsp_notch_on() ? "on" : "off",  
@@ -59,7 +62,10 @@ static void cli_stats(void) {
                   af_dsp_cw_on()    ? "on" : "off",  
                   (unsigned long)af_dsp_cw_freq(),  
                   (unsigned long)af_dsp_cw_bw(),  
-                  (unsigned long)af_dsp_cw_noise());  
+                  (unsigned long)af_dsp_cw_noise()
+                  af_dsp_agc_on() ? "on" : "off",
+                  (unsigned long)af_dsp_gain_pct(),
+                  af_dsp_bypass_on() ? "on" : "off");  
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -138,7 +144,27 @@ static void cli_exec(char* line) {
         } else {    
             Serial.println("# nr: rejected (NT on — приоритет NT)");    
         }
+    }
+    else if (strcmp(cmd, "agc") == 0) {  
+        char* a = strtok(NULL, " \t");  
+        if (a && strcmp(a, "on") == 0)       { af_dsp_set_agc(true);  Serial.println("# OK agc=on"); }  
+        else if (a && strcmp(a, "off") == 0) { af_dsp_set_agc(false); Serial.println("# OK agc=off"); }  
+        else Serial.println("# ERR: agc on|off");  
     }  
+    else if (strcmp(cmd, "gain") == 0) {  
+        char* a = strtok(NULL, " \t");  
+        if (a) {  
+            uint32_t v = (uint32_t)strtoul(a, NULL, 10);  
+            af_dsp_set_gain(v);  
+            Serial.printf("# OK gain=%lu%%\n", (unsigned long)af_dsp_gain_pct());  
+        } else Serial.println("# ERR: gain <0..400> — усиление при agc off, %");  
+    }  
+    else if (strcmp(cmd, "bypass") == 0) {  
+        char* a = strtok(NULL, " \t");  
+        if (a && strcmp(a, "on") == 0)       { af_dsp_set_bypass(true);  Serial.println("# OK bypass=on"); }  
+        else if (a && strcmp(a, "off") == 0) { af_dsp_set_bypass(false); Serial.println("# OK bypass=off"); }  
+        else Serial.println("# ERR: bypass on|off");  
+    }
     else if (strcmp(cmd, "cw") == 0) {  
         char* sub = strtok(NULL, " \t");  
         if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>"); return; }  
@@ -210,13 +236,13 @@ static void cli_exec(char* line) {
         if (sub && strcmp(sub, "clr") == 0) {  
             // Перезаписать все 7 ячеек заводскими пресетами (ребут).  
             static const af_bank_t preset[AF_STORE_BANKS] = {  
-                {  100, 4000, 0, 700, 150, 400 },  // 1: широкая  
-                {  300, 2400, 0, 700, 150, 400 },  // 2: нормальная  
-                {  300, 1800, 0, 700, 150, 400 },  // 3: узкая  
-                {  500, 1100, 1, 800, 150, 400 },  // 4: CW 800 Гц  
-                {  300,  900, 0, 700, 150, 400 },  // 5: узкая  
-                {  300, 3000, 1, 800, 200, 400 },  // 6: CW 800 Гц  
-                {  200, 3500, 0, 700, 150, 400 },  // 7: резерв/широкая  
+                    {  100, 4000, 0, 700, 150, 400, 1, 100 },  // 1: широкая  
+                    {  300, 2400, 0, 700, 150, 400, 1, 100 },  // 2: нормальная  
+                    {  300, 1800, 0, 700, 150, 400, 1, 100 },  // 3: узкая  
+                    {  500, 1100, 1, 800, 150, 400, 1, 100 },  // 4: CW 800 Гц  
+                    {  300,  900, 0, 700, 150, 400, 1, 100 },  // 5: узкая  
+                    {  300, 3000, 1, 800, 200, 400, 1, 100 },  // 6: CW 800/200  
+                    {  200, 3500, 0, 700, 150, 400, 1, 100 },  // 7: резерв  
             };  
             Serial.println("# banks clr: writing 7 banks, rebooting...");  
             Serial.flush();  
@@ -226,11 +252,11 @@ static void cli_exec(char* line) {
         for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {  
             af_bank_t b;  
             if (af_store_read(i, &b)) {  
-                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu\n",  
+                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%lu%%\n",
                               i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,  
                               b.cw_on ? "on" : "off",  
                               (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,  
-                              (unsigned long)b.cw_noise);  
+                              (unsigned long)b.cw_noise, b.agc_on ? "on" : "off", (unsigned long)b.gain_pct);
             } else {  
                 Serial.printf("# bank %d: empty\n", i);  
             }  

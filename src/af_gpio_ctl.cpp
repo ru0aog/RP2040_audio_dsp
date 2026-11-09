@@ -26,7 +26,8 @@ struct gpio_ctl_t {
   
 static gpio_ctl_t ctl_bank[3];   // GP2,GP3,GP4 — биты 0,1,2  
 static gpio_ctl_t ctl_nr;        // GP5  
-static gpio_ctl_t ctl_nt;        // GP6  
+static gpio_ctl_t ctl_nt;        // GP6
+static gpio_ctl_t ctl_bypass;    // GP7
   
 static uint32_t t_next_poll = 0;  
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7  
@@ -47,7 +48,14 @@ static void apply_nt(bool grounded) {
                   ctl_nt.pin, grounded ? "GND" : "open",  
                   grounded ? "on" : "off");  
     if (rc == 2) Serial.println("[GPIO] note: NR off (NT priority)");  
-}  
+}
+
+static void apply_bypass(bool grounded) {  
+    af_dsp_set_bypass(grounded);  
+    Serial.printf("[GPIO] GP%u %s -> bypass=%s\n",  
+                  ctl_bypass.pin, grounded ? "GND" : "open",  
+                  grounded ? "on" : "off");  
+}
   
 static void apply_bank(uint8_t code) {  
     bank_code = code;  
@@ -77,8 +85,9 @@ static void poll_pin(gpio_ctl_t* c) {
         if (c->stable_cnt < AF_GPIO_STABLE) {  
             if (++c->stable_cnt >= AF_GPIO_STABLE && raw != c->stable) {  
                 c->stable = raw;  
-                if (c == &ctl_nr)      apply_nr(raw);  
-                else if (c == &ctl_nt) apply_nt(raw);  
+                if (c == &ctl_nr)          apply_nr(raw);  
+                else if (c == &ctl_nt)     apply_nt(raw);  
+                else if (c == &ctl_bypass) apply_bypass(raw);  
                 else {  // банковый пин — пересчитать код и применить  
                     uint8_t code = 0;  
                     for (int i = 0; i < 3; i++)  
@@ -99,7 +108,11 @@ void af_gpio_ctl_init(void) {
     ctl_bank[1] = { AF_PIN_BANK1, false, false, 0 };  
     ctl_bank[2] = { AF_PIN_BANK2, false, false, 0 };  
     ctl_nr      = { AF_PIN_NR,    false, false, 0 };  
-    ctl_nt      = { AF_PIN_NT,    false, false, 0 };  
+    ctl_nt      = { AF_PIN_NT,    false, false, 0 };
+    ctl_bypass  = { AF_PIN_BYPASS, false, false, 0 };  
+    pinMode(ctl_bypass.pin, INPUT_PULLUP);  
+    ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);  
+    apply_bypass(ctl_bypass.stable);
   
     for (int i = 0; i < 3; i++) {  
         pinMode(ctl_bank[i].pin, INPUT_PULLUP);  
@@ -131,5 +144,6 @@ void af_gpio_ctl_poll(void) {
   
     for (int i = 0; i < 3; i++) poll_pin(&ctl_bank[i]);  
     poll_pin(&ctl_nr);  
-    poll_pin(&ctl_nt);  
+    poll_pin(&ctl_nt);
+    poll_pin(&ctl_bypass);
 }
