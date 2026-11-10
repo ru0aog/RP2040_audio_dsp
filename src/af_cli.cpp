@@ -290,8 +290,18 @@ static void cli_exec(char* line) {
     }
 
     else if (strcmp(cmd, "voice") == 0) {  
-        af_voice_play(VOICE_TEST);  
-        Serial.println("# OK voice test");  
+        char* sub = strtok(NULL, " \t");  
+        if (sub && strcmp(sub, "vol") == 0) {  
+            char* a = strtok(NULL, " \t");  
+            if (!a) { Serial.println("# ERR: voice vol <0..400>"); }  
+            else {  
+                af_voice_set_volume((uint16_t)strtoul(a, NULL, 10));  
+                Serial.printf("# OK voice vol=%u%%\n", af_voice_volume());  
+            }  
+        } else {  
+            af_voice_play(VOICE_TEST);  
+            Serial.println("# OK voice test");  
+        }  
     }
 
     // вставлять сюда

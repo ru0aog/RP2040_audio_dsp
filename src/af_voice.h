@@ -21,3 +21,7 @@ bool af_voice_busy(void);
 // Подмес в выходной сэмпл. Вызывается из af_dsp_poll на каждый отсчёт.  
 // Возвращает s + голос с насыщением.  
 int16_t af_voice_mix(int16_t s);
+
+// Громкость голосовых клипов, % (0..400). 100 = как в файле.  
+void     af_voice_set_volume(uint16_t pct);  
+uint16_t af_voice_volume(void);

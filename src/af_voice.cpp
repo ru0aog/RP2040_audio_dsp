@@ -12,13 +12,6 @@
 #include "voice/voice_02.inc"  
 #include "voice/voice_03.inc" 
   
-// --- Клипы (заглушки; заменить на реальную речь) ----------------------------  
-// Тестовый клип: тон 800 Гц, 200 мс — пока вместо записанной речи.  
-static const int16_t clip_test[] = {  
-    // сгенерировать: python -c "import math; print(','.join(str(int(12000*math.sin(2*math.pi*800*i/15625))) for i in range(3125)))"  
-    0  // заполнить сгенерированными данными  
-};  
-  
 // Таблица клипов: id -> {данные, длина}. Порядок = af_voice_id_t.  
 typedef struct { const int16_t* data; uint32_t len; } voice_clip_t;  
 static const voice_clip_t s_clips[VOICE_COUNT] = {  
@@ -37,8 +30,15 @@ static volatile uint8_t s_q_head = 0, s_q_tail = 0;
   
 static const int16_t* s_cur = NULL;         // текущий клип (Core 1)  
 static uint32_t s_cur_len = 0, s_cur_pos = 0;  
+
+static volatile uint16_t s_vol_pct = 100;  
   
 void af_voice_init(void) { s_cur = NULL; s_q_head = s_q_tail = 0; }  
+
+void af_voice_set_volume(uint16_t pct) {  
+    if (pct > 400) pct = 400;  
+    s_vol_pct = pct;  
+}  
   
 void af_voice_play(af_voice_id_t id) {  
     if (id <= VOICE_NONE || id >= VOICE_COUNT) return;  
@@ -63,9 +63,12 @@ int16_t af_voice_mix(int16_t s) {
     }  
     if (s_cur == NULL) return s;  
   
-    int32_t v = (int32_t)s + s_cur[s_cur_pos++];  
+    int32_t vs = ((int32_t)s_cur[s_cur_pos++] * s_vol_pct) / 100;  
+    int32_t v  = (int32_t)s + vs;
     if (s_cur_pos >= s_cur_len) s_cur = NULL;  
     if (v > 32767) v = 32767;  
     if (v < -32768) v = -32768;  
     return (int16_t)v;  
 }
+
+uint16_t af_voice_volume(void) { return s_vol_pct; }
