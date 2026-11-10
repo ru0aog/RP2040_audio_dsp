@@ -737,13 +737,9 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             }  
             if (notch_on) y = notch_lms_push(y);  
             if (nr_on)    y = nr_lms_push(y);  
-            int16_t s = agc_limit(y);  
-  
-            y = agc_limit(y);  
-            y = af_voice_mix(y);          // голосовые сообщения  
-            out_emit(y);
-
-            out_emit(sat16(s));  
+            int16_t s = agc_limit(y);    
+            s = af_voice_mix(s);          // голосовые сообщения    
+            out_emit(sat16(s));
         }  
         af_capture_release();  
   
