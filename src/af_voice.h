@@ -7,10 +7,12 @@ typedef enum {
     VOICE_READY,          // 01: "радиотракт готов к работе"  
     VOICE_NT_ON,          // 02: "автоматический режекторный фильтр включен"  
     VOICE_CW_ON,          // 03: "телеграфный фильтр включен"  
+    VOICE_NR_ON,          // 04: "адаптивное шумоподавление включено"  
+    VOICE_BYPASS_ON,      // 05: "режим обхода включен"  
+    VOICE_AGC_OFF,        // 06: "АРУ выключена"  
     VOICE_BANK_1,         // заготовки — клипов пока нет  
     VOICE_BANK_2,  
     VOICE_BANK_4,  
-    VOICE_BYPASS_ON,  
     VOICE_BYPASS_OFF,  
     VOICE_COUNT  
 } af_voice_id_t;

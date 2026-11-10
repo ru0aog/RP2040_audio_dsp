@@ -10,20 +10,25 @@
 #include "af_config.h"
 #include "voice/voice_01.inc"  
 #include "voice/voice_02.inc"  
-#include "voice/voice_03.inc" 
+#include "voice/voice_03.inc"
+#include "voice/voice_04.inc"  
+#include "voice/voice_05.inc"  
+#include "voice/voice_06.inc"
   
 // Таблица клипов: id -> {данные, длина}. Порядок = af_voice_id_t.  
 typedef struct { const int16_t* data; uint32_t len; } voice_clip_t;  
 static const voice_clip_t s_clips[VOICE_COUNT] = {  
-    { NULL, 0 },                                  // VOICE_NONE  
-    { clip_voice_01, clip_voice_01_len },         // VOICE_READY  
-    { clip_voice_02, clip_voice_02_len },         // VOICE_NT_ON  
-    { clip_voice_03, clip_voice_03_len },         // VOICE_CW_ON  
-    { NULL, 0 },                                  // VOICE_BANK_1  
-    { NULL, 0 },                                  // VOICE_BANK_2  
-    { NULL, 0 },                                  // VOICE_BANK_4  
-    { NULL, 0 },                                  // VOICE_BYPASS_ON  
-    { NULL, 0 },                                  // VOICE_BYPASS_OFF  
+    { NULL, 0 },                              // VOICE_NONE  
+    { clip_voice_01, clip_voice_01_len },     // VOICE_READY  
+    { clip_voice_02, clip_voice_02_len },     // VOICE_NT_ON  
+    { clip_voice_03, clip_voice_03_len },     // VOICE_CW_ON  
+    { clip_voice_04, clip_voice_04_len },     // VOICE_NR_ON  
+    { clip_voice_05, clip_voice_05_len },     // VOICE_BYPASS_ON  
+    { clip_voice_06, clip_voice_06_len },     // VOICE_AGC_OFF  
+    { NULL, 0 },                              // VOICE_BANK_1  
+    { NULL, 0 },                              // VOICE_BANK_2  
+    { NULL, 0 },                              // VOICE_BANK_4  
+    { NULL, 0 },                              // VOICE_BYPASS_OFF  
 };
   
 // --- Состояние --------------------------------------------------------------  

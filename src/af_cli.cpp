@@ -142,17 +142,21 @@ static void cli_exec(char* line) {
     else if (strcmp(cmd, "nr") == 0) {  
         char* s = strtok(NULL, " \t");  
         if (s == NULL) { Serial.println("# ERR: nr on|off"); return; }  
-        bool on = (strcmp(s, "on") == 0);  
-        if (af_dsp_set_nr(on)) {    
-            Serial.printf("# OK nr=%s\n", on ? "on" : "off");    
-        } else {    
-            Serial.println("# nr: rejected (NT on — приоритет NT)");    
+        bool on = (strcmp(s, "on") == 0);    
+        if (af_dsp_set_nr(on)) {      
+            if (on) af_voice_play(VOICE_NR_ON);   // "адаптивное шумоподавление включено"  
+            Serial.printf("# OK nr=%s\n", on ? "on" : "off");      
+        } else {      
+            Serial.println("# nr: rejected (NT on — приоритет NT)");      
         }
     }
     else if (strcmp(cmd, "agc") == 0) {  
         char* a = strtok(NULL, " \t");  
         if (a && strcmp(a, "on") == 0)       { af_dsp_set_agc(true);  Serial.println("# OK agc=on"); }  
-        else if (a && strcmp(a, "off") == 0) { af_dsp_set_agc(false); Serial.println("# OK agc=off"); }  
+        else if (a && strcmp(a, "off") == 0) {
+            af_dsp_set_agc(false);
+            af_voice_play(VOICE_AGC_OFF);   // "АРУ выключена"
+            Serial.println("# OK agc=off"); }  
         else Serial.println("# ERR: agc on|off");  
     }  
     else if (strcmp(cmd, "gain") == 0) {  
@@ -165,7 +169,10 @@ static void cli_exec(char* line) {
     }  
     else if (strcmp(cmd, "bypass") == 0) {  
         char* a = strtok(NULL, " \t");  
-        if (a && strcmp(a, "on") == 0)       { af_dsp_set_bypass(true);  Serial.println("# OK bypass=on"); }  
+        if (a && strcmp(a, "on") == 0)       {
+            af_dsp_set_bypass(true);
+            af_voice_play(VOICE_BYPASS_ON);   // "режим обхода включен"
+            Serial.println("# OK bypass=on"); }
         else if (a && strcmp(a, "off") == 0) { af_dsp_set_bypass(false); Serial.println("# OK bypass=off"); }  
         else Serial.println("# ERR: bypass on|off");  
     }

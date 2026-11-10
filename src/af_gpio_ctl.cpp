@@ -34,14 +34,16 @@ static uint32_t t_next_poll = 0;
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7  
   
 // ---------------------------------------------------------------------------  
-static void apply_nr(bool grounded) {  
-    if (af_dsp_set_nr(grounded))  
-        Serial.printf("[GPIO] GP%u %s -> nr=%s\n",  
-                      ctl_nr.pin, grounded ? "GND" : "open",  
+static void apply_nr(bool grounded) {    
+    if (af_dsp_set_nr(grounded)) {  
+        Serial.printf("[GPIO] GP%u %s -> nr=%s\n",    
+                      ctl_nr.pin, grounded ? "GND" : "open",    
                       grounded ? "on" : "off");  
-    else  
-        Serial.printf("[GPIO] nr: rejected (NT on)\n");  
-}  
+        if (grounded) af_voice_play(VOICE_NR_ON);   // "адаптивное шумоподавление включено"  
+    } else {  
+        Serial.printf("[GPIO] nr: rejected (NT on)\n");    
+    }  
+}
   
 static void apply_nt(bool grounded) {    
     int rc = af_dsp_set_notch(grounded);    
@@ -52,11 +54,12 @@ static void apply_nt(bool grounded) {
     if (grounded) af_voice_play(VOICE_NT_ON);   // "автоматический режекторный фильтр включен"  
 }
 
-static void apply_bypass(bool grounded) {  
-    af_dsp_set_bypass(grounded);  
-    Serial.printf("[GPIO] GP%u %s -> bypass=%s\n",  
-                  ctl_bypass.pin, grounded ? "GND" : "open",  
-                  grounded ? "on" : "off");  
+static void apply_bypass(bool grounded) {    
+    af_dsp_set_bypass(grounded);    
+    Serial.printf("[GPIO] GP%u %s -> bypass=%s\n",    
+                  ctl_bypass.pin, grounded ? "GND" : "open",    
+                  grounded ? "on" : "off");    
+    if (grounded) af_voice_play(VOICE_BYPASS_ON);   // "режим обхода включен"  
 }
   
 static void apply_bank(uint8_t code) {  
@@ -68,6 +71,7 @@ static void apply_bank(uint8_t code) {
     }
     if (af_store_load(code)) {
         af_led_set_bank(code);   // code = 0..7 с GP2..GP4
+        if (!af_dsp_agc_on()) af_voice_play(VOICE_AGC_OFF);
         Serial.printf("[GPIO] bank=%u -> loaded band=%lu..%lu cw=%s f0=%lu bw=%lu\n",  
                       code,  
                       (unsigned long)af_dsp_band_lo_hz(),  
