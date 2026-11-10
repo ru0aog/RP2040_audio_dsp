@@ -3,7 +3,6 @@
 //  
 // Клипы: PCM int16 mono 15625 Гц, const-массивы во flash.  
 // Подмес в выходной тракт после АРУ, до out_emit — слышно и в PWM, и в USB.  
-// Очередь запросов: AF_VOICE_Q_DEPTH, события не теряются.  
 // ============================================================================  
 #include <Arduino.h>  
 #include "af_voice.h"  
@@ -35,7 +34,7 @@ static const voice_clip_t s_clips[VOICE_COUNT] = {
 static volatile af_voice_id_t s_queue[4];   // очередь запросов (Core0 -> Core1)  
 static volatile uint8_t s_q_head = 0, s_q_tail = 0;  
   
-static const int16_t* s_cur = NULL;         // текущий клип (Core 1)  
+static const int16_t* volatile s_cur = NULL;         // текущий клип (Core 1)  
 static uint32_t s_cur_len = 0, s_cur_pos = 0;  
 
 static volatile uint16_t s_vol_pct = 300;  
