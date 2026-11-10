@@ -80,16 +80,14 @@ static void cli_stats(void) {
                   (unsigned long)af_drop_queue_full,  
                   (unsigned long)af_drop_scratch,  
                   (unsigned long)af_drop_busy);  
-    Serial.printf("# pwm: underruns=%lu fill=%u\n",  
-                  (unsigned long)af_pwm_underruns(),  
-                  (unsigned)af_dsp_out_fill_pwm());
+    Serial.printf("# pwm: %s underruns=%lu fill=%u\n",  
+              af_pwm_is_enabled() ? "on" : "OFF",  
+              (unsigned long)af_pwm_underruns(), af_dsp_out_fill_pwm());
     Serial.printf("# usb: mounted=%d dropped=%lu\n",  
                   (int)af_usb_mounted(),  
                   (unsigned long)af_usb_dropped());
     Serial.printf("# core1: max_block_us=%lu\n", (unsigned long)af_dsp_max_block_us());
-    Serial.printf("# pwm: %s underruns=%lu fill=%u\n",  
-              af_pwm_is_enabled() ? "on" : "OFF",  
-              (unsigned long)af_pwm_underruns(), af_dsp_out_fill_pwm());
+    
 }  
   
 // ---------------------------------------------------------------------------  
@@ -135,7 +133,8 @@ static void cli_exec(char* line) {
         char* s = strtok(NULL, " \t");  
         if (s == NULL) { Serial.println("# ERR: nt on|off"); return; }  
         bool on = (strcmp(s, "on") == 0);  
-        int rc = af_dsp_set_notch(on);    
+        int rc = af_dsp_set_notch(on);
+        if (on) af_voice_play(VOICE_NT_ON);
         Serial.printf("# OK nt=%s\n", on ? "on" : "off");    
         if (rc == 2)    
             Serial.println("# note: NR off (приоритет NT, совместная работа не поддерживается)");
@@ -175,7 +174,8 @@ static void cli_exec(char* line) {
         if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>"); return; }  
   
         if (strcmp(sub, "on") == 0) {  
-            af_dsp_set_cw(true);  
+            af_dsp_set_cw(true);
+            af_voice_play(VOICE_CW_ON);
             Serial.println("# OK cw=on");  
         }  
         else if (strcmp(sub, "off") == 0) {  
@@ -293,8 +293,14 @@ static void cli_exec(char* line) {
 
     else if (strcmp(cmd, "voice") == 0) {  
         char* a1 = strtok(NULL, " \t");  
-        if (a1 && strcmp(a1, "vol") == 0) {  
-            // ... существующий код громкости ...  
+        if (a1 && strcmp(a1, "vol") == 0) {    
+            char* a2 = strtok(NULL, " \t");    
+            if (a2) {    
+                af_voice_set_volume((uint16_t)strtoul(a2, NULL, 10));    
+                Serial.printf("# OK voice vol=%u%%\n", (unsigned)af_voice_volume());    
+            } else {    
+                Serial.printf("# voice vol=%u%%\n", (unsigned)af_voice_volume());    
+            }  
         } else if (a1) {  
             long n = atol(a1);  
             if (n >= 1 && n < VOICE_COUNT) {  
@@ -370,7 +376,8 @@ static void cat_execute(const char* cmd) {
                     cat_mode = cmd[2];  
                     return;  
                 case '3':  
-                    af_dsp_set_cw(true);  
+                    af_dsp_set_cw(true);
+                    af_voice_play(VOICE_CW_ON);
                     cat_mode = '3';  
                     return;  
                 default:  
@@ -389,7 +396,10 @@ static void cat_execute(const char* cmd) {
     // NT — автонотч: NT1 вкл, NT0 выкл  
     if (cmd[0] == 'N' && cmd[1] == 'T') {    
         if (n == 2 || n == 3) {  
-            if (n == 3) af_dsp_set_notch(cmd[2] != '0');  
+            if (n == 3) {  
+                af_dsp_set_notch(cmd[2] != '0');  
+                if (cmd[2] != '0') af_voice_play(VOICE_NT_ON);  
+            }
             char buf[12];  
             snprintf(buf, sizeof(buf), "NT%d;NR%d;",  
                      af_dsp_notch_on() ? 1 : 0, af_dsp_nr_on() ? 1 : 0);  
