@@ -16,6 +16,7 @@
 #include "af_dsp.h"  
 #include "af_store.h"
 #include "af_led.h"
+#include "af_voice.h"
   
 struct gpio_ctl_t {  
     uint8_t  pin;  
@@ -42,12 +43,13 @@ static void apply_nr(bool grounded) {
         Serial.printf("[GPIO] nr: rejected (NT on)\n");  
 }  
   
-static void apply_nt(bool grounded) {  
-    int rc = af_dsp_set_notch(grounded);  
-    Serial.printf("[GPIO] GP%u %s -> nt=%s\n",  
-                  ctl_nt.pin, grounded ? "GND" : "open",  
-                  grounded ? "on" : "off");  
-    if (rc == 2) Serial.println("[GPIO] note: NR off (NT priority)");  
+static void apply_nt(bool grounded) {    
+    int rc = af_dsp_set_notch(grounded);    
+    Serial.printf("[GPIO] GP%u %s -> nt=%s\n",    
+                  ctl_nt.pin, grounded ? "GND" : "open",    
+                  grounded ? "on" : "off");    
+    if (rc == 2) Serial.println("[GPIO] note: NR off (NT priority)");    
+    if (grounded) af_voice_play(VOICE_NT_ON);   // "автоматический режекторный фильтр включен"  
 }
 
 static void apply_bypass(bool grounded) {  
@@ -72,7 +74,8 @@ static void apply_bank(uint8_t code) {
                       (unsigned long)af_dsp_band_hi_hz(),  
                       af_dsp_cw_on() ? "on" : "off",  
                       (unsigned long)af_dsp_cw_freq(),  
-                      (unsigned long)af_dsp_cw_bw());  
+                      (unsigned long)af_dsp_cw_bw());
+        if (af_dsp_cw_on()) af_voice_play(VOICE_CW_ON);   // "телеграфный фильтр включен"
     } else {  
         Serial.printf("[GPIO] bank=%u -> empty, ignored\n", code);  
     }  
