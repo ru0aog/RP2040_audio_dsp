@@ -12,6 +12,7 @@
 //   cw noise <0..2000> — примесь шума эфира в CW
 //   stats              — диагностика: загрузка ядер, потери, клипы  
 //   banks clr          — перезаписать все банки заводскими пресетами (ребут)
+//   pwm on|off         — PWM-выход (off = несущая заглушена, пин в 0)
 //   help               — справка  
 // ============================================================================  
 #include <Arduino.h>  
@@ -85,6 +86,9 @@ static void cli_stats(void) {
                   (int)af_usb_mounted(),  
                   (unsigned long)af_usb_dropped());
     Serial.printf("# core1: max_block_us=%lu\n", (unsigned long)af_dsp_max_block_us());
+    Serial.printf("# pwm: %s underruns=%lu fill=%u\n",  
+              af_pwm_is_enabled() ? "on" : "OFF",  
+              (unsigned long)af_pwm_underruns(), af_dsp_out_fill_pwm());
 }  
   
 // ---------------------------------------------------------------------------  
@@ -260,6 +264,19 @@ static void cli_exec(char* line) {
             } else {  
                 Serial.printf("# bank %d: empty\n", i);  
             }  
+        }  
+    }
+
+    else if (strcmp(cmd, "pwm") == 0) {  
+        char* s = strtok(NULL, " \t");  
+        if (s && strcmp(s, "on") == 0) {  
+            af_pwm_set_enabled(true);  
+            Serial.println("# OK pwm=on");  
+        } else if (s && strcmp(s, "off") == 0) {  
+            af_pwm_set_enabled(false);  
+            Serial.println("# OK pwm=off (carrier muted)");  
+        } else {  
+            Serial.println("# ERR: pwm on|off");  
         }  
     }
 

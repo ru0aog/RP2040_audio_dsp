@@ -34,15 +34,16 @@
 static int      pwm_dma_ch    = -1;  
 static uint     pwm_slice     = 0;  
 static uint     pwm_chan      = 0;  
-static uint     pwm_dma_timer = 0;  
+static uint     pwm_dma_timer = 0;
+
+static volatile bool     pwm_running   = false;  
+static volatile uint32_t pwm_underruns = 0;  
+static volatile bool     pwm_enabled   = true;   // pwm off -> несущая заглушена
   
 // Кольцо duty-буферов: DMA играет duty_sel, poll заполняет свободные.  
 static uint16_t duty_buf[4][AF_OUT_BLOCK_SAMPLES];  
 static volatile bool    duty_ready[4] = {false, false, false, false};  
 static volatile uint8_t duty_sel = 0;  
-  
-static volatile bool     pwm_running   = false;  
-static volatile uint32_t pwm_underruns = 0;  
   
 // ---------------------------------------------------------------------------  
 // int16 -> duty с дизерингом ошибки (error feedback)  
@@ -141,7 +142,14 @@ void af_pwm_init(void) {
 void __not_in_flash_func(af_pwm_poll)(void) {  
     static int32_t dither_err = 0;  
   
-    for (uint8_t b = 0; b < 4; b++) {  
+    if (!pwm_enabled) {  
+        // Выход выключен: выкидываем готовые блоки, чтобы очередь  
+        // af_dsp не забилась (out_dropped не росла).  
+        while (af_dsp_out_get_pwm() != NULL) af_dsp_out_release_pwm();  
+        return;  
+    }  
+  
+    for (uint8_t b = 0; b < 4; b++) {
         if (duty_ready[b]) continue;            // буфер ещё играет  
   
         const volatile int16_t* blk = af_dsp_out_get_pwm();  
@@ -165,7 +173,35 @@ void __not_in_flash_func(af_pwm_poll)(void) {
             pwm_running = true;  
         }  
     }  
+}
+
+// ---------------------------------------------------------------------------  
+// Вкл/выкл PWM-выхода (команда 'pwm on|off')  
+// ---------------------------------------------------------------------------  
+void af_pwm_set_enabled(bool on) {  
+    if (on == pwm_enabled) return;  
+    pwm_enabled = on;  
+  
+    if (!on) {  
+        // Глушим несущую: стоп DMA, слайс off, пин в SIO low.  
+        dma_channel_abort(pwm_dma_ch);  
+        pwm_running = false;  
+        for (uint8_t b = 0; b < 4; b++) duty_ready[b] = false;  
+        pwm_set_chan_level(pwm_slice, pwm_chan, 0);  
+        pwm_set_enabled(pwm_slice, false);  
+        gpio_set_function(AF_PWM_PIN, GPIO_FUNC_SIO);  
+        gpio_set_dir(AF_PWM_PIN, GPIO_OUT);  
+        gpio_put(AF_PWM_PIN, 0);  
+    } else {  
+        // Возвращаем пин слайсу и включаем PWM; DMA перезапустит  
+        // af_pwm_poll, когда накопятся >=2 duty-буфера.  
+        gpio_set_function(AF_PWM_PIN, GPIO_FUNC_PWM);  
+        pwm_set_enabled(pwm_slice, true);  
+        pwm_running = false;  
+    }  
 }  
+  
+bool af_pwm_is_enabled(void) { return pwm_enabled; }
   
 // ---------------------------------------------------------------------------  
 // Диагностика  
