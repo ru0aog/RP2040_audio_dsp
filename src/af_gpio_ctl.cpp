@@ -4,7 +4,7 @@
 //  
 //   GP2..GP4 — селектор банка настроек, 3 бита (LOW=1):  
 //     000 = ручной режим (консоль), 001..111 = ячейки 1..7 (af_store_load).  
-//   GP5 — LOW -> NR on,  GP6 — LOW -> NT on.  
+//   GP5 — LOW -> NR on,  GP6 — LOW -> NT on.  GP7 — LOW -> bypass on
 //  
 // Опрос каждые AF_GPIO_POLL_MS мс, дебаунс AF_GPIO_STABLE чтений.  
 // Консольные команды имеют приоритет, но только до следующего изменения  
@@ -112,7 +112,6 @@ void af_gpio_ctl_init(void) {
     ctl_bypass  = { AF_PIN_BYPASS, false, false, 0 };  
     pinMode(ctl_bypass.pin, INPUT_PULLUP);  
     ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);  
-    apply_bypass(ctl_bypass.stable);
   
     for (int i = 0; i < 3; i++) {  
         pinMode(ctl_bank[i].pin, INPUT_PULLUP);  
@@ -123,16 +122,39 @@ void af_gpio_ctl_init(void) {
     ctl_nr.stable = ctl_nr.last_raw = (digitalRead(ctl_nr.pin) == LOW);  
     ctl_nt.stable = ctl_nt.last_raw = (digitalRead(ctl_nt.pin) == LOW);  
   
-    // Начальное применение — по текущим уровням.  
+    // Старт всегда с ручного режима — переходные состояния пинов  
+    // при подаче питания не должны дёргать банки.  
+    apply_bank(0);
+    delay(200);      // ждём, пока подтянутся линии с внешней ёмкостью  
+
+    // Посев по установившимся уровням — после delay.  
+    for (int i = 0; i < 3; i++)  
+        ctl_bank[i].stable = ctl_bank[i].last_raw = (digitalRead(ctl_bank[i].pin) == LOW);  
+    ctl_nr.stable     = ctl_nr.last_raw     = (digitalRead(ctl_nr.pin) == LOW);  
+    ctl_nt.stable     = ctl_nt.last_raw     = (digitalRead(ctl_nt.pin) == LOW);  
+    ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);
+    
+    // Прогон дебаунса: stable отразит установившиеся уровни,  
+    // а не переходку при старте (медленный подъём pull-up, дребезг).  
+    for (uint8_t k = 0; k < AF_GPIO_STABLE + 1; k++) {  
+        for (int i = 0; i < 3; i++) poll_pin(&ctl_bank[i]);  
+        poll_pin(&ctl_nr);  
+        poll_pin(&ctl_nt);  
+        poll_pin(&ctl_bypass);  
+        delay(AF_GPIO_POLL_MS);  
+    }  
+  
+    // Теперь читаем реальное состояние пинов и применяем.  
     apply_nt(ctl_nt.stable);  
     apply_nr(ctl_nr.stable);  
+    apply_bypass(ctl_bypass.stable);  
     uint8_t code = 0;  
     for (int i = 0; i < 3; i++)  
         if (ctl_bank[i].stable) code |= (1 << i);  
-    apply_bank(code);  
+    apply_bank(code);
   
-    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u (LOW=1/on)\n",  
-                  AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT);  
+    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u (LOW=1/on)\n",  
+                  AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS);
   
     t_next_poll = millis() + AF_GPIO_POLL_MS;  
 }  
