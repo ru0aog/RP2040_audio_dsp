@@ -22,6 +22,7 @@
 #include "af_store.h"  
 #include "af_config.h"
 #include "af_dsp.h"
+#include "af_voice.h"
   
 #include "pico/stdlib.h"
 #include "hardware/flash.h"
@@ -30,7 +31,7 @@
   
 #define AF_STORE_MAGIC0   'A'  
 #define AF_STORE_MAGIC1   'F'  
-#define AF_STORE_VER      2   // было 1: добавлены agc_on/gain_pct
+#define AF_STORE_VER      3   // было 2: добавлено voice_vol
 #define AF_EEPROM_SIZE    256
   
 // Смещение сектора EEPROM от начала flash (последний сектор).  
@@ -150,6 +151,7 @@ bool af_store_save(uint8_t idx) {
     r.d.cw_noise = (uint16_t)af_dsp_cw_noise();
     r.d.agc_on   = af_dsp_agc_on() ? 1 : 0;  
     r.d.gain_pct = (uint16_t)af_dsp_gain_pct();
+    r.d.voice_vol = af_voice_volume();
     r.crc = crc8(&r.d, sizeof(r.d));  
   
     // Читаем текущий сектор из flash напрямую (XIP), патчим запись.  
@@ -184,6 +186,7 @@ bool af_store_load(uint8_t idx) {
     af_dsp_set_cw_noise(b.cw_noise);
     af_dsp_set_agc(b.agc_on != 0);  
     af_dsp_set_gain(b.gain_pct);
+    af_voice_set_volume(b.voice_vol);
     af_dsp_set_cw(b.cw_on != 0);  
     if (!b.cw_on) af_dsp_set_band(b.lo_hz, b.hi_hz);  
     return true;  

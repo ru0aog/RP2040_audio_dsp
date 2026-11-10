@@ -240,7 +240,7 @@ static void cli_exec(char* line) {
         char* sub = strtok(NULL, " \t");  
         if (sub && strcmp(sub, "clr") == 0) {  
             // Перезаписать все 7 ячеек заводскими пресетами (ребут).
-            // Поля: {lo_hz, hi_hz, cw_on, cw_f0, cw_bw, cw_noise, agc_on, gain_pct}  
+            // Поля: {lo_hz, hi_hz, cw_on, cw_f0, cw_bw, cw_noise, agc_on, gain_pct, voice_vol}  
             //   lo_hz/hi_hz — полоса ПФ, Гц  
             //   cw_on       — телеграфный фильтр (0/1)  
             //   cw_f0       — центральная частота CW, Гц  
@@ -248,14 +248,15 @@ static void cli_exec(char* line) {
             //   cw_noise    — примесь шума в CW, уровень 0..2000  
             //   agc_on      — АРУ (0/1); при 0 — ручное усиление  
             //   gain_pct    — ручное усиление при agc off, % (0..400)  
-            static const af_bank_t preset[AF_STORE_BANKS] = {  
-                {  100, 3100, 0, 700, 150, 400, 1, 100 },  // 1 (GP2): SSB нормальная  
-                {  300, 2200, 0, 700, 150, 400, 1, 100 },  // 2 (GP3): SSB узкая  
-                {  100, 4000, 0, 700, 150, 400, 1, 100 },  // 3: резерв — широкая  
-                {  450,  950, 1, 700, 150, 400, 1, 100 },  // 4 (GP4): CW 800 Гц  
-                {  300,  900, 0, 700, 150, 400, 1, 100 },  // 5: резерв — очень узкая  
-                {  300, 3000, 0, 700, 150, 400, 0, 150 },  // 6: резерв — AM, АРУ off  
-                {  200, 3500, 0, 700, 150, 400, 1, 100 },  // 7: резерв  
+            //   voice_vol   — громкость голосовых сообщений, % (0..400)  
+            static const af_bank_t preset[AF_STORE_BANKS] = {    
+                {  100, 3100, 0, 700, 150, 400, 1, 100, 300 },  // 1 (GP2): SSB нормальная    
+                {  300, 2200, 0, 700, 150, 400, 1, 100, 300 },  // 2 (GP3): SSB узкая    
+                {  100, 4000, 0, 700, 150, 400, 1, 100, 300 },  // 3: резерв — широкая    
+                {  450,  950, 1, 700, 150, 400, 1, 100, 300 },  // 4 (GP4): CW 700 Гц    
+                {  300,  900, 0, 700, 150, 400, 1, 100, 300 },  // 5: резерв — очень узкая    
+                {  300, 3000, 0, 700, 150, 400, 0, 150, 300 },  // 6: резерв — AM, АРУ off    
+                {  200, 3500, 0, 700, 150, 400, 1, 100, 300 },  // 7: резерв    
             };
             Serial.println("# banks clr: writing 7 banks, rebooting...");  
             Serial.flush();  
@@ -265,11 +266,12 @@ static void cli_exec(char* line) {
         for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {  
             af_bank_t b;  
             if (af_store_read(i, &b)) {  
-                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%lu%%\n",
-                              i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,  
-                              b.cw_on ? "on" : "off",  
-                              (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,  
-                              (unsigned long)b.cw_noise, b.agc_on ? "on" : "off", (unsigned long)b.gain_pct);
+                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%lu%% vvol=%lu%%\n",  
+                              i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,    
+                              b.cw_on ? "on" : "off",    
+                              (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,    
+                              (unsigned long)b.cw_noise, b.agc_on ? "on" : "off",  
+                              (unsigned long)b.gain_pct, (unsigned long)b.voice_vol);
             } else {  
                 Serial.printf("# bank %d: empty\n", i);  
             }  
