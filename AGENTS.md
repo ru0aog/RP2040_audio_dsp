@@ -17,16 +17,17 @@
   
 ## Архитектура — что где лежит    
   
-| Файл                    | Назначение                                              |    
-|-------------------------|---------------------------------------------------------|    
-| `src/af_config.h`       | ВСЕ константы: Fs, пины, параметры фильтров. Менять здесь |    
-| `src/af_capture.cpp`    | ADC 250 ksps + 2 DMA-канала chain_to, IRQ на Core 0     |    
-| `src/af_dsp.cpp`        | DC-EMA -> CIC/2 -> HB/2 -> HB/2 -> HB/2 (15.625 ksps) -> ПФ -> CW -> NT -> NR -> АРУ -> 2 очереди |    
-| `src/af_pwm.cpp`        | PWM ~125 кГц + DMA pacing 15.625 ksps, 4 duty-буфера, отложенный старт (Core 0) |    
-| `src/af_usb.cpp`        | UAC-микрофон 44100/16, всегда включён (Core 0)          |    
-| `src/af_cli.cpp`        | Serial-команды + Kenwood CAT по `;` (Core 0)            |    
-| `src/af_gpio_ctl.cpp`   | Управление NT/NR/полосой по GPIO, дебаунс (Core 0)      |    
-| `RP2040_audio_dsp.cpp`  | setup/loop (Core 0), setup1/loop1 (Core 1)              |    
+| `RP2040_audio_dsp.cpp` | setup/loop обоих ядер, инициализация             |  
+| `af_config.h`          | все константы: пины, частоты, размеры, АРУ/NT/NR |  
+| `af_capture.cpp`       | ADC + DMA двойная буферизация, IRQ на Core 0     |  
+| `af_dsp.cpp`           | горячий путь DSP, целочисленный Q15/int64, `__not_in_flash_func` |  
+| `af_pwm.cpp`           | PWM-выход, `to_duty` с error feedback (noise shaping 1-го порядка) |  
+| `af_usb.cpp`           | UAC-микрофон                                     |  
+| `af_cli.cpp`           | консольные команды + CAT                         |  
+| `af_gpio_ctl.cpp`      | пины: GP2–4 банк (3 бита, LOW=1), GP5 NR, GP6 NT, GP7 bypass |  
+| `af_store.cpp`         | 7 банок настроек во flash, `AF_STORE_VER` — бампать при смене `af_bank_t` |  
+| `af_voice.cpp` + `src/voice/*.inc` | голосовые клипы int16 15.625 кГц, подмес после АРУ |  
+| `af_led.cpp`           | WS2812-индикация                                 |  
   
 ## Жёсткие правила — не нарушать    
   
@@ -118,6 +119,22 @@ pio device monitor -b 115200 # терминал
   (продюсер не пишет), растёт = `af_pwm_poll` не вызывается    
 - **CAT-команды** — парсер в `af_cli_poll` (`af_cli.cpp`), по образцу    
   `fldigi_cat.cpp` приёмника; новые команды добавлять туда же    
+
+## Правила для правок  
+  
+- Горячий путь (DSP, IRQ) — только целочисленная арифметика, без float, без  
+  malloc, функции в RAM (`__not_in_flash_func`).  
+- Новые поля в `af_bank_t` → `AF_STORE_VER` +1, обновить пресеты `banks clr`  
+  в `af_cli.cpp` и вывод `banks`.  
+- Новый голосовой клип: `src/voice/voice_NN.inc` (генерируется  
+  `WAV_convertor.py`, массив `clip_voice_NN` + `clip_voice_NN_len`), элемент в  
+  `af_voice_id_t`, строка в `s_clips`, `af_voice_play()` в точке события  
+  (CLI-ветка и/или `af_gpio_ctl`), НЕ внутри `af_dsp`-сеттеров.  
+- Новая CLI-команда: ветка в `cli_exec`, строка в `help`, при необходимости  
+  CAT-эквивалент в `cat_execute`.  
+- NT и NR взаимоисключающи (приоритет NT) — `af_dsp_set_nr` возвращает false  
+  при включённом NT, проверять результат.  
+- Комментарии и вывод CLI — на русском, стиль как в существующих файлах.  
   
 ## Стиль    
   
@@ -125,3 +142,10 @@ pio device monitor -b 115200 # терминал
 - Имена: префикс `af_` для API, `snake_case`    
 - Диагностика — через `Serial.printf` с префиксом `#` или `[TAG]`    
 - Новые счётчики потерь — volatile uint32_t, выводить в `stats`
+
+  
+## Диагностика  
+  
+`stats` — загрузка ядер, `cap_dropped`, `out_dropped`, `clip`, PWM underruns.  
+При `cap_dropped > 0` — перегруз Core 1; при `out_dropped` — переполнение  
+выходных очередей.
