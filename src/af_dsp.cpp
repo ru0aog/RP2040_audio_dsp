@@ -408,7 +408,16 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
     int32_t y1;  
     if (agc_on) {  
         int32_t avg = (int32_t)(agc_avg_q16 >> 16);  
-        if (avg < 1) avg = 1;  
+        // Кламп усиления: gain = AGC_REF/avg должен остаться в  
+        // [MIN_GAIN .. MAX_GAIN] => avg в [REF/MAX .. REF/MIN].  
+        // В тишине avg упирается в REF/MAX_GAIN — шум не разгоняется  
+        // под потолок, голосовые сообщения слышны без agc off.  
+        const float max_g = cw_on ? CW_AGC_MAX_GAIN : AGC_MAX_GAIN;  
+        const float min_g = cw_on ? CW_AGC_MIN_GAIN : AGC_MIN_GAIN;  
+        int32_t avg_lo = (int32_t)(AGC_REF / max_g);  
+        int32_t avg_hi = (int32_t)(AGC_REF / min_g);  
+        if (avg < avg_lo) avg = avg_lo;  
+        if (avg > avg_hi) avg = avg_hi;  
         int64_t den = avg;  
         int k = 63 - __builtin_clzll((uint64_t)den);  
         y1 = (int32_t)(((int64_t)x * AGC_REF) >> k);  

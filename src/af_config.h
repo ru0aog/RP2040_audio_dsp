@@ -51,11 +51,17 @@
 // ВНИМАНИЕ: тракт на 15.625 ksps — все постоянные времени АРУ/NT/NR  
 // в отсчётах стали вдвое длиннее в секундах (та же константа = вдвое  
 // медленнее реакция). Для CW-профиля это в плюс.  
-#define CW_AGC_REF            12000  
+#define AGC_REF               12000       // целевой средний уровень  
+#define AGC_MAX_GAIN          8.0f        // потолок усиления в речи: тишина  
+                                          // не разгоняется выше ~18 дБ  
+#define AGC_MIN_GAIN          0.25f       // и не проваливается ниже -12 дБ
+#define CW_AGC_REF            12000
 #define CW_AGC_ATT_Q24        100         // attack ~10x медленнее речевого  
 #define CW_AGC_REL_Q24        10          // release ~10x медленнее  
 #define CW_AGC_MAX_GAIN       4.0f        // потолок ниже — тишина не разгоняется в клип  
-#define CW_AGC_MIN_GAIN       0.5f        // и не проваливается в ноль  
+#define CW_AGC_MIN_GAIN       0.5f        // и не проваливается в ноль
+
+
 // EMA среднего уровня — тоже медленнее речевой  
 #define CW_AGC_AVG_ATT_Q24    (AGC_AVG_ATT_Q24 / 8)  
 #define CW_AGC_AVG_DEC_Q24    (AGC_AVG_DEC_Q24 / 8)  

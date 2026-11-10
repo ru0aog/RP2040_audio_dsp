@@ -31,7 +31,7 @@ static volatile uint8_t s_q_head = 0, s_q_tail = 0;
 static const int16_t* s_cur = NULL;         // текущий клип (Core 1)  
 static uint32_t s_cur_len = 0, s_cur_pos = 0;  
 
-static volatile uint16_t s_vol_pct = 100;  
+static volatile uint16_t s_vol_pct = 300;  
   
 void af_voice_init(void) { s_cur = NULL; s_q_head = s_q_tail = 0; }  
 
