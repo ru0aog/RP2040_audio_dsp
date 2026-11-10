@@ -34,6 +34,7 @@
 #include "src/af_gpio_ctl.h"
 #include "src/af_store.h"
 #include "src/af_led.h"
+#include "src/af_voice.h"     // подмес голосовых клипов в выход
   
 // ---------------------------------------------------------------------------  
 // Флаг готовности Core 0. Core 1 в setup1() ждёт его перед стартом захвата.  
@@ -81,6 +82,7 @@ void setup()
     af_store_init();        // EEPROM + формат при первом старте  
     af_gpio_ctl_init();     // применит банк/фильтры по пинам
     af_capture_start();   // DMA_IRQ_0 живёт на Core 0
+    af_voice_init();
   
     watchdog_enable(3000, true);   // WDT 3 с; true = пауза WDT при отладке  
     // Захват ADC+DMA стартует в setup1() на Core 1 —  

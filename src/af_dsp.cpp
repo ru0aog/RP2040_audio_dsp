@@ -18,6 +18,7 @@
 #include "af_config.h"  
 #include "af_capture.h"
 #include "af_store.h"
+#include "af_voice.h"     // подмес голосовых клипов в выход
   
 // ---------------------------------------------------------------------------  
 // Half-band дециматоры — коэффициенты 1:1 из rx_dsp.cpp приёмника  
@@ -716,8 +717,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // НЧ-тракт на 15.625 ksps.    
             if (bypass_on) {    
                 // Обход: децимированный вход напрямую на выход,    
-                // без FIR/CW/NT/NR/АРУ/лимитера.    
-                out_emit(sat16(y));    
+                // без FIR/CW/NT/NR/АРУ/лимитера.
+                // голос должен быть слышен и в обходе
+                out_emit(af_voice_mix(sat16(y)));
+                //out_emit(sat16(y));    
                 continue;    
             }    
             y = af_fir_push(y);    
@@ -736,6 +739,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             if (nr_on)    y = nr_lms_push(y);  
             int16_t s = agc_limit(y);  
   
+            y = agc_limit(y);  
+            y = af_voice_mix(y);          // голосовые сообщения  
+            out_emit(y);
+
             out_emit(sat16(s));  
         }  
         af_capture_release();  

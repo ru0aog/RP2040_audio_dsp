@@ -26,6 +26,7 @@
 #include "af_usb.h"
 #include "af_store.h"
 #include "af_led.h"
+#include "af_voice.h"     // подмес голосовых клипов в выход
   
 // ---------------------------------------------------------------------------  
 // Справка  
@@ -286,6 +287,11 @@ static void cli_exec(char* line) {
         } else {  
             Serial.println("# ERR: pwm on|off");  
         }  
+    }
+
+    else if (strcmp(cmd, "voice") == 0) {  
+        af_voice_play(VOICE_TEST);  
+        Serial.println("# OK voice test");  
     }
 
     // вставлять сюда
