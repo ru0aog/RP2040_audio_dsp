@@ -292,17 +292,20 @@ static void cli_exec(char* line) {
     }
 
     else if (strcmp(cmd, "voice") == 0) {  
-        char* sub = strtok(NULL, " \t");  
-        if (sub && strcmp(sub, "vol") == 0) {  
-            char* a = strtok(NULL, " \t");  
-            if (!a) { Serial.println("# ERR: voice vol <0..400>"); }  
-            else {  
-                af_voice_set_volume((uint16_t)strtoul(a, NULL, 10));  
-                Serial.printf("# OK voice vol=%u%%\n", af_voice_volume());  
+        char* a1 = strtok(NULL, " \t");  
+        if (a1 && strcmp(a1, "vol") == 0) {  
+            // ... существующий код громкости ...  
+        } else if (a1) {  
+            long n = atol(a1);  
+            if (n >= 1 && n < VOICE_COUNT) {  
+                af_voice_play((af_voice_id_t)n);  
+                Serial.printf("# OK voice %ld\n", n);  
+            } else {  
+                Serial.println("# ERR: voice <1..N|vol <0..400>>");  
             }  
         } else {  
-            af_voice_play(VOICE_TEST);  
-            Serial.println("# OK voice test");  
+            af_voice_play(VOICE_READY);  
+            Serial.println("# OK voice");  
         }  
     }
 

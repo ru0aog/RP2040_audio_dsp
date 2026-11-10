@@ -4,14 +4,16 @@
 // Идентификаторы голосовых сообщений. Расширяется по мере добавления клипов.  
 typedef enum {  
     VOICE_NONE = 0,  
-    VOICE_TEST,          // тестовое сообщение  
-    VOICE_BANK_1,        // "банк один" — заготовки под события  
+    VOICE_READY,         // voice_01: "радиотракт готов к работе"  
+    VOICE_CLIP_02,       // voice_02: содержимое уточнить прослушиванием  
+    VOICE_CLIP_03,       // voice_03: содержимое уточнить прослушиванием  
+    VOICE_BANK_1,        // заготовки под события (клипов пока нет)  
     VOICE_BANK_2,  
     VOICE_BANK_4,  
     VOICE_BYPASS_ON,  
     VOICE_BYPASS_OFF,  
     VOICE_COUNT  
-} af_voice_id_t;  
+} af_voice_id_t;
   
 void af_voice_init(void);  
 // Поставить сообщение в очередь воспроизведения (Core 0, из GPIO/CLI).  
