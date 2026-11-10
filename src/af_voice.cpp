@@ -8,7 +8,9 @@
 #include <Arduino.h>  
 #include "af_voice.h"  
 #include "af_config.h"
-#include "voice/voice_01.inc" 
+#include "voice/voice_01.inc"  
+#include "voice/voice_02.inc"  
+#include "voice/voice_03.inc" 
   
 // --- Клипы (заглушки; заменить на реальную речь) ----------------------------  
 // Тестовый клип: тон 800 Гц, 200 мс — пока вместо записанной речи.  
@@ -20,7 +22,13 @@ static const int16_t clip_test[] = {
 // Таблица клипов: id -> {данные, длина}. Порядок = af_voice_id_t.  
 typedef struct { const int16_t* data; uint32_t len; } voice_clip_t;  
 static const voice_clip_t s_clips[VOICE_COUNT] = {  
-    { clip_voice_01, clip_voice_01_len },  
+    { NULL, 0 },                              // VOICE_NONE  
+    { clip_voice_01, clip_voice_01_len },     // VOICE_TEST  
+    { clip_voice_02, clip_voice_02_len },     // VOICE_BANK_1  
+    { clip_voice_03, clip_voice_03_len },     // VOICE_BANK_2  
+    { NULL, 0 },                              // VOICE_BANK_4  
+    { NULL, 0 },                              // VOICE_BYPASS_ON  
+    { NULL, 0 },                              // VOICE_BYPASS_OFF  
 };
   
 // --- Состояние --------------------------------------------------------------  

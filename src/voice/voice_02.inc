@@ -1,4 +1,5 @@
-static const int16_t clip_voice[] = {
+// src/voice/voice_02.inc  
+static const int16_t clip_voice_02[] = {
     0,0,0,0,0,0,0,0,0,0,0,0,
     0,0,0,0,0,0,0,0,0,0,0,0,
     0,0,0,0,0,0,0,0,0,0,0,0,
@@ -6984,4 +6985,5 @@ static const int16_t clip_voice[] = {
     0,0,0,0,0,0,0,0,0,0,0,0,
     0,0,0,0,0,0,0,0,0,0,0,0,
     0,0,0,0,
-};
+};  
+static const uint32_t clip_voice_02_len = sizeof(clip_voice_02) / sizeof(clip_voice_02[0]);
