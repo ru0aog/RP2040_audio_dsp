@@ -3,7 +3,8 @@
 // Тракт (capture/dsp/pwm/usb/voice) отключён. Термогуард исключён.  
   
 #include <Arduino.h>  
-#include <stdio.h>  
+#include <stdio.h>
+#include <string.h> 
 #include "pico/stdlib.h"  
 #include "hardware/clocks.h"  
 #include "hardware/pll.h"  
@@ -14,7 +15,16 @@
 #include "hardware/structs/ssi.h"  
 #include "hardware/structs/pll.h"  
   
-#include "src/af_led.h"  
+#include "src/af_config.h"  
+#include "src/af_capture.h"  
+#include "src/af_dsp.h"  
+#include "src/af_pwm.h"  
+#include "src/af_usb.h"  
+#include "src/af_cli.h"  
+#include "src/af_gpio_ctl.h"
+#include "src/af_store.h"
+#include "src/af_led.h"
+#include "src/af_voice.h"     // подмес голосовых клипов в выход
   
 volatile bool core0_ready = false;  
   
@@ -131,8 +141,11 @@ void setup()
 {  
     af_set_clk_250();          // разгон первым делом, до USB/Serial  
   
-    Serial.begin(115200);  
-    delay(2000);               // дать USB-стеку переэнумерироваться на новом clk  
+    Serial.begin(115200);
+    
+    // Ждём подключения COM-порта (USB CDC), максимум 5 с.  
+    // Как в радиомодеме: без USB-хоста ожидание не блокирует запуск.  
+    while (!Serial && millis() < 5000) delay(1);  
   
     Serial.printf("# clk_sys=%lu Hz | FLASH=%lu kHz (BAUDR=%u)\n",  
                   (unsigned long)clock_get_hz(clk_sys),  
@@ -140,7 +153,12 @@ void setup()
                   (unsigned)ssi_hw->baudr);  
   
     af_led_init();             // heartbeat (WS2812 на GP16 у Zero)  
-  
+
+    af_dsp_init();  
+    af_cli_init();  
+    af_store_init();  
+    af_gpio_ctl_init();
+
     __dmb();  
     core0_ready = true;  
 }  
@@ -148,6 +166,9 @@ void setup()
 void loop()  
 {  
     af_led_poll();             // heartbeat — визуальный признак жизни  
+
+    af_cli_poll();  
+    af_gpio_ctl_poll();
   
     // Диагностика раз в 10 с — ядро живо, частота на месте  
     static uint32_t t_dbg = 0;  
@@ -162,6 +183,7 @@ void setup1()
 {  
     const uint32_t t0 = millis();  
     while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {  
+        af_store_core1_park_poll();
         tight_loop_contents();  
     }  
 }  
