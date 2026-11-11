@@ -163,12 +163,12 @@ void __not_in_flash_func(af_pwm_poll)(void) {
         af_dsp_out_release_pwm();  
     }  
   
-    // Старт DMA только когда заполнены минимум 2 duty-буфера —  
+    // Старт DMA только когда заполнены минимум 3 duty-буфера —  
     // убирает фазовую гонку «IRQ раньше заполнения».  
     if (!pwm_running) {  
         uint8_t n = 0;  
         for (uint8_t b = 0; b < 4; b++) if (duty_ready[b]) ++n;  
-        if (n >= 2) {  
+        if (n >= 3) {  
             dma_channel_start(pwm_dma_ch);  
             pwm_running = true;  
         }  
