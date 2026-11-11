@@ -71,8 +71,11 @@ static inline bool __not_in_flash_func(cic_push)(int32_t x, int32_t* y) {
         int32_t d = t - cic_comb[k]; cic_comb[k] = t; t = d;  
     }  
   
-    // DC-gain CIC = R^N = 2^3 = 8 → масштаб с округлением (+0.5 LSB)  
-    *y = (t + 4) >> 3;  
+    // DC-gain CIC = R^N = 2^3 = 8 → масштаб с округлением (+0.5 LSB)
+    // *y = (t + 4) >> 3;
+    
+    // DC-gain CIC = R^N = 4^3 = 64 → масштаб с округлением (+0.5 LSB)  
+    *y = (t + 32) >> 6;
     return true;  
 }  
   
