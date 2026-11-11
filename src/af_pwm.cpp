@@ -66,17 +66,21 @@ static inline uint16_t __not_in_flash_func(to_duty)(int16_t s, int32_t* err) {
 static void __not_in_flash_func(af_pwm_dma_irq)(void) {  
     dma_hw->ints1 = 1u << pwm_dma_ch;           // ack IRQ  
   
-    duty_ready[duty_sel] = false;               // доигранный буфер — свободен  
-  
-    // Ищем следующий готовый буфер по кольцу.  
-    uint8_t next = duty_sel;    
-    for (uint8_t k = 1; k <= AF_OUT_NUM_BUFFERS; k++) {    
-        uint8_t cand = (uint8_t)(duty_sel + k);    
-        if (cand >= AF_OUT_NUM_BUFFERS) cand -= AF_OUT_NUM_BUFFERS;    
-        if (duty_ready[cand]) { next = cand; break; }    
-    }
-    if (next == duty_sel) ++pwm_underruns;      // нет готовых — underrun  
-    duty_sel = next;  
+    // Ищем следующий готовый буфер по кольцу ДО освобождения текущего:  
+    // при underrun DMA повторяет duty_sel — он должен остаться ready,  
+    // иначе poll перезапишет его прямо под читающим DMA.  
+    uint8_t next = duty_sel;  
+    for (uint8_t k = 1; k <= AF_OUT_NUM_BUFFERS; k++) {  
+        uint8_t cand = (uint8_t)(duty_sel + k);  
+        if (cand >= AF_OUT_NUM_BUFFERS) cand -= AF_OUT_NUM_BUFFERS;  
+        if (duty_ready[cand]) { next = cand; break; }  
+    }  
+    if (next == duty_sel) {  
+        ++pwm_underruns;                        // нет готовых — повтор текущего  
+    } else {  
+        duty_ready[duty_sel] = false;           // доигранный буфер — свободен  
+        duty_sel = next;  
+    } 
   
     // Перезапуск канала на выбранный буфер (или повтор старого при underrun).    
     dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);    

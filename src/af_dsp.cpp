@@ -496,21 +496,27 @@ static inline void __not_in_flash_func(out_emit)(int16_t s) {
     if (++out_fill_pos < AF_OUT_BLOCK_SAMPLES) return;  
     out_fill_pos = 0;  
   
-    // Блок заполнен — публикуем в каждой очереди независимо.  
-    for (int i = 0; i < 2; i++) {  
-        out_queue_t* oq = (i == 0) ? &out_pwm : &out_usb;  
-        oq->busy[oq->fill_buf] = 1;  
-        __dmb();  
-        oq->head = (oq->head + 1) % AF_OUT_NUM_BUFFERS;  
-        // Следующий буфер для заполнения — первый свободный.  
-        uint8_t nb = oq->fill_buf;  
-        for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) {  
-            uint8_t cand = (oq->head + b) % AF_OUT_NUM_BUFFERS;  
-            if (!oq->busy[cand]) { nb = cand; break; }  
-        }  
-        if (oq->busy[nb]) ++oq->dropped;   // свободных нет — перезапишем  
-        oq->fill_buf = nb;  
-    }  
+    // Блок заполнен — публикуем в каждой очереди независимо.    
+    for (int i = 0; i < 2; i++) {    
+        out_queue_t* oq = (i == 0) ? &out_pwm : &out_usb;    
+        // Ищем следующий свободный буфер ДО публикации:    
+        // если свободных нет — блок НЕ публикуем (честный drop),    
+        // иначе буфер публиковался бы дважды → сшивка у потребителя.    
+        uint8_t nb = oq->fill_buf;    
+        bool found = false;    
+        for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) {    
+            uint8_t cand = (oq->head + b) % AF_OUT_NUM_BUFFERS;    
+            if (!oq->busy[cand] && cand != oq->fill_buf) { nb = cand; found = true; break; }    
+        }    
+        if (!found) {    
+            ++oq->dropped;                 // очередь полна — блок теряется    
+            continue;                      // fill_buf остаётся, перезапишем его    
+        }    
+        oq->busy[oq->fill_buf] = 1;    
+        __dmb();    
+        oq->head = (oq->head + 1) % AF_OUT_NUM_BUFFERS;    
+        oq->fill_buf = nb;    
+    }
 }  
   
 // Читательская сторона (Core 0).  

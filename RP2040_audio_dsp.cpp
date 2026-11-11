@@ -181,8 +181,10 @@ void loop()
     af_led_poll();  
     af_cli_poll();  
     af_gpio_ctl_poll();  
+    af_pwm_poll();      // ×3: заполняем duty-кольцо быстрее, чем один проход loop  
     af_pwm_poll();  
-    af_usb_poll();  
+    af_pwm_poll();  
+    af_usb_poll();
   
     watchdog_update();  
   
