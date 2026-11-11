@@ -142,7 +142,7 @@ void setup()
     af_set_clk_250();          // разгон первым делом, до USB/Serial  
   
     Serial.begin(115200);
-    
+
     // Ждём подключения COM-порта (USB CDC), максимум 5 с.  
     // Как в радиомодеме: без USB-хоста ожидание не блокирует запуск.  
     while (!Serial && millis() < 5000) delay(1);  
@@ -158,6 +158,8 @@ void setup()
     af_cli_init();  
     af_store_init();  
     af_gpio_ctl_init();
+
+    af_capture_start();
 
     __dmb();  
     core0_ready = true;  
@@ -183,13 +185,14 @@ void setup1()
 {  
     const uint32_t t0 = millis();  
     while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {  
-        af_store_core1_park_poll();
+        af_store_core1_park_poll();  
         tight_loop_contents();  
     }  
-}  
+}
   
 void loop1()  
 {  
     // Core 1: пустой поллинг — просто крутится  
-    tight_loop_contents();  
+    tight_loop_contents();
+    af_dsp_poll();
 }
