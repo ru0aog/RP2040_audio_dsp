@@ -73,11 +73,10 @@ static inline bool __not_in_flash_func(cic_push)(int32_t x, int32_t* y) {
 
     // компенсация усиления фильтра-дециматора CIC
     // DC-gain CIC = R^N = 2^3 = 8 → масштаб с округлением (+0.5 LSB)
-    *y = (t + 4) >> 3;
-
-    // *y = (int32_t)(((int64_t)t * 1213 + 32768) >> 15);
-    // DC-gain CIC = R^N = 4^3 = 64 → масштаб с округлением (+0.5 LSB)  
-    // *y = (t + 32) >> 6;
+    // *y = (t + 4) >> 3;
+    
+    *y = (t + 32) >> 6;   // DC-gain CIC = 4^3 = 64, +32 = округление +0.5 LSB
+    
     return true;  
 }  
   

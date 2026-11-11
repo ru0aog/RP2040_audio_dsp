@@ -25,7 +25,7 @@ git rm --cached firmware.map
 git commit -m "Remove firmware.map build artifact"
 git push --force
 
-Принудительно перезаписать все локальные файлы версией с GitHub
+Принудительно забрать изменения с гитхаб
 git reset --hard HEAD
 git clean -fd
 git pull origin main
