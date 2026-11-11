@@ -10,7 +10,7 @@
 //   cw freq <hz>       — центральная частота CW (300..3000)  
 //   cw bw <hz>         — полоса CW (80..500)  
 //   cw noise <0..2000> — примесь шума эфира в CW
-//   gain <0..8>        — ручное усиление при agc off, множитель  
+//   gain <0..1000>     — ручное усиление при agc off, множитель
 //   agc on|off         — АРУ (off -> ручное усиление, лимитер остаётся)  
 //   bypass on|off      — обход: выход = вход  
 //   voice [N|vol <0..400>] — голосовые сообщения
@@ -172,7 +172,7 @@ static void cli_exec(char* line) {
             uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);  
             Serial.printf("# OK gain=%lu.%02lu\n",  
                           (unsigned long)(g100 / 100), (unsigned long)(g100 % 100));
-        } else Serial.println("# ERR: gain <0..8> — множитель при agc off (1.0 = единичное)");    
+        } else Serial.println("# ERR: gain <0..1000> — множитель при agc off (1.0 = единичное)");    
     }
     else if (strcmp(cmd, "bypass") == 0) {  
         char* a = strtok(NULL, " \t");  
