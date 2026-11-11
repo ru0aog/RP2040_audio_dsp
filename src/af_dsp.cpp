@@ -2,8 +2,8 @@
 // ============================================================================  
 // af_dsp.cpp — моно DSP-тракт НЧ (Core 1)  
 //  
-// Тракт: uint16-блоки ADC (500 ksps) -> DC-EMA -> CIC /4 -> HB /2 -> HB /2    
-// -> HB /2 (15.625 ksps) -> полосовой FIR 127 (симметричный) -> CW-биквады ->
+// Тракт: uint16-блоки ADC (250 ksps) -> DC-EMA -> CIC /2 -> HB /2 -> HB /2  
+// -> HB /2 (15.625 ksps) -> полосовой FIR 127 (симметричный) -> CW-биквады ->  
 // автонотч NT (NLMS) -> шумоподавление NR (LMS ALE) -> АРУ+лимитер ->  
 // две SPSC-очереди int16-блоков (PWM и USB).  
 //  
@@ -53,8 +53,8 @@ typedef struct {
 static hb_state_t hb[AF_HB_STAGES];  
   
 // ---------------------------------------------------------------------------  
-// CIC R=4, N=3 — интеграторы на 500 ksps, гребёнки на 125 ksps.    
-// Переполнение int32 в интеграторах — штатное (по модулю 2^32).
+// CIC R=2, N=3 — интеграторы на 250 ksps, гребёнки на 125 ksps.  
+// Переполнение int32 в интеграторах — штатное (по модулю 2^32).  
 // ---------------------------------------------------------------------------  
 static int32_t cic_int[AF_CIC_N], cic_comb[AF_CIC_N];  
 static uint8_t cic_cnt = 0;  
@@ -71,8 +71,8 @@ static inline bool __not_in_flash_func(cic_push)(int32_t x, int32_t* y) {
         int32_t d = t - cic_comb[k]; cic_comb[k] = t; t = d;  
     }  
   
-    // DC-gain CIC = R^N = 4^3 = 64 → масштаб с округлением (+0.5 LSB)    
-    *y = (t + 32) >> 6;
+    // DC-gain CIC = R^N = 2^3 = 8 → масштаб с округлением (+0.5 LSB)  
+    *y = (t + 4) >> 3;  
     return true;  
 }  
   
@@ -716,7 +716,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             dc_est += ((meas << 8) - dc_est) >> 8;  
             int32_t x = (meas - (dc_est >> 8)) << 4;   // 12 -> 16 бит  
   
-            // Децимация 500k -> 15.625k: CIC/4 -> HB/2 -> HB/2 -> HB/2
+            // Децимация 250k -> 15.625k: CIC/2 -> HB/2 -> HB/2 -> HB/2.  
             int32_t y;  
             if (!cic_push(x, &y))        continue;  
             if (!hb_push(&hb[0], y, &y)) continue;  
