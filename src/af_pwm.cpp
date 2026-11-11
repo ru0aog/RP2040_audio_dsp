@@ -40,10 +40,11 @@ static volatile bool     pwm_running   = false;
 static volatile uint32_t pwm_underruns = 0;  
 static volatile bool     pwm_enabled   = true;   // pwm off -> несущая заглушена
   
-// Кольцо duty-буферов: DMA играет duty_sel, poll заполняет свободные.  
-static uint16_t duty_buf[4][AF_OUT_BLOCK_SAMPLES];  
-static volatile bool    duty_ready[4] = {false, false, false, false};  
-static volatile uint8_t duty_sel = 0;  
+// Кольцо duty-буферов: DMA играет duty_sel, poll заполняет свободные.    
+static uint16_t duty_buf[AF_OUT_NUM_BUFFERS][AF_OUT_BLOCK_SAMPLES];    
+static volatile bool    duty_ready[AF_OUT_NUM_BUFFERS];    
+static volatile uint8_t duty_sel = 0;    
+static uint8_t          duty_fill = 0;   // следующий буфер для записи
   
 // ---------------------------------------------------------------------------  
 // int16 -> duty с дизерингом ошибки (error feedback)  
@@ -68,11 +69,12 @@ static void __not_in_flash_func(af_pwm_dma_irq)(void) {
     duty_ready[duty_sel] = false;               // доигранный буфер — свободен  
   
     // Ищем следующий готовый буфер по кольцу.  
-    uint8_t next = duty_sel;  
-    for (uint8_t k = 1; k <= 4; k++) {  
-        uint8_t cand = (uint8_t)((duty_sel + k) & 3u);  
-        if (duty_ready[cand]) { next = cand; break; }  
-    }  
+    uint8_t next = duty_sel;    
+    for (uint8_t k = 1; k <= AF_OUT_NUM_BUFFERS; k++) {    
+        uint8_t cand = (uint8_t)(duty_sel + k);    
+        if (cand >= AF_OUT_NUM_BUFFERS) cand -= AF_OUT_NUM_BUFFERS;    
+        if (duty_ready[cand]) { next = cand; break; }    
+    }
     if (next == duty_sel) ++pwm_underruns;      // нет готовых — underrun  
     duty_sel = next;  
   
@@ -149,30 +151,35 @@ void __not_in_flash_func(af_pwm_poll)(void) {
         return;  
     }  
   
-    for (uint8_t b = 0; b < 4; b++) {
-        if (duty_ready[b]) continue;            // буфер ещё играет  
+    // Кольцевое заполнение: пишем в буфер, который DMA уже прочитал,  
+    // а не линейно 0..N — иначе CPU перезаписывает буфер под DMA.  
+    for (uint8_t k = 0; k < AF_OUT_NUM_BUFFERS; k++) {  
+        if (duty_ready[duty_fill]) break;       // кольцо заполнено  
   
         const volatile int16_t* blk = af_dsp_out_get_pwm();  
-        if (blk == NULL) break;                 // нет данных — к проверке старта  
+        if (blk == NULL) break;  
   
         for (uint32_t i = 0; i < AF_OUT_BLOCK_SAMPLES; i++)  
-            duty_buf[b][i] = to_duty(blk[i], &dither_err);  
+            duty_buf[duty_fill][i] = to_duty(blk[i], &dither_err);  
   
         __dmb();  
-        duty_ready[b] = true;  
+        duty_ready[duty_fill] = true;  
         af_dsp_out_release_pwm();  
-    }  
+  
+        if (++duty_fill >= AF_OUT_NUM_BUFFERS) duty_fill = 0;  
+    }
   
     // Старт DMA только когда заполнены минимум 2 duty-буфера —  
     // убирает фазовую гонку «IRQ раньше заполнения».  
-    if (!pwm_running) {  
-        uint8_t n = 0;  
-        for (uint8_t b = 0; b < 4; b++) if (duty_ready[b]) ++n;  
-        if (n >= 2) {  
-            dma_channel_start(pwm_dma_ch);  
-            pwm_running = true;  
-        }  
-    }  
+    if (!pwm_running) {    
+        uint8_t n = 0;    
+        for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) if (duty_ready[b]) ++n;    
+        if (n >= AF_OUT_NUM_BUFFERS - 2) {      // ~48 мс подушки перед стартом  
+            dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);  
+            dma_channel_set_trans_count(pwm_dma_ch, AF_OUT_BLOCK_SAMPLES, true);  
+            pwm_running = true;    
+        }    
+    }
 }
 
 // ---------------------------------------------------------------------------  
@@ -186,7 +193,9 @@ void af_pwm_set_enabled(bool on) {
         // Глушим несущую: стоп DMA, слайс off, пин в SIO low.  
         dma_channel_abort(pwm_dma_ch);  
         pwm_running = false;  
-        for (uint8_t b = 0; b < 4; b++) duty_ready[b] = false;  
+        for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) duty_ready[b] = false;  
+        duty_fill = 0;  
+        duty_sel = 0;
         pwm_set_chan_level(pwm_slice, pwm_chan, 0);  
         pwm_set_enabled(pwm_slice, false);  
         gpio_set_function(AF_PWM_PIN, GPIO_FUNC_SIO);  
