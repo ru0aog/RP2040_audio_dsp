@@ -60,7 +60,8 @@ static void cli_help(void) {
 // Диагностика  
 // ---------------------------------------------------------------------------  
 static void cli_stats(void) {  
-    Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%.2f  bypass=%s\n",
+    uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);  
+    Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu.%02lu  bypass=%s\n",
                   (unsigned long)af_dsp_band_lo_hz(),  
                   (unsigned long)af_dsp_band_hi_hz(),
                   af_dsp_notch_on() ? "on" : "off",  
@@ -69,9 +70,9 @@ static void cli_stats(void) {
                   (unsigned long)af_dsp_cw_freq(),  
                   (unsigned long)af_dsp_cw_bw(),  
                   (unsigned long)af_dsp_cw_noise(),
-                  af_dsp_agc_on() ? "on" : "off",
-                  (double)af_dsp_gain(),
-                  af_dsp_bypass_on() ? "on" : "off");  
+                  af_dsp_agc_on() ? "on" : "off",  
+                  (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),  
+                  af_dsp_bypass_on() ? "on" : "off");
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -168,7 +169,9 @@ static void cli_exec(char* line) {
         if (a) {    
             float v = strtof(a, NULL);              // множитель: 0..AGC_MAX_GAIN    
             af_dsp_set_gain(v);    
-            Serial.printf("# OK gain=%.2f\n", (double)af_dsp_gain());    
+            uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);  
+            Serial.printf("# OK gain=%lu.%02lu\n",  
+                          (unsigned long)(g100 / 100), (unsigned long)(g100 % 100));
         } else Serial.println("# ERR: gain <0..8> — множитель при agc off (1.0 = единичное)");    
     }
     else if (strcmp(cmd, "bypass") == 0) {  
@@ -277,12 +280,14 @@ static void cli_exec(char* line) {
         for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {  
             af_bank_t b;  
             if (af_store_read(i, &b)) {  
-                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%.2f vvol=%lu%%\n",  
+                uint32_t g100 = (uint32_t)b.gain_pct * 100u / 256u;  
+                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%lu.%02lu vvol=%lu%%\n",
                               i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,      
                               b.cw_on ? "on" : "off",      
                               (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,      
                               (unsigned long)b.cw_noise, b.agc_on ? "on" : "off",    
-                              (double)b.gain_pct / 256.0, (unsigned long)b.voice_vol);
+                              (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),  
+                              (unsigned long)b.voice_vol);
             } else {  
                 Serial.printf("# bank %d: empty\n", i);  
             }  
