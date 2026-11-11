@@ -66,7 +66,7 @@ static void cli_stats(void) {
                   (unsigned long)af_dsp_cw_bw(),  
                   (unsigned long)af_dsp_cw_noise(),
                   af_dsp_agc_on() ? "on" : "off",
-                  (unsigned long)af_dsp_gain_pct(),
+                  (double)af_dsp_gain(),
                   af_dsp_bypass_on() ? "on" : "off");  
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
@@ -159,14 +159,14 @@ static void cli_exec(char* line) {
             Serial.println("# OK agc=off"); }  
         else Serial.println("# ERR: agc on|off");  
     }  
-    else if (strcmp(cmd, "gain") == 0) {  
-        char* a = strtok(NULL, " \t");  
-        if (a) {  
-            uint32_t v = (uint32_t)strtoul(a, NULL, 10);  
-            af_dsp_set_gain(v);  
-            Serial.printf("# OK gain=%lu%%\n", (unsigned long)af_dsp_gain_pct());  
-        } else Serial.println("# ERR: gain <0..400> — усиление при agc off, %");  
-    }  
+    else if (strcmp(cmd, "gain") == 0) {    
+        char* a = strtok(NULL, " \t");    
+        if (a) {    
+            float v = strtof(a, NULL);              // множитель: 0..AGC_MAX_GAIN    
+            af_dsp_set_gain(v);    
+            Serial.printf("# OK gain=%.2f\n", (double)af_dsp_gain());    
+        } else Serial.println("# ERR: gain <0..8> — множитель при agc off (1.0 = единичное)");    
+    }
     else if (strcmp(cmd, "bypass") == 0) {  
         char* a = strtok(NULL, " \t");  
         if (a && strcmp(a, "on") == 0)       {
@@ -254,16 +254,16 @@ static void cli_exec(char* line) {
             //   cw_bw       — полоса CW, Гц  
             //   cw_noise    — примесь шума в CW, уровень 0..2000  
             //   agc_on      — АРУ (0/1); при 0 — ручное усиление  
-            //   gain_pct    — ручное усиление при agc off, % (0..400)  
-            //   voice_vol   — громкость голосовых сообщений, % (0..400)  
-            static const af_bank_t preset[AF_STORE_BANKS] = {    
-                {  100, 3100, 0, 700, 150, 400, 1, 100, 300 },  // 1 (GP2): SSB нормальная    
-                {  300, 2200, 0, 700, 150, 400, 1, 100, 300 },  // 2 (GP3): SSB узкая    
-                {  100, 4000, 0, 700, 150, 400, 1, 100, 300 },  // 3: резерв — широкая    
-                {  450,  950, 1, 700, 150, 400, 1, 100, 300 },  // 4 (GP4): CW 700 Гц    
-                {  300,  900, 0, 700, 150, 400, 1, 100, 300 },  // 5: резерв — очень узкая    
-                {  300, 3000, 0, 700, 150, 400, 0, 150, 300 },  // 6: резерв — AM, АРУ off    
-                {  200, 3500, 0, 700, 150, 400, 1, 100, 300 },  // 7: резерв    
+            //   gain_q8     — ручное усиление при agc off, Q8 (256 = ×1.0) 
+            //   voice_vol   — громкость голосовых сообщений, % (0..400) 
+            static const af_bank_t preset[AF_STORE_BANKS] = {  
+                {  100, 3100, 0, 700, 150, 400, 1, 256, 300 },  // 1 (GP2): SSB нормальная  
+                {  300, 2200, 0, 700, 150, 400, 1, 256, 300 },  // 2 (GP3): SSB узкая  
+                {  100, 4000, 0, 700, 150, 400, 1, 256, 300 },  // 3: резерв — широкая  
+                {  450,  950, 1, 700, 150, 400, 1, 256, 300 },  // 4 (GP4): CW 700 Гц  
+                {  300,  900, 0, 700, 150, 400, 1, 256, 300 },  // 5: резерв — очень узкая  
+                {  300, 3000, 0, 700, 150, 400, 0, 384, 300 },  // 6: резерв — AM, АРУ off (×1.5)  
+                {  200, 3500, 0, 700, 150, 400, 1, 256, 300 },  // 7: резерв  
             };
             Serial.println("# banks clr: writing 7 banks, rebooting...");  
             Serial.flush();  

@@ -150,7 +150,7 @@ bool af_store_save(uint8_t idx) {
     r.d.cw_bw    = (uint16_t)af_dsp_cw_bw();  
     r.d.cw_noise = (uint16_t)af_dsp_cw_noise();
     r.d.agc_on   = af_dsp_agc_on() ? 1 : 0;  
-    r.d.gain_pct = (uint16_t)af_dsp_gain_pct();
+    r.d.gain_pct = (uint16_t)(af_dsp_gain() * 256.0f + 0.5f);
     r.d.voice_vol = af_voice_volume();
     r.crc = crc8(&r.d, sizeof(r.d));  
   
@@ -185,7 +185,7 @@ bool af_store_load(uint8_t idx) {
     af_dsp_set_cw_bw(b.cw_bw);  
     af_dsp_set_cw_noise(b.cw_noise);
     af_dsp_set_agc(b.agc_on != 0);  
-    af_dsp_set_gain(b.gain_pct);
+    af_dsp_set_gain((float)b.gain_pct / 256.0f);
     af_voice_set_volume(b.voice_vol);
     af_dsp_set_cw(b.cw_on != 0);  
     if (!b.cw_on) af_dsp_set_band(b.lo_hz, b.hi_hz);  

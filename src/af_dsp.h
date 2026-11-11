@@ -62,11 +62,11 @@ uint32_t af_dsp_out_dropped(void);     // блоки, не влезшие в в�
 uint32_t af_dsp_clip_count(void);      // срабатывания ограничителя int16  
 uint32_t af_dsp_max_block_us(void);    // пиковое время блока, мкс (чтение сбрасывает)
 
-// АРУ: off -> ручное усиление gain_pct (0..400%), быстрый лимитер остаётся.  
-void     af_dsp_set_agc(bool on);  
-bool     af_dsp_agc_on(void);  
-void     af_dsp_set_gain(uint32_t pct);  
-uint32_t af_dsp_gain_pct(void);  
+// АРУ: off -> ручное усиление gain (множитель, потолок = AGC_MAX_GAIN).  
+void   af_dsp_set_agc(bool on);  
+bool   af_dsp_agc_on(void);  
+void   af_dsp_set_gain(float mult);  
+float  af_dsp_gain(void);
   
 // Bypass: выход = вход (децимированный сигнал без FIR/CW/NT/NR/AGC).  
 void     af_dsp_set_bypass(bool on);  

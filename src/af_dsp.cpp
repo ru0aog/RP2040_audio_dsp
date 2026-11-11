@@ -393,7 +393,7 @@ static int64_t agc_avg_q16  = (int64_t)4096 << 16;   // среднее уров�
 static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера, Q16
 
 static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)  
-static volatile uint32_t gain_pct  = AF_GAIN_DEFAULT_PCT;  // ручное усиление, %  
+static volatile uint32_t gain_q15  = 32768;   // ручное усиление, Q15 (32768 = ×1.0)
 static volatile bool     bypass_on = false;   // обход всего тракта
   
 static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {  
@@ -427,8 +427,8 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
         int k = 63 - __builtin_clzll((uint64_t)den);  
         y1 = (int32_t)(((int64_t)x * AGC_REF) >> k);  
     } else {  
-        // АРУ off: фиксированное ручное усиление 0..400% (Q15: pct*32768/100).  
-        y1 = (int32_t)(((int64_t)x * (int64_t)gain_pct * 32768) / 100 >> 15);  
+        // АРУ off: фиксированное ручное усиление, множитель в Q15.  
+        y1 = (int32_t)(((int64_t)x * (int64_t)gain_q15) >> 15);
     }  
   
     if (cw_on) {                       // CW: без лимитера, только насыщение  
@@ -637,22 +637,20 @@ void af_dsp_set_agc(bool on) {
     if (on) agc_avg_q16 = (int64_t)4096 << 16;   // чистый старт контура A  
 }  
   
-void af_dsp_set_gain(uint32_t pct) {  
-    if (pct > AF_GAIN_MAX_PCT) pct = AF_GAIN_MAX_PCT;  
-    gain_pct = pct;  
+void af_dsp_set_gain(float m) {  
+    if (m < AF_GAIN_MIN) m = AF_GAIN_MIN;  
+    if (m > AF_GAIN_MAX) m = AF_GAIN_MAX;  
+    gain_q15 = (uint32_t)(m * 32768.0f + 0.5f);  
 }  
-  
+float af_dsp_gain(void) { return (float)gain_q15 / 32768.0f; }
+
 void af_dsp_set_bypass(bool on) { bypass_on = on; }  
-  
 bool     af_dsp_agc_on(void)     { return agc_on; }  
-uint32_t af_dsp_gain_pct(void)   { return gain_pct; }  
 bool     af_dsp_bypass_on(void)  { return bypass_on; }
-  
 bool     af_dsp_cw_on(void)    { return cw_on; }  
 uint32_t af_dsp_cw_freq(void)  { return cw_f0; }  
 uint32_t af_dsp_cw_bw(void)    { return cw_bw; }  
 uint32_t af_dsp_cw_noise(void) { return cw_noise; }  
-  
 bool af_dsp_notch_on(void) { return notch_on; }  
 bool af_dsp_nr_on(void)    { return nr_on; }  
   
