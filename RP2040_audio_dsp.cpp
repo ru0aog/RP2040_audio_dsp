@@ -2,18 +2,19 @@
 // Тест стабильности clk_sys=250 МГц: голые ядра, Serial, LED.  
 // Тракт (capture/dsp/pwm/usb/voice) отключён. Термогуард исключён.  
   
-#include <Arduino.h>  
+#include <Arduino.h>
 #include <stdio.h>
-#include <string.h> 
-#include "pico/stdlib.h"  
-#include "hardware/clocks.h"  
-#include "hardware/pll.h"  
-#include "hardware/sync.h"  
-#include "hardware/timer.h"  
-#include "hardware/vreg.h"  
-#include "hardware/structs/sio.h"  
-#include "hardware/structs/ssi.h"  
-#include "hardware/structs/pll.h"  
+#include <string.h>
+#include "pico/stdlib.h"
+#include "hardware/clocks.h"
+#include "hardware/pll.h"
+#include "hardware/sync.h"
+#include "hardware/timer.h"
+#include "hardware/vreg.h"
+#include "hardware/watchdog.h"
+#include "hardware/structs/sio.h"
+#include "hardware/structs/ssi.h"
+#include "hardware/structs/pll.h"
   
 #include "src/af_config.h"  
 #include "src/af_capture.h"  
@@ -27,7 +28,10 @@
 #include "src/af_voice.h"     // подмес голосовых клипов в выход
   
 volatile bool core0_ready = false;  
-  
+static uint32_t core0_busy_us = 0;  
+static uint32_t core0_win_ms = 0;  
+static uint32_t core0_load_permille = 0;
+
 // ============================================================================  
 // Конфигурация PLL (из vfo_hardware.cpp маяка)  
 // ============================================================================  
@@ -161,26 +165,48 @@ void setup()
     af_capture_start();
     af_pwm_init();
 
+    af_voice_init();  
+    af_voice_play(VOICE_READY);   // приветствие после инициализации  
+  
+    watchdog_enable(3000, true);  // сторожевой 3 с
+
     __dmb();  
     core0_ready = true;  
 }  
   
 void loop()  
 {  
-    af_led_poll();             // heartbeat — визуальный признак жизни  
+    const uint32_t t0 = micros();  
+  
+    af_led_poll();  
     af_cli_poll();  
-    af_gpio_ctl_poll();
-    af_pwm_poll();
-    af_usb_poll();
-
-    // Диагностика раз в 10 с — ядро живо, частота на месте  
-    static uint32_t t_dbg = 0;  
-    if (millis() - t_dbg >= 10000) {  
-        t_dbg = millis();  
-        Serial.printf("# alive clk_sys=%lu Hz\n",  
-                      (unsigned long)clock_get_hz(clk_sys));  
+    af_gpio_ctl_poll();  
+    af_pwm_poll();  
+    af_usb_poll();  
+  
+    watchdog_update();  
+  
+    // Учёт загрузки Core 0  
+    const uint32_t dt = micros() - t0;  
+    core0_busy_us += dt;  
+    if (millis() - core0_win_ms >= 1000) {  
+        core0_load_permille = core0_busy_us / 1000;  
+        core0_busy_us = 0;  
+        core0_win_ms = millis();  
     }  
-}  
+
+    // Раз в 10 сек — сводка загрузки  
+    static uint32_t t_min = 0;  
+    if (millis() - t_min >= 10000) {  
+        t_min = millis();  
+        Serial.printf("# CORE0_LOAD=%u.%u%% CORE1_LOAD=%u.%u%% cap_dropped=%lu out_dropped=%lu clip=%lu\n",  
+                      core0_load_permille / 10, core0_load_permille % 10,  
+                      af_dsp_load_permille() / 10, af_dsp_load_permille() % 10,  
+                      (unsigned long)af_capture_dropped(),  
+                      (unsigned long)af_dsp_out_dropped(),  
+                      (unsigned long)af_dsp_clip_count());  
+    }
+}
   
 void setup1()  
 {  
