@@ -158,8 +158,9 @@ void setup()
     af_cli_init();  
     af_store_init();  
     af_gpio_ctl_init();
-
     af_capture_start();
+
+    af_pwm_init();
 
     __dmb();  
     core0_ready = true;  
@@ -168,10 +169,11 @@ void setup()
 void loop()  
 {  
     af_led_poll();             // heartbeat — визуальный признак жизни  
-
     af_cli_poll();  
     af_gpio_ctl_poll();
-  
+
+    af_pwm_poll();
+
     // Диагностика раз в 10 с — ядро живо, частота на месте  
     static uint32_t t_dbg = 0;  
     if (millis() - t_dbg >= 10000) {  
