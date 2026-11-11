@@ -10,6 +10,10 @@
 //   cw freq <hz>       — центральная частота CW (300..3000)  
 //   cw bw <hz>         — полоса CW (80..500)  
 //   cw noise <0..2000> — примесь шума эфира в CW
+//   gain <0..8>        — ручное усиление при agc off, множитель  
+//   agc on|off         — АРУ (off -> ручное усиление, лимитер остаётся)  
+//   bypass on|off      — обход: выход = вход  
+//   voice [N|vol <0..400>] — голосовые сообщения
 //   stats              — диагностика: загрузка ядер, потери, клипы  
 //   banks clr          — перезаписать все банки заводскими пресетами (ребут)
 //   pwm on|off         — PWM-выход (off = несущая заглушена, пин в 0)
@@ -39,7 +43,7 @@ static void cli_help(void) {
     Serial.println("#   cw on|off         — телеграфный фильтр");  
     Serial.println("#   cw freq <hz>      — центральная частота CW (300..3000)");  
     Serial.println("#   cw bw <hz>        — полоса CW (80..500)");  
-    Serial.println("#   cw noise <0..100> — примесь шума эфира в CW, %");  
+    Serial.println("#   cw noise <0..2000> — примесь шума эфира в CW");
     Serial.println("#   stats             — диагностика");  
     Serial.println("#   help / h / ?      — эта справка");  
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");  
@@ -47,7 +51,7 @@ static void cli_help(void) {
     Serial.println("#   banks             — показать все ячейки");
     Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)");
     Serial.println("#   agc on|off       — АРУ (off -> ручное усиление, лимитер остаётся)");
-    Serial.println("#   gain <0..400>    — ручное усиление тракта при agc off, % ");
+    Serial.println("#   gain <0..8>      — ручное усиление при agc off, множитель (1.0 = единичное)");
     Serial.println("#   bypass on|off    — обход: выход = вход");
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT (LOW=on)");
 }  
@@ -56,7 +60,7 @@ static void cli_help(void) {
 // Диагностика  
 // ---------------------------------------------------------------------------  
 static void cli_stats(void) {  
-    Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu%%  bypass=%s\n",
+    Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%.2f  bypass=%s\n",
                   (unsigned long)af_dsp_band_lo_hz(),  
                   (unsigned long)af_dsp_band_hi_hz(),
                   af_dsp_notch_on() ? "on" : "off",  
@@ -273,12 +277,12 @@ static void cli_exec(char* line) {
         for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {  
             af_bank_t b;  
             if (af_store_read(i, &b)) {  
-                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%lu%% vvol=%lu%%\n",  
-                              i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,    
-                              b.cw_on ? "on" : "off",    
-                              (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,    
-                              (unsigned long)b.cw_noise, b.agc_on ? "on" : "off",  
-                              (unsigned long)b.gain_pct, (unsigned long)b.voice_vol);
+                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%.2f vvol=%lu%%\n",  
+                              i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,      
+                              b.cw_on ? "on" : "off",      
+                              (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,      
+                              (unsigned long)b.cw_noise, b.agc_on ? "on" : "off",    
+                              (double)b.gain_pct / 256.0, (unsigned long)b.voice_vol);
             } else {  
                 Serial.printf("# bank %d: empty\n", i);  
             }  
