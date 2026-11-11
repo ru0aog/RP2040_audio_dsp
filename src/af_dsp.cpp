@@ -71,12 +71,11 @@ static inline bool __not_in_flash_func(cic_push)(int32_t x, int32_t* y) {
         int32_t d = t - cic_comb[k]; cic_comb[k] = t; t = d;  
     }  
 
-    // компенсация усиления фильтров-дециматоров
-    // *y = (int32_t)(((int64_t)t * 1213 + 32768) >> 15);
-
+    // компенсация усиления фильтра-дециматора CIC
     // DC-gain CIC = R^N = 2^3 = 8 → масштаб с округлением (+0.5 LSB)
     *y = (t + 4) >> 3;
 
+    // *y = (int32_t)(((int64_t)t * 1213 + 32768) >> 15);
     // DC-gain CIC = R^N = 4^3 = 64 → масштаб с округлением (+0.5 LSB)  
     // *y = (t + 32) >> 6;
     return true;  
@@ -722,12 +721,13 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             dc_est += ((meas << 8) - dc_est) >> 8;  
             int32_t x = (meas - (dc_est >> 8)) << 4;   // 12 -> 16 бит  
   
-            // Децимация 250k -> 15.625k: CIC/2 -> HB/2 -> HB/2 -> HB/2.  
+            // Децимация 250k -> 15.625k: CIC/2 -> HB/2 -> HB/2 -> HB/2
             int32_t y;  
             if (!cic_push(x, &y))        continue;  
             if (!hb_push(&hb[0], y, &y)) continue;  
             if (!hb_push(&hb[1], y, &y)) continue;  
             if (!hb_push(&hb[2], y, &y)) continue;  
+            y >>= 3;    // компенсация DC-gain трёх HB (2^3 = 8)
   
             // НЧ-тракт на 15.625 ksps.    
             if (bypass_on) {    
