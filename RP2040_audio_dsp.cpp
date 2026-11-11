@@ -140,7 +140,8 @@ static void af_set_clk_250(void) {
 void setup()  
 {  
     af_set_clk_250();          // разгон первым делом, до USB/Serial  
-  
+    af_usb_init();
+
     Serial.begin(115200);
 
     // Ждём подключения COM-порта (USB CDC), максимум 5 с.  
@@ -153,13 +154,11 @@ void setup()
                   (unsigned)ssi_hw->baudr);  
   
     af_led_init();             // heartbeat (WS2812 на GP16 у Zero)  
-
     af_dsp_init();  
     af_cli_init();  
     af_store_init();  
     af_gpio_ctl_init();
     af_capture_start();
-
     af_pwm_init();
 
     __dmb();  
@@ -171,8 +170,8 @@ void loop()
     af_led_poll();             // heartbeat — визуальный признак жизни  
     af_cli_poll();  
     af_gpio_ctl_poll();
-
     af_pwm_poll();
+    af_usb_poll();
 
     // Диагностика раз в 10 с — ядро живо, частота на месте  
     static uint32_t t_dbg = 0;  
