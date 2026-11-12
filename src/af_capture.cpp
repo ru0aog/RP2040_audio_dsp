@@ -272,13 +272,15 @@ void af_capture_start(void) {
     adc_gpio_init(AF_ADC_PIN);  
     adc_select_input(AF_ADC_PIN - 26);      // GP26 -> input 0  
     adc_fifo_setup(true, true, 1, false, false);  
-    // DIV = период выборки в тактах clk_adc. Преобразование занимает  
-    // 96 тактов: DIV < 96 пропускает каждый второй триггер (половинная  
-    // частота!). Для 500 кс/с при 48 МГц нужен ровно 96 — или 0  
-    // (free-run back-to-back = те же 96 тактов).  
-    float adc_div = (float)clk_adc_hz / (float)AF_FS_ADC_HZ;  
-    if (adc_div < 96.0f) adc_div = 0.0f;   // free-run: 48M/96 = 500 кс/с  
-    adc_set_clkdiv(adc_div); 
+    // DIV задаёт период выборки как (DIV+1) тактов clk_adc — off-by-one    
+    // в регистре. Для 500 кс/с при 48 МГц нужен период 96 тактов,    
+    // т.е. DIV=95 (DIV=96 давал 97 тактов = ~494.8 кс/с — дефицит ~1%,    
+    // который регулятор USB не мог покрыть → периодические разрывы).    
+    // Преобразование занимает 96 тактов: период < 96 пропускает каждый    
+    // второй триггер (половинная частота!).    
+    float adc_div = (float)clk_adc_hz / (float)AF_FS_ADC_HZ - 1.0f;    
+    if (adc_div < 95.0f) adc_div = 95.0f;   // минимум 96 тактов периода    
+    adc_set_clkdiv(adc_div);   
   
     // Два DMA-канала с аппаратным chain_to: A -> B -> A -> ...  
     af_dma_a = dma_claim_unused_channel(true);  
@@ -325,8 +327,10 @@ void af_capture_start(void) {
                   af_dma_a, af_dma_b,  
                   (unsigned)AF_BLOCK_SAMPLES,  
                   (unsigned)AF_BLOCK_TRANSFERS);  
-    Serial.printf("[CAP] ADC target=%lu/s clkdiv=%ld\n",  
-                  (unsigned long)AF_FS_ADC_HZ, (long)(adc_div + 0.5f));  
+    Serial.printf("[CAP] ADC target=%lu/s div=%ld period=%ld eff=%lu/s\n",    
+                  (unsigned long)AF_FS_ADC_HZ, (long)(adc_div + 0.5f),    
+                  (long)(adc_div + 1.5f),    
+                  (unsigned long)(clk_adc_hz / (uint32_t)(adc_div + 1.0f)));    
 }  
   
 // ---------------------------------------------------------------------------  
