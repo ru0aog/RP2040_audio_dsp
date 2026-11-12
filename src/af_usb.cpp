@@ -250,9 +250,12 @@ void af_usb_poll(void) {
     // выходной очереди около середины (AF_OUT_NUM_BUFFERS=4 -> TARGET=2).  
     // Компенсирует расхождение кварца RP2040 и часов USB-хоста — без этого  
     // через минуты набегает underrun/overrun очереди.  
-    const float   TARGET = (float)AF_OUT_NUM_BUFFERS / 2.0f;   // 2.0  
-    const float   K      = 6.0f;  
-    const float   LIMIT  = 60.0f;  
+    const float   TARGET = (float)AF_OUT_NUM_BUFFERS / 2.0f;   // 8.0    
+    const float   K      = 6.0f;    
+    // ±500 Гц: реальный дефицит производства ~325 Гц (blk=2416/10с вместо    
+    // 2441 — ADC выдаёт ~494.6 кс/с вместо 500к). При LIMIT=60 регулятор    
+    // упирался в -60 Гц, сток оставался быстрее источника → reprime-цикл.    
+    const float   LIMIT  = 500.0f;    
     const uint8_t fill   = af_dsp_out_fill_usb();
   
     float adj = K * ((float)fill - TARGET);  
@@ -269,13 +272,13 @@ void af_usb_poll(void) {
         if (fill < (uint8_t)(AF_OUT_NUM_BUFFERS / 2)) return;    
         usb_primed = true;    
     }    
-    if (fill == 0) {      
-        // Доели до дна — сток быстрее источника. Перезаправка:      
-        // лучше одна пауза с накоплением, чем дырка каждые 4 мс.      
-        usb_primed = false;      
-        ++usb_reprimes;      
-        return;      
-    }      
+    if (fill == 0) {    
+        // Доели до дна — сток быстрее источника. НЕ уходим на перезаправку:    
+        // 33 мс молчания слышны сильнее, чем повторы последнего фрейма.    
+        // Продолжаем кормить — next_frame вернёт false, кадр допишется    
+        // паддингом, а очередь тем временем накопится.    
+        ++usb_reprimes;    
+    }    
       
     for (;;) {  
         // Без нижней отметки: заполняем буфер AudioTools до отказа —  
@@ -289,29 +292,38 @@ void af_usb_poll(void) {
         int frames = 0;    
         int16_t s = 0;    
     
-        while (frames < avail_frames && next_frame(&s)) {    
+        while (frames < avail_frames) {    
+            if (!next_frame(&s)) {    
+                // Источник пуст: underrun. НЕ обрываем кадр — дописываем    
+                // последний фрейм (s сохраняет прошлое значение). Дефицит    
+                // ~1% = ~10 мс повторов в секунду, размазанных по потоку —    
+                // неслышно, в отличие от дыр до следующей заправки.    
+                ++usb_underruns;    
+                usb_frames_short += (uint32_t)(avail_frames - frames);    
+                usb_ur_t[usb_ur_idx] = time_us_32();    
+                usb_ur_n[usb_ur_idx] = (uint16_t)(avail_frames - frames);    
+                usb_ur_idx = (uint8_t)((usb_ur_idx + 1) & 7);    
+                while (frames < avail_frames) {    
+                    pcm_buffer[frames * 2]     = s;    
+                    pcm_buffer[frames * 2 + 1] = s;    
+                    ++frames;    
+                }    
+                break;    
+            }    
             pcm_buffer[frames * 2]     = s;                   // L    
             pcm_buffer[frames * 2 + 1] = s;                   // R = дубль моно    
             ++frames;    
         }    
     
-        if (frames > 0) {      
+        if (frames > 0) {    
             // write() может принять меньше, чем просили — это потерянные    
             // фреймы и сдвиг фазы у хоста. Считаем.    
             const size_t want = (size_t)frames * 4;    
             const size_t sent = usb_out.write((uint8_t*)pcm_buffer, want);    
             if (sent < want) usb_write_short += (uint32_t)(want - sent);    
-        }      
-        if (frames < avail_frames) {    
-            // Источник пуст: underrun. Фиксируем событие с меткой времени —    
-            // по кольцу usb_ur_t видна периодичность разрывов.    
-            ++usb_underruns;    
-            usb_frames_short += (uint32_t)(avail_frames - frames);    
-            usb_ur_t[usb_ur_idx] = time_us_32();    
-            usb_ur_n[usb_ur_idx] = (uint16_t)(avail_frames - frames);    
-            usb_ur_idx = (uint8_t)((usb_ur_idx + 1) & 7);    
-            break;    
         }    
+        // Кадр всегда заполняется целиком (реальные данные или паддинг) —    
+        // условие выхода только по avail_frames/FIFO.    
     }    
 }  
   
