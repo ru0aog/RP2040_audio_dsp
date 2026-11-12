@@ -471,14 +471,17 @@ static inline int16_t __not_in_flash_func(sat16)(int32_t x) {
 // читают af_pwm_poll и af_usb_poll (Core 0) — у каждого СВОЯ очередь  
 // (fan-out: каждый блок публикуется в обе).  
 // ---------------------------------------------------------------------------  
-typedef struct {  
-    volatile int16_t  buf[AF_OUT_NUM_BUFFERS][AF_OUT_BLOCK_SAMPLES];  
-    volatile uint8_t  busy[AF_OUT_NUM_BUFFERS];   // 1 = буфер заполнен/читается  
-    volatile uint8_t  head;                       // индекс публикации  
-    volatile uint8_t  tail;                       // индекс чтения  
-    volatile uint8_t  fill_buf;                   // буфер, который сейчас заполняется  
-    volatile uint32_t dropped;  
-} out_queue_t;  
+typedef struct {    
+    volatile int16_t  buf[AF_OUT_NUM_BUFFERS][AF_OUT_BLOCK_SAMPLES];    
+    volatile uint8_t  busy[AF_OUT_NUM_BUFFERS];   // 1 = буфер заполнен/читается    
+    volatile uint8_t  head;                       // индекс публикации    
+    volatile uint8_t  tail;                       // индекс чтения    
+    volatile uint8_t  fill_buf;                   // буфер, который сейчас заполняется    
+    volatile uint32_t dropped;    
+    volatile uint32_t underruns;                  // читатель спросил при пустой очереди    
+    volatile uint32_t published;                  // блоков опубликовано    
+    volatile uint8_t  fill_max;                   // high-water занятых буферов    
+} out_queue_t;    
   
 static out_queue_t out_pwm;  
 static out_queue_t out_usb;  
@@ -512,18 +515,24 @@ static inline void __not_in_flash_func(out_emit)(int16_t s) {
             ++oq->dropped;                 // очередь полна — блок теряется    
             continue;                      // fill_buf остаётся, перезапишем его    
         }    
-        oq->busy[oq->fill_buf] = 1;    
-        __dmb();    
-        oq->head = (oq->head + 1) % AF_OUT_NUM_BUFFERS;    
-        oq->fill_buf = nb;    
-    }
+        oq->busy[oq->fill_buf] = 1;      
+        __dmb();      
+        oq->head = (oq->head + 1) % AF_OUT_NUM_BUFFERS;      
+        oq->fill_buf = nb;      
+        ++oq->published;      
+        // High-water: сколько буферов занято после публикации.      
+        uint8_t n = 0;      
+        for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++)      
+            if (oq->busy[b]) ++n;      
+        if (n > oq->fill_max) oq->fill_max = n;      
+    }  
 }  
   
 // Читательская сторона (Core 0).  
-static const volatile int16_t* out_get(out_queue_t* q) {  
-    if (q->tail == q->head) return NULL;  
-    return q->buf[q->tail];  
-}  
+static const volatile int16_t* out_get(out_queue_t* q) {    
+    if (q->tail == q->head) { ++q->underruns; return NULL; }    
+    return q->buf[q->tail];    
+}    
   
 static void out_release(out_queue_t* q) {  
     q->busy[q->tail] = 0;  
@@ -772,9 +781,19 @@ void __not_in_flash_func(af_dsp_poll)(void) {
 // ---------------------------------------------------------------------------  
 // Диагностика  
 // ---------------------------------------------------------------------------  
-uint32_t af_dsp_load_permille(void) { return dsp_load_permille; }  
-uint32_t af_dsp_out_dropped(void)   { return out_pwm.dropped + out_usb.dropped; }  
-uint32_t af_dsp_clip_count(void)    { return clip_count; }  
+uint32_t af_dsp_load_permille(void) { return dsp_load_permille; }    
+uint32_t af_dsp_out_dropped(void)   { return out_pwm.dropped + out_usb.dropped; }    
+uint32_t af_dsp_clip_count(void)    { return clip_count; }    
+    
+// Раздельная диагностика очередей: кто теряет и кто голодает.    
+uint32_t af_dsp_out_dropped_usb(void)    { return out_usb.dropped; }    
+uint32_t af_dsp_out_dropped_pwm(void)    { return out_pwm.dropped; }    
+uint32_t af_dsp_out_underruns_usb(void)  { return out_usb.underruns; }    
+uint32_t af_dsp_out_underruns_pwm(void)  { return out_pwm.underruns; }    
+uint32_t af_dsp_out_published_usb(void)  { return out_usb.published; }    
+uint32_t af_dsp_out_published_pwm(void)  { return out_pwm.published; }    
+uint8_t  af_dsp_out_fill_max_usb(void)   { return out_usb.fill_max; }    
+uint8_t  af_dsp_out_fill_max_pwm(void)   { return out_pwm.fill_max; }    
   
 // Пиковое время обработки одного ADC-блока, мкс. Чтение сбрасывает пик.  
 uint32_t af_dsp_max_block_us(void) {  

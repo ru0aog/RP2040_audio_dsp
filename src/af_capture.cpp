@@ -58,13 +58,17 @@ static volatile uint8_t af_q_tail = 0;   // consumer: Core 1 / DSP
   
 static volatile uint32_t af_dropped = 0;  
   
-// Диагностика — extern по af_capture.h.  
-volatile uint32_t af_cap_isr_count    = 0;  
-volatile uint32_t af_drop_scratch     = 0;  
-volatile uint32_t af_drop_queue_full  = 0;  
-volatile uint32_t af_drop_busy        = 0;  
-volatile uint32_t af_adc_fcs_over     = 0;  
-volatile uint32_t af_irq_both_pending = 0;  
+// Диагностика — extern по af_capture.h.    
+volatile uint32_t af_cap_isr_count    = 0;    
+volatile uint32_t af_drop_scratch     = 0;    
+volatile uint32_t af_drop_queue_full  = 0;    
+volatile uint32_t af_drop_busy        = 0;    
+volatile uint32_t af_adc_fcs_over     = 0;    
+volatile uint32_t af_irq_both_pending = 0;    
+volatile uint32_t af_q_fill_max       = 0;   // high-water занятых слотов очереди    
+volatile uint32_t af_cap_get_empty    = 0;   // get_block вернул NULL (Core 1 голодал)    
+volatile uint32_t af_cap_published    = 0;   // блоков опубликовано в очередь    
+volatile uint32_t af_cap_released     = 0;   // блоков освобождено DSP    
   
 // ---------------------------------------------------------------------------  
 // Владение рабочими буферами (busy = опубликован DSP, не назначать DMA)  
@@ -197,14 +201,20 @@ static void __not_in_flash_func(af_handle_completed)(int channel, bool channel_a
         return;  
     }  
   
-    // Публикация: busy -> указатель -> head.  
-    busy[idx] = true;  
-    __dmb();  
-    af_queue[head] = completed;  
-    __dmb();  
-    af_q_head = next;  
-  
-    af_rearm_channel(channel, channel_a);  
+    // Публикация: busy -> указатель -> head.    
+    busy[idx] = true;    
+    __dmb();    
+    af_queue[head] = completed;    
+    __dmb();    
+    af_q_head = next;    
+    ++af_cap_published;    
+    
+    // High-water заполнения очереди: если упёрлось в ёмкость —    
+    // Core 1 систематически не успевает, дропы вопрос времени.    
+    const uint8_t fill = (uint8_t)((next - af_q_tail + AF_QUEUE_DEPTH) % AF_QUEUE_DEPTH);    
+    if (fill > af_q_fill_max) af_q_fill_max = fill;    
+    
+    af_rearm_channel(channel, channel_a);    
 }  
   
 // ---------------------------------------------------------------------------  
@@ -239,8 +249,12 @@ void af_capture_start(void) {
     af_drop_scratch = 0;  
     af_drop_queue_full = 0;  
     af_drop_busy = 0;  
-    af_adc_fcs_over = 0;  
-    af_irq_both_pending = 0;  
+    af_adc_fcs_over = 0;    
+    af_irq_both_pending = 0;    
+    af_q_fill_max = 0;    
+    af_cap_get_empty = 0;    
+    af_cap_published = 0;    
+    af_cap_released = 0;    
     af_busy_a[0] = af_busy_a[1] = false;  
     af_busy_b[0] = af_busy_b[1] = false;  
     af_a_sel = 0;  
@@ -351,18 +365,19 @@ void af_capture_stop(void) {
 // ---------------------------------------------------------------------------  
 // API очереди — ТОЛЬКО Core 1 (из af_dsp_poll)  
 // ---------------------------------------------------------------------------  
-const volatile uint16_t* af_capture_get_block(void) {  
-    const uint8_t tail = af_q_tail;  
-    if (tail == af_q_head) return NULL;  
-    __dmb();  
-    return af_queue[tail];  
-}  
+const volatile uint16_t* af_capture_get_block(void) {    
+    const uint8_t tail = af_q_tail;    
+    if (tail == af_q_head) { ++af_cap_get_empty; return NULL; }    
+    __dmb();    
+    return af_queue[tail];    
+}    
   
-void af_capture_release(void) {  
-    const uint8_t tail = af_q_tail;  
-    if (tail == af_q_head) return;  
-  
-    const volatile uint16_t* buf = af_queue[tail];  
+void af_capture_release(void) {    
+    const uint8_t tail = af_q_tail;    
+    if (tail == af_q_head) return;    
+    ++af_cap_released;    
+    
+    const volatile uint16_t* buf = af_queue[tail];    
     __dmb();  
     af_q_tail = (uint8_t)((tail + 1u) % AF_QUEUE_DEPTH);  
     __dmb();  

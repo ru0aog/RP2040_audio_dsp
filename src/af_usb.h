@@ -19,3 +19,9 @@ void af_usb_poll(void);
 // Диагностика.  
 uint32_t af_usb_dropped(void);      // отсчёты, не влезшие в USB-FIFO  
 bool     af_usb_mounted(void);      // хост открыл аудио-интерфейс
+
+uint32_t af_usb_underruns(void);    
+uint32_t af_usb_frames_short(void);    
+uint32_t af_usb_blocks_rx(void);    
+int32_t  af_usb_rs_adj_mhz(void);    
+void     af_usb_ur_log(uint32_t* t, uint16_t* n);   // t/n — массивы по 8 элементов    

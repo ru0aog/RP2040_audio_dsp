@@ -1,6 +1,4 @@
-// RP2040_audio_dsp.cpp — МИНИМАЛЬНЫЙ СТЕНД: разгон 250 МГц + heartbeat  
-// Тест стабильности clk_sys=250 МГц: голые ядра, Serial, LED.  
-// Тракт (capture/dsp/pwm/usb/voice) отключён. Термогуард исключён.  
+// RP2040_audio_dsp.cpp
   
 #include <Arduino.h>
 #include <stdio.h>
@@ -197,17 +195,64 @@ void loop()
         core0_win_ms = millis();  
     }  
 
-    // Раз в 10 сек — сводка загрузки  
+    // Раз в 10 сек — сводка загрузки и диагностика разрывов.  
+    // Дельты за период (d*) важнее кумулятивных: видно темп потерь.  
     static uint32_t t_min = 0;  
+    static uint32_t p_pub = 0, p_dU = 0, p_dP = 0, p_urU = 0, p_urP = 0;  
+    static uint32_t p_usb_ur = 0, p_pwm_ur = 0, p_cap = 0;  
     if (millis() - t_min >= 10000) {  
         t_min = millis();  
-        Serial.printf("# CORE0_LOAD=%u.%u%% CORE1_LOAD=%u.%u%% cap_dropped=%lu out_dropped=%lu clip=%lu\n",  
-                      core0_load_permille / 10, core0_load_permille % 10,  
-                      af_dsp_load_permille() / 10, af_dsp_load_permille() % 10,  
-                      (unsigned long)af_capture_dropped(),  
-                      (unsigned long)af_dsp_out_dropped(),  
-                      (unsigned long)af_dsp_clip_count());  
-    }
+  
+        const uint32_t pub   = af_dsp_out_published_usb();  
+        const uint32_t dU    = af_dsp_out_dropped_usb();  
+        const uint32_t dP    = af_dsp_out_dropped_pwm();  
+        const uint32_t urU   = af_dsp_out_underruns_usb();  
+        const uint32_t urP   = af_dsp_out_underruns_pwm();  
+        const uint32_t uur   = af_usb_underruns();  
+        const uint32_t pur   = af_pwm_underruns();  
+        const uint32_t cap   = af_capture_dropped();  
+  
+        Serial.printf(  
+            "# L0=%u.%u%% L1=%u.%u%% blk=%lu max=%luus |"  
+            " cap: d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"  
+            " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"  
+            " usb: ur=%lu short=%lu rs=%ldmHz |"  
+            " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",  
+            core0_load_permille / 10, core0_load_permille % 10,  
+            af_dsp_load_permille() / 10, af_dsp_load_permille() % 10,  
+            (unsigned long)(pub - p_pub),  
+            (unsigned long)af_dsp_max_block_us(),  
+            (unsigned long)(cap - p_cap),  
+            (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,  
+            (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,  
+            (unsigned long)af_irq_both_pending, (unsigned long)af_q_fill_max,  
+            (unsigned long)(dU - p_dU), (unsigned long)(dP - p_dP),  
+            (unsigned long)(urU - p_urU), (unsigned long)(urP - p_urP),  
+            (unsigned)af_dsp_out_fill_max_usb(), (unsigned)af_dsp_out_fill_max_pwm(),  
+            (unsigned long)(uur - p_usb_ur), (unsigned long)af_usb_frames_short(),  
+            (long)af_usb_rs_adj_mhz(),  
+            (unsigned long)(pur - p_pwm_ur), (unsigned long)af_pwm_restarts(),  
+            (unsigned)af_pwm_duty_fill_max(),  
+            (unsigned long)af_dsp_clip_count());  
+  
+        // Метки последних underrun — интервалы показывают периодичность разрывов.  
+        uint32_t ut[8]; uint16_t un[8];  
+        af_usb_ur_log(ut, un);  
+        Serial.printf("# usb_ur_t:");  
+        for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)ut[i]);  
+        Serial.printf(" | n:");  
+        for (int i = 0; i < 8; i++) Serial.printf(" %u", (unsigned)un[i]);  
+        Serial.println();  
+  
+        uint32_t pt[8];  
+        af_pwm_ur_log(pt);  
+        Serial.printf("# pwm_ur_t:");  
+        for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)pt[i]);  
+        Serial.println();  
+  
+        p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;  
+        p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap;  
+    }  
 }
   
 void setup1()  

@@ -36,3 +36,8 @@ extern volatile uint32_t af_drop_queue_full;  // очередь переполн
 extern volatile uint32_t af_drop_busy;        // все рабочие буферы заняты  
 extern volatile uint32_t af_adc_fcs_over;     // переполнения ADC FIFO (sticky)  
 extern volatile uint32_t af_irq_both_pending; // оба канала в IRQ одновременно
+
+extern volatile uint32_t af_q_fill_max;      // high-water заполнения очереди (0..3)    
+extern volatile uint32_t af_cap_get_empty;   // опросы пустой очереди Core 1    
+extern volatile uint32_t af_cap_published;   // блоков опубликовано IRQ    
+extern volatile uint32_t af_cap_released;    // блоков освобождено DSP    

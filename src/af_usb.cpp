@@ -35,7 +35,10 @@ static bool get_input(int32_t* out) {
             cur_blk = nullptr;  
             pos = 0;  
         }  
-        cur_blk = af_dsp_out_get_usb();  
+        cur_blk = af_dsp_out_get_usb();    
+        if (cur_blk == nullptr) return false;    
+        ++usb_blocks_rx;    
+        pos = 0;    
         if (cur_blk == nullptr) return false;  
         pos = 0;  
     }  
@@ -158,7 +161,17 @@ USBAudioDeviceTinyUSB usb_out;
   
 static int16_t pcm_buffer[192 * 2];             // стерео-фреймы L/R  
   
-static volatile uint32_t usb_dropped = 0;  
+static volatile uint32_t usb_dropped      = 0;   // (резерв) блоки, потерянные в out_usb  
+static volatile uint32_t usb_underruns    = 0;   // разы, когда источник пуст при avail>0  
+static volatile uint32_t usb_frames_short = 0;   // суммарная недостача фреймов  
+static volatile uint32_t usb_blocks_rx    = 0;   // блоков получено из out_usb  
+static volatile int32_t  usb_rs_adj_mhz   = 0;   // текущая подстройка rs_step, мГц  
+  
+// Кольцо последних 8 underrun-событий: метка micros + недостача фреймов.  
+// По интервалам между метками видна периодичность разрывов.  
+static volatile uint32_t usb_ur_t[8];  
+static volatile uint16_t usb_ur_n[8];  
+static volatile uint8_t  usb_ur_idx = 0;  
   
 void af_usb_init(void) {  
     memset(pcm_buffer, 0, sizeof(pcm_buffer));  
@@ -168,8 +181,15 @@ void af_usb_init(void) {
     rs_started = false;  
     rs_init_count = 0;  
     rs_advance_pending = false;  
-    biquad_reset(bq_af);  
-    usb_dropped = 0;  
+    biquad_reset(bq_af);    
+    usb_dropped      = 0;    
+    usb_underruns    = 0;    
+    usb_frames_short = 0;    
+    usb_blocks_rx    = 0;    
+    usb_rs_adj_mhz   = 0;    
+    usb_ur_idx       = 0;    
+    memset((void*)usb_ur_t, 0, sizeof(usb_ur_t));    
+    memset((void*)usb_ur_n, 0, sizeof(usb_ur_n));    
   
     // Конфигурация USB Audio Class 2.0.  
     auto cfg = usb_out.defaultConfig(TX_MODE);  
@@ -197,32 +217,51 @@ void af_usb_poll(void) {
     float adj = K * ((float)fill - TARGET);  
     if (adj >  LIMIT) adj =  LIMIT;  
     if (adj < -LIMIT) adj = -LIMIT;  
-    rs_step   = (float)AF_FS_OUT_HZ + adj;  
-    rs_step_q = (uint32_t)((double)rs_step * (4294967296.0 / (double)AF_USB_FS_HZ));  
-  
-    for (;;) {  
-        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм  
-        if (avail_frames <= 0) break;  
-        if (avail_frames > 192) avail_frames = 192;  
-  
-        int frames = 0;  
-        int16_t s = 0;  
-  
-        while (frames < avail_frames && next_frame(&s)) {  
-            pcm_buffer[frames * 2]     = s;                   // L  
-            pcm_buffer[frames * 2 + 1] = s;                   // R = дубль моно  
-            ++frames;  
-        }  
-  
-        if (frames > 0) {  
-            usb_out.write((uint8_t*)pcm_buffer, frames * 4);  
-        }  
-        if (frames < avail_frames) break;   // источник пуст — ждём  
-    }  
+    rs_step   = (float)AF_FS_OUT_HZ + adj;    
+    rs_step_q = (uint32_t)((double)rs_step * (4294967296.0 / (double)AF_USB_FS_HZ));    
+    usb_rs_adj_mhz = (int32_t)(adj * 1000.0f);   // телеметрия: упор в ±LIMIT = регулятор не тянет    
+    
+    for (;;) {    
+        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм    
+        if (avail_frames <= 0) break;    
+        if (avail_frames > 192) avail_frames = 192;    
+    
+        int frames = 0;    
+        int16_t s = 0;    
+    
+        while (frames < avail_frames && next_frame(&s)) {    
+            pcm_buffer[frames * 2]     = s;                   // L    
+            pcm_buffer[frames * 2 + 1] = s;                   // R = дубль моно    
+            ++frames;    
+        }    
+    
+        if (frames > 0) {    
+            usb_out.write((uint8_t*)pcm_buffer, frames * 4);    
+        }    
+        if (frames < avail_frames) {    
+            // Источник пуст: underrun. Фиксируем событие с меткой времени —    
+            // по кольцу usb_ur_t видна периодичность разрывов.    
+            ++usb_underruns;    
+            usb_frames_short += (uint32_t)(avail_frames - frames);    
+            usb_ur_t[usb_ur_idx] = time_us_32();    
+            usb_ur_n[usb_ur_idx] = (uint16_t)(avail_frames - frames);    
+            usb_ur_idx = (uint8_t)((usb_ur_idx + 1) & 7);    
+            break;    
+        }    
+    }    
 }  
   
 // ---------------------------------------------------------------------------  
 // Диагностика  
 // ---------------------------------------------------------------------------  
-uint32_t af_usb_dropped(void) { return usb_dropped; }  
-bool     af_usb_mounted(void) { return TinyUSBDevice.mounted(); }
+uint32_t af_usb_dropped(void)      { return usb_dropped; }    
+uint32_t af_usb_underruns(void)    { return usb_underruns; }    
+uint32_t af_usb_frames_short(void) { return usb_frames_short; }    
+uint32_t af_usb_blocks_rx(void)    { return usb_blocks_rx; }    
+int32_t  af_usb_rs_adj_mhz(void)   { return usb_rs_adj_mhz; }    
+bool     af_usb_mounted(void)      { return TinyUSBDevice.mounted(); }    
+    
+// Копия кольца последних 8 underrun-событий (t — micros, n — недостача фреймов).    
+void af_usb_ur_log(uint32_t* t, uint16_t* n) {    
+    for (int i = 0; i < 8; i++) { t[i] = usb_ur_t[i]; n[i] = usb_ur_n[i]; }    
+}  

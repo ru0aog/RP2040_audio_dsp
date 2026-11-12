@@ -24,3 +24,9 @@ bool af_pwm_is_enabled(void);
 // Диагностика.  
 uint32_t af_pwm_underruns(void);   // DMA дошёл до конца, а новый блок не готов  
 bool     af_pwm_is_running(void);
+
+uint32_t af_pwm_blocks_filled(void);    
+uint32_t af_pwm_blocks_played(void);    
+uint32_t af_pwm_restarts(void);    
+uint8_t  af_pwm_duty_fill_max(void);    
+void     af_pwm_ur_log(uint32_t* t);   // t — массив из 8 элементов    

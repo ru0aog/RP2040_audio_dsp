@@ -36,9 +36,19 @@ static uint     pwm_slice     = 0;
 static uint     pwm_chan      = 0;  
 static uint     pwm_dma_timer = 0;
 
-static volatile bool     pwm_running   = false;  
-static volatile uint32_t pwm_underruns = 0;  
-static volatile bool     pwm_enabled   = true;   // pwm off -> несущая заглушена
+static volatile bool     pwm_running   = false;    
+static volatile uint32_t pwm_underruns = 0;    
+static volatile bool     pwm_enabled   = true;   // pwm off -> несущая заглушена  
+  
+// Диагностика разрывов.  
+static volatile uint32_t pwm_blocks_filled = 0;   // duty-буферов заполнено poll'ом  
+static volatile uint32_t pwm_blocks_played = 0;   // блоков доиграно DMA (переключений)  
+static volatile uint32_t pwm_restarts      = 0;   // отложенных стартов DMA  
+static volatile uint8_t  duty_fill_max     = 0;   // high-water готовых буферов  
+  
+// Кольцо последних 8 underrun-событий: метка micros — видна периодичность.  
+static volatile uint32_t pwm_ur_t[8];  
+static volatile uint8_t  pwm_ur_idx = 0;  
   
 // Кольцо duty-буферов: DMA играет duty_sel, poll заполняет свободные.    
 static uint16_t duty_buf[AF_OUT_NUM_BUFFERS][AF_OUT_BLOCK_SAMPLES];    
@@ -75,12 +85,15 @@ static void __not_in_flash_func(af_pwm_dma_irq)(void) {
         if (cand >= AF_OUT_NUM_BUFFERS) cand -= AF_OUT_NUM_BUFFERS;  
         if (duty_ready[cand]) { next = cand; break; }  
     }  
-    if (next == duty_sel) {  
-        ++pwm_underruns;                        // нет готовых — повтор текущего  
-    } else {  
-        duty_ready[duty_sel] = false;           // доигранный буфер — свободен  
-        duty_sel = next;  
-    } 
+    if (next == duty_sel) {    
+        ++pwm_underruns;                        // нет готовых — повтор текущего    
+        pwm_ur_t[pwm_ur_idx] = time_us_32();    // метка события — периодичность    
+        pwm_ur_idx = (uint8_t)((pwm_ur_idx + 1) & 7);    
+    } else {    
+        duty_ready[duty_sel] = false;           // доигранный буфер — свободен    
+        duty_sel = next;    
+        ++pwm_blocks_played;    
+    }   
   
     // Перезапуск канала на выбранный буфер (или повтор старого при underrun).    
     dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);    
@@ -166,24 +179,32 @@ void __not_in_flash_func(af_pwm_poll)(void) {
         for (uint32_t i = 0; i < AF_OUT_BLOCK_SAMPLES; i++)  
             duty_buf[duty_fill][i] = to_duty(blk[i], &dither_err);  
   
-        __dmb();  
-        duty_ready[duty_fill] = true;  
-        af_dsp_out_release_pwm();  
-  
-        if (++duty_fill >= AF_OUT_NUM_BUFFERS) duty_fill = 0;  
-    }
-  
-    // Старт DMA только когда заполнены минимум 2 duty-буфера —  
-    // убирает фазовую гонку «IRQ раньше заполнения».  
-    if (!pwm_running) {    
+        __dmb();    
+        duty_ready[duty_fill] = true;    
+        af_dsp_out_release_pwm();    
+        ++pwm_blocks_filled;    
+    
+        // High-water готовых буферов: упёрлось в N — poll успевает,    
+        // держится у нуля — DMA жрёт быстрее, чем приходит из af_dsp.    
         uint8_t n = 0;    
         for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) if (duty_ready[b]) ++n;    
-        if (n >= AF_OUT_NUM_BUFFERS - 2) {      // ~48 мс подушки перед стартом  
-            dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);  
-            dma_channel_set_trans_count(pwm_dma_ch, AF_OUT_BLOCK_SAMPLES, true);  
+        if (n > duty_fill_max) duty_fill_max = n;    
+    
+        if (++duty_fill >= AF_OUT_NUM_BUFFERS) duty_fill = 0;    
+    }  
+    
+    // Старт DMA только когда заполнены минимум 2 duty-буфера —    
+    // убирает фазовую гонку «IRQ раньше заполнения».    
+    if (!pwm_running) {      
+        uint8_t n = 0;      
+        for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) if (duty_ready[b]) ++n;      
+        if (n >= AF_OUT_NUM_BUFFERS - 2) {      // ~48 мс подушки перед стартом    
+            dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);    
+            dma_channel_set_trans_count(pwm_dma_ch, AF_OUT_BLOCK_SAMPLES, true);    
             pwm_running = true;    
-        }    
-    }
+            ++pwm_restarts;                     // каждый рестарт = был полный стоп DMA    
+        }      
+    }  
 }
 
 // ---------------------------------------------------------------------------  
@@ -195,11 +216,14 @@ void af_pwm_set_enabled(bool on) {
   
     if (!on) {  
         // Глушим несущую: стоп DMA, слайс off, пин в SIO low.  
-        dma_channel_abort(pwm_dma_ch);  
-        pwm_running = false;  
-        for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) duty_ready[b] = false;  
-        duty_fill = 0;  
-        duty_sel = 0;
+        dma_channel_abort(pwm_dma_ch);    
+        pwm_running = false;    
+        for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) duty_ready[b] = false;    
+        duty_fill = 0;    
+        duty_sel = 0;    
+        duty_fill_max = 0;    
+        pwm_ur_idx = 0;    
+        memset((void*)pwm_ur_t, 0, sizeof(pwm_ur_t));  
         pwm_set_chan_level(pwm_slice, pwm_chan, 0);  
         pwm_set_enabled(pwm_slice, false);  
         gpio_set_function(AF_PWM_PIN, GPIO_FUNC_SIO);  
@@ -219,5 +243,14 @@ bool af_pwm_is_enabled(void) { return pwm_enabled; }
 // ---------------------------------------------------------------------------  
 // Диагностика  
 // ---------------------------------------------------------------------------  
-uint32_t af_pwm_underruns(void)  { return pwm_underruns; }  
-bool     af_pwm_is_running(void) { return pwm_running; }
+uint32_t af_pwm_underruns(void)      { return pwm_underruns; }    
+uint32_t af_pwm_blocks_filled(void)  { return pwm_blocks_filled; }    
+uint32_t af_pwm_blocks_played(void)  { return pwm_blocks_played; }    
+uint32_t af_pwm_restarts(void)       { return pwm_restarts; }    
+uint8_t  af_pwm_duty_fill_max(void)  { return duty_fill_max; }    
+bool     af_pwm_is_running(void)     { return pwm_running; }    
+    
+// Копия кольца последних 8 underrun-событий (t — micros).    
+void af_pwm_ur_log(uint32_t* t) {    
+    for (int i = 0; i < 8; i++) t[i] = pwm_ur_t[i];    
+}  
