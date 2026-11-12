@@ -35,11 +35,17 @@ static volatile uint32_t usb_ur_t[8];
 static volatile uint16_t usb_ur_n[8];    
 static volatile uint8_t  usb_ur_idx = 0;    
     
-// Гистерезис заправки: не отдаём данные хосту, пока out_usb не накопит    
-// половину кольца. Иначе очередь живёт на дне (fill=0..1), регулятор    
-// прижат к -LIMIT, а TinyUSB пустеет между 4-мс блоками → разрывы.    
-static bool     usb_primed    = false;    
-static volatile uint32_t usb_reprimes = 0;   // разы ушли на перезаправку    
+// Гистерезис заправки: не отдаём данные хосту, пока out_usb не накопит      
+// половину кольца. Иначе очередь живёт на дне (fill=0..1), регулятор      
+// прижат к -LIMIT, а TinyUSB пустеет между 4-мс блоками → разрывы.      
+static bool     usb_primed    = false;      
+static volatile uint32_t usb_reprimes = 0;   // разы ушли на перезаправку      
+  
+// Нижняя отметка: в out_usb всегда остаётся минимум LOW блоков подушки.    
+// Без неё внутренний цикл сливает всю очередь в буфер TinyUSB за один    
+// poll — подушка уходит туда, где регулятор её не видит, fill падает    
+// в 0 и каждые ~36 мс случается reprime (слышимая пауза).    
+#define USB_LOW_MARK  4u    // блоков; TARGET=8, гистерезис 8 -> 4    
   
 // ---------------------------------------------------------------------------  
 // Источник: выходная очередь af_dsp (int16-блоки 31.25 ksps)  
@@ -237,18 +243,22 @@ void af_usb_poll(void) {
         if (fill < (uint8_t)(AF_OUT_NUM_BUFFERS / 2)) return;    
         usb_primed = true;    
     }    
-    if (fill == 0) {    
-        // Доели до дна — сток быстрее источника. Перезаправка:    
-        // лучше одна пауза с накоплением, чем дырка каждые 4 мс.    
-        usb_primed = false;    
-        ++usb_reprimes;    
-        return;    
-    }    
+    if (fill == 0) {      
+        // Доели до дна — сток быстрее источника. Перезаправка:      
+        // лучше одна пауза с накоплением, чем дырка каждые 4 мс.      
+        usb_primed = false;      
+        ++usb_reprimes;      
+        return;      
+    }      
+      
+    for (;;) {        
+        // Стоп по нижней отметке: подушка остаётся в out_usb,    
+        // регулятор видит реальный fill, TinyUSB живёт на своём буфере.    
+        if (af_dsp_out_fill_usb() <= USB_LOW_MARK) break;    
     
-    for (;;) {      
-        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм    
-        if (avail_frames <= 0) break;    
-        if (avail_frames > 192) avail_frames = 192;    
+        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм      
+        if (avail_frames <= 0) break;      
+        if (avail_frames > 192) avail_frames = 192;      
     
         int frames = 0;    
         int16_t s = 0;    
