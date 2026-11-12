@@ -199,23 +199,24 @@ void loop()
     // Раз в 10 сек — сводка загрузки и диагностика разрывов.  
     // Дельты за период (d*) важнее кумулятивных: видно темп потерь.  
     static uint32_t t_min = 0;  
-    static uint32_t p_pub = 0, p_dU = 0, p_dP = 0, p_urU = 0, p_urP = 0;  
-    static uint32_t p_usb_ur = 0, p_pwm_ur = 0, p_cap = 0;  
-    if (millis() - t_min >= 10000) {  
-        t_min = millis();  
-  
-        const uint32_t pub   = af_dsp_out_published_usb();  
-        const uint32_t dU    = af_dsp_out_dropped_usb();  
-        const uint32_t dP    = af_dsp_out_dropped_pwm();  
-        const uint32_t urU   = af_dsp_out_underruns_usb();  
-        const uint32_t urP   = af_dsp_out_underruns_pwm();  
-        const uint32_t uur   = af_usb_underruns();  
-        const uint32_t pur   = af_pwm_underruns();  
-        const uint32_t cap   = af_capture_dropped();  
+    static uint32_t p_pub = 0, p_dU = 0, p_dP = 0, p_urU = 0, p_urP = 0;    
+    static uint32_t p_usb_ur = 0, p_pwm_ur = 0, p_cap = 0, p_isr = 0;    
+    if (millis() - t_min >= 10000) {    
+        t_min = millis();    
+    
+        const uint32_t pub   = af_dsp_out_published_usb();    
+        const uint32_t dU    = af_dsp_out_dropped_usb();    
+        const uint32_t dP    = af_dsp_out_dropped_pwm();    
+        const uint32_t urU   = af_dsp_out_underruns_usb();    
+        const uint32_t urP   = af_dsp_out_underruns_pwm();    
+        const uint32_t uur   = af_usb_underruns();    
+        const uint32_t pur   = af_pwm_underruns();    
+        const uint32_t cap   = af_capture_dropped();    
+        const uint32_t isr   = af_cap_isr_count;   // реальные блоки от DMA    
   
         Serial.printf(    
             "# L0=%u.%u%% L1=%u.%u%% blk=%lu max=%luus |"    
-            " cap: d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"    
+            " cap: isr=%lu d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"      
             " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"    
             " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu gap=%luus ff=%lu ws=%lu av=%lu |"        
             " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",        
@@ -223,8 +224,8 @@ void loop()
             af_dsp_load_permille() / 10, af_dsp_load_permille() % 10,        
             (unsigned long)(pub - p_pub),        
             (unsigned long)af_dsp_max_block_us(),        
-            (unsigned long)(cap - p_cap),        
-            (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,        
+            (unsigned long)(isr - p_isr), (unsigned long)(cap - p_cap),          
+            (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,          
             (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,        
             (unsigned long)af_irq_both_pending, (unsigned long)af_q_fill_max,        
             (unsigned long)(dU - p_dU), (unsigned long)(dP - p_dP),        
@@ -253,8 +254,8 @@ void loop()
         for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)pt[i]);  
         Serial.println();  
   
-        p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;  
-        p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap;  
+        p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;    
+        p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap; p_isr = isr;    
     }  
 }
   
