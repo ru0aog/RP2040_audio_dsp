@@ -26,3 +26,6 @@ uint32_t af_usb_blocks_rx(void);
 int32_t  af_usb_rs_adj_mhz(void);    
 void     af_usb_ur_log(uint32_t* t, uint16_t* n);   // t/n — массивы по 8 элементов 
 uint32_t af_usb_reprimes(void);   // разы ушли на перезаправку (дно очереди)    
+uint32_t af_usb_fifo_full(void);     // poll встретил полный TX-FIFO    
+uint32_t af_usb_write_short(void);   // байт, недопринятых write()    
+uint32_t af_usb_poll_gap_max(void);  // пиковый gap между poll, мкс (сброс при чтении)    

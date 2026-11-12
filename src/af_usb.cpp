@@ -45,7 +45,17 @@ static volatile uint32_t usb_reprimes = 0;   // разы ушли на пере�
 // Без неё внутренний цикл сливает всю очередь в буфер TinyUSB за один    
 // poll — подушка уходит туда, где регулятор её не видит, fill падает    
 // в 0 и каждые ~36 мс случается reprime (слышимая пауза).    
-#define USB_LOW_MARK  4u    // блоков; TARGET=8, гистерезис 8 -> 4    
+#define USB_LOW_MARK  4u    // блоков; TARGET=8, гистерезис 8 -> 4      
+  
+// Диагностика джиттера подачи в TinyUSB:    
+// gap_max — макс. интервал между вызовами af_usb_poll (если > размера    
+// TX-FIFO в мкс, FIFO гарантированно пустеет → дырка в изохронном потоке).    
+// fifo_full — сколько раз poll встретил полный FIFO (здоровое состояние).    
+// write_short — write() принял меньше байт, чем просили (потеря фреймов).    
+static volatile uint32_t usb_poll_gap_max = 0;    
+static volatile uint32_t usb_fifo_full    = 0;    
+static volatile uint32_t usb_write_short  = 0;    
+static uint32_t usb_last_poll_us = 0;    
   
 // ---------------------------------------------------------------------------  
 // Источник: выходная очередь af_dsp (int16-блоки 31.25 ksps)  
@@ -203,8 +213,12 @@ void af_usb_init(void) {
     usb_ur_idx       = 0;      
     memset((void*)usb_ur_t, 0, sizeof(usb_ur_t));      
     memset((void*)usb_ur_n, 0, sizeof(usb_ur_n));      
-    usb_primed    = false;    
-    usb_reprimes  = 0;    
+    usb_primed    = false;      
+    usb_reprimes  = 0;      
+    usb_poll_gap_max = 0;    
+    usb_fifo_full    = 0;    
+    usb_write_short  = 0;    
+    usb_last_poll_us = 0;    
   
     // Конфигурация USB Audio Class 2.0.  
     auto cfg = usb_out.defaultConfig(TX_MODE);  
@@ -218,9 +232,15 @@ void af_usb_init(void) {
     usb_out.begin(cfg);  
 }  
   
-// Вызов из loop() на Core 0.  
-void af_usb_poll(void) {  
-    // Адаптивная подстройка темпа под часы USB-хоста: держим заполнение  
+// Вызов из loop() на Core 0.    
+void af_usb_poll(void) {    
+    // Джиттер вызовов: если gap > ёмкости TX-FIFO в мкс — в потоке дырка.    
+    const uint32_t now_us = time_us_32();    
+    const uint32_t gap = now_us - usb_last_poll_us;    
+    usb_last_poll_us = now_us;    
+    if (gap > usb_poll_gap_max && gap < 1000000u) usb_poll_gap_max = gap;    
+    
+    // Адаптивная подстройка темпа под часы USB-хоста: держим заполнение    
     // выходной очереди около середины (AF_OUT_NUM_BUFFERS=4 -> TARGET=2).  
     // Компенсирует расхождение кварца RP2040 и часов USB-хоста — без этого  
     // через минуты набегает underrun/overrun очереди.  
@@ -256,8 +276,8 @@ void af_usb_poll(void) {
         // регулятор видит реальный fill, TinyUSB живёт на своём буфере.    
         if (af_dsp_out_fill_usb() <= USB_LOW_MARK) break;    
     
-        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм      
-        if (avail_frames <= 0) break;      
+        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм        
+        if (avail_frames <= 0) { ++usb_fifo_full; break; }   // FIFO полон — норма        
         if (avail_frames > 192) avail_frames = 192;      
     
         int frames = 0;    
@@ -269,9 +289,13 @@ void af_usb_poll(void) {
             ++frames;    
         }    
     
-        if (frames > 0) {    
-            usb_out.write((uint8_t*)pcm_buffer, frames * 4);    
-        }    
+        if (frames > 0) {      
+            // write() может принять меньше, чем просили — это потерянные    
+            // фреймы и сдвиг фазы у хоста. Считаем.    
+            const size_t want = (size_t)frames * 4;    
+            const size_t sent = usb_out.write((uint8_t*)pcm_buffer, want);    
+            if (sent < want) usb_write_short += (uint32_t)(want - sent);    
+        }      
         if (frames < avail_frames) {    
             // Источник пуст: underrun. Фиксируем событие с меткой времени —    
             // по кольцу usb_ur_t видна периодичность разрывов.    
@@ -292,8 +316,17 @@ uint32_t af_usb_dropped(void)      { return usb_dropped; }
 uint32_t af_usb_underruns(void)    { return usb_underruns; }    
 uint32_t af_usb_frames_short(void) { return usb_frames_short; }    
 uint32_t af_usb_blocks_rx(void)    { return usb_blocks_rx; }      
-uint32_t af_usb_reprimes(void)     { return usb_reprimes; }    
-int32_t  af_usb_rs_adj_mhz(void)   { return usb_rs_adj_mhz; }      
+uint32_t af_usb_reprimes(void)     { return usb_reprimes; }      
+int32_t  af_usb_rs_adj_mhz(void)   { return usb_rs_adj_mhz; }        
+uint32_t af_usb_fifo_full(void)    { return usb_fifo_full; }    
+uint32_t af_usb_write_short(void)  { return usb_write_short; }    
+    
+// Пиковый интервал между вызовами af_usb_poll, мкс. Чтение сбрасывает пик.    
+uint32_t af_usb_poll_gap_max(void) {    
+    uint32_t v = usb_poll_gap_max;    
+    usb_poll_gap_max = 0;    
+    return v;    
+}    
 bool     af_usb_mounted(void)      { return TinyUSBDevice.mounted(); }    
     
 // Копия кольца последних 8 underrun-событий (t — micros, n — недостача фреймов).    
