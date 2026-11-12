@@ -262,16 +262,21 @@ void af_capture_start(void) {
     af_dma_a_target = af_buf_a0;  
     af_dma_b_target = af_buf_b0;  
   
-    // clk_adc от pll_sys: 250 МГц / 5 = 50 МГц. Делитель clk_adc      
-    // независим от clk_usb — USB продолжает работать от pll_usb 48 МГц.      
-    // При 50 МГц ровно 500 кс/с достижимо: DIV=99 -> период 100 тактов.      
-    clock_configure(clk_adc,      
-                    0,                       // glitchless mux off      
-                    CLOCKS_CLK_ADC_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,      
-                    250000000,               // pll_sys      
-                    50000000);               // 50 МГц      
+    // clk_adc от pll_sys на уровне регистров:      
+    //   CTRL.AUXSRC = 0 (clksrc_pll_sys, источник 250 МГц)      
+    //   DIV.INT = 5           -> 250/5 = 50 МГц      
+    // Порядок по даташиту: сначала AUXSRC, потом DIV (делитель      
+    // применяется glitchless к уже идущему клоку).      
+    // clk_usb не затрагиваем — он остаётся на pll_usb 48 МГц.      
+    // AUXSRC=0 — это pll_sys по даташиту; именованного макроса      
+    // для него в этой версии SDK нет, задаём литералом.      
+    clocks_hw->clk[clk_adc].ctrl =      
+        (0u << CLOCKS_CLK_ADC_CTRL_AUXSRC_LSB)      
+        | CLOCKS_CLK_ADC_CTRL_ENABLE_BITS;      
+    clocks_hw->clk[clk_adc].div =      
+        (5u << CLOCKS_CLK_ADC_DIV_INT_LSB);   // INT=5, FRAC=0      
     
-    const uint32_t clk_adc_hz = clock_get_hz(clk_adc);    
+    const uint32_t clk_adc_hz = clock_get_hz(clk_adc);     
     Serial.printf("[CAP] clk_adc=%lu clk_sys=%lu\n",    
                   (unsigned long)clk_adc_hz,    
                   (unsigned long)clock_get_hz(clk_sys));    
