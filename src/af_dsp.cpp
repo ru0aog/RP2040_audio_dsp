@@ -483,9 +483,19 @@ typedef struct {
     volatile uint8_t  fill_max;                   // high-water занятых буферов    
 } out_queue_t;    
   
-static out_queue_t out_pwm;  
-static out_queue_t out_usb;  
-static uint32_t    out_fill_pos = 0;   // позиция внутри заполняемого блока  
+static out_queue_t out_pwm;    
+static out_queue_t out_usb;    
+static uint32_t    out_fill_pos = 0;   // позиция внутри заполняемого блока    
+  
+// Диагностический режим: вместо DSP выдаём пилу-счётчик в обе очереди.    
+// Записать поток на хосте (Audacity): скачок/повтор пилы = дефект    
+// доставки на устройстве; идеальная пила = глитчи рисует хост.    
+// Включается #define AF_RAMP_TEST 1 (перепрошивка) или командой ramp.    
+#ifndef AF_RAMP_TEST    
+#define AF_RAMP_TEST 0    
+#endif    
+static volatile bool ramp_on = (AF_RAMP_TEST != 0);    
+static int16_t       ramp_val = 0;    
   
 // Публикация отсчёта в обе очереди.  
 static inline void __not_in_flash_func(out_emit)(int16_t s) {  
@@ -742,14 +752,14 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             y >>= 3;    // компенсация DC-gain трёх HB (2^3 = 8)
   
             // НЧ-тракт на 15.625 ksps.    
-            if (bypass_on) {    
-                // Обход: децимированный вход напрямую на выход,    
-                // без FIR/CW/NT/NR/АРУ/лимитера.
-                // голос должен быть слышен и в обходе
-                out_emit(af_voice_mix(sat16(y)));
-                //out_emit(sat16(y));    
-                continue;    
-            }    
+            if (bypass_on) {      
+                // Обход: децимированный вход напрямую на выход,      
+                // без FIR/CW/NT/NR/АРУ/лимитера.  
+                // голос должен быть слышен и в обходе  
+                out_emit(af_voice_mix(sat16(y)));  
+                //out_emit(sat16(y));      
+                continue;      
+            }      
             y = af_fir_push(y);    
             if (cw_on) {
                 // Добавка шума: LFSR xorshift32, уровень из `cw noise`.  
@@ -764,9 +774,15 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             }  
             if (notch_on) y = notch_lms_push(y);  
             if (nr_on)    y = nr_lms_push(y);  
-            int16_t s = agc_limit(y);    
-            s = af_voice_mix(s);          // голосовые сообщения    
-            out_emit(sat16(s));
+            int16_t s = agc_limit(y);      
+            s = af_voice_mix(s);          // голосовые сообщения      
+            if (ramp_on) {    
+                // Пила: +100 на отсчёт при 15.625 ksps → период ~21 мс,    
+                // амплитуда полная. Скачок ≠ +100 (mod 65536) = потеря/дубль.    
+                s = ramp_val;    
+                ramp_val += 100;    
+            }    
+            out_emit(sat16(s));  
         }  
         af_capture_release();  
   
