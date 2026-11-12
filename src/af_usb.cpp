@@ -31,9 +31,15 @@ static volatile int32_t  usb_rs_adj_mhz   = 0;   // текущая подстр�
   
 // Кольцо последних 8 underrun-событий: метка micros + недостача фреймов.  
 // По интервалам между метками видна периодичность разрывов.  
-static volatile uint32_t usb_ur_t[8];  
-static volatile uint16_t usb_ur_n[8];  
-static volatile uint8_t  usb_ur_idx = 0;  
+static volatile uint32_t usb_ur_t[8];    
+static volatile uint16_t usb_ur_n[8];    
+static volatile uint8_t  usb_ur_idx = 0;    
+    
+// Гистерезис заправки: не отдаём данные хосту, пока out_usb не накопит    
+// половину кольца. Иначе очередь живёт на дне (fill=0..1), регулятор    
+// прижат к -LIMIT, а TinyUSB пустеет между 4-мс блоками → разрывы.    
+static bool     usb_primed    = false;    
+static volatile uint32_t usb_reprimes = 0;   // разы ушли на перезаправку    
   
 // ---------------------------------------------------------------------------  
 // Источник: выходная очередь af_dsp (int16-блоки 31.25 ksps)  
@@ -188,9 +194,11 @@ void af_usb_init(void) {
     usb_frames_short = 0;    
     usb_blocks_rx    = 0;    
     usb_rs_adj_mhz   = 0;    
-    usb_ur_idx       = 0;    
-    memset((void*)usb_ur_t, 0, sizeof(usb_ur_t));    
-    memset((void*)usb_ur_n, 0, sizeof(usb_ur_n));    
+    usb_ur_idx       = 0;      
+    memset((void*)usb_ur_t, 0, sizeof(usb_ur_t));      
+    memset((void*)usb_ur_n, 0, sizeof(usb_ur_n));      
+    usb_primed    = false;    
+    usb_reprimes  = 0;    
   
     // Конфигурация USB Audio Class 2.0.  
     auto cfg = usb_out.defaultConfig(TX_MODE);  
@@ -218,11 +226,26 @@ void af_usb_poll(void) {
     float adj = K * ((float)fill - TARGET);  
     if (adj >  LIMIT) adj =  LIMIT;  
     if (adj < -LIMIT) adj = -LIMIT;  
-    rs_step   = (float)AF_FS_OUT_HZ + adj;    
-    rs_step_q = (uint32_t)((double)rs_step * (4294967296.0 / (double)AF_USB_FS_HZ));    
-    usb_rs_adj_mhz = (int32_t)(adj * 1000.0f);   // телеметрия: упор в ±LIMIT = регулятор не тянет    
+    rs_step   = (float)AF_FS_OUT_HZ + adj;      
+    rs_step_q = (uint32_t)((double)rs_step * (4294967296.0 / (double)AF_USB_FS_HZ));      
+    usb_rs_adj_mhz = (int32_t)(adj * 1000.0f);   // телеметрия: упор в ±LIMIT = регулятор не тянет      
+      
+    // Гистерезис заправки: стартуем отдачу только с подушкой >= TARGET    
+    // блоков (~33 мс при N=16). Пока не заправлены — TinyUSB получает    
+    // ничего, но это однократная задержка старта, а не периодические дыры.    
+    if (!usb_primed) {    
+        if (fill < (uint8_t)(AF_OUT_NUM_BUFFERS / 2)) return;    
+        usb_primed = true;    
+    }    
+    if (fill == 0) {    
+        // Доели до дна — сток быстрее источника. Перезаправка:    
+        // лучше одна пауза с накоплением, чем дырка каждые 4 мс.    
+        usb_primed = false;    
+        ++usb_reprimes;    
+        return;    
+    }    
     
-    for (;;) {    
+    for (;;) {      
         int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм    
         if (avail_frames <= 0) break;    
         if (avail_frames > 192) avail_frames = 192;    
@@ -258,8 +281,9 @@ void af_usb_poll(void) {
 uint32_t af_usb_dropped(void)      { return usb_dropped; }    
 uint32_t af_usb_underruns(void)    { return usb_underruns; }    
 uint32_t af_usb_frames_short(void) { return usb_frames_short; }    
-uint32_t af_usb_blocks_rx(void)    { return usb_blocks_rx; }    
-int32_t  af_usb_rs_adj_mhz(void)   { return usb_rs_adj_mhz; }    
+uint32_t af_usb_blocks_rx(void)    { return usb_blocks_rx; }      
+uint32_t af_usb_reprimes(void)     { return usb_reprimes; }    
+int32_t  af_usb_rs_adj_mhz(void)   { return usb_rs_adj_mhz; }      
 bool     af_usb_mounted(void)      { return TinyUSBDevice.mounted(); }    
     
 // Копия кольца последних 8 underrun-событий (t — micros, n — недостача фреймов).    

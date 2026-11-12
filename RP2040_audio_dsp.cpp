@@ -212,28 +212,28 @@ void loop()
         const uint32_t pur   = af_pwm_underruns();  
         const uint32_t cap   = af_capture_dropped();  
   
-        Serial.printf(  
-            "# L0=%u.%u%% L1=%u.%u%% blk=%lu max=%luus |"  
-            " cap: d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"  
-            " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"  
-            " usb: ur=%lu short=%lu rs=%ldmHz |"  
-            " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",  
-            core0_load_permille / 10, core0_load_permille % 10,  
-            af_dsp_load_permille() / 10, af_dsp_load_permille() % 10,  
-            (unsigned long)(pub - p_pub),  
-            (unsigned long)af_dsp_max_block_us(),  
-            (unsigned long)(cap - p_cap),  
-            (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,  
-            (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,  
-            (unsigned long)af_irq_both_pending, (unsigned long)af_q_fill_max,  
-            (unsigned long)(dU - p_dU), (unsigned long)(dP - p_dP),  
-            (unsigned long)(urU - p_urU), (unsigned long)(urP - p_urP),  
-            (unsigned)af_dsp_out_fill_max_usb(), (unsigned)af_dsp_out_fill_max_pwm(),  
-            (unsigned long)(uur - p_usb_ur), (unsigned long)af_usb_frames_short(),  
-            (long)af_usb_rs_adj_mhz(),  
-            (unsigned long)(pur - p_pwm_ur), (unsigned long)af_pwm_restarts(),  
-            (unsigned)af_pwm_duty_fill_max(),  
-            (unsigned long)af_dsp_clip_count());  
+        Serial.printf(    
+            "# L0=%u.%u%% L1=%u.%u%% blk=%lu max=%luus |"    
+            " cap: d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"    
+            " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"    
+            " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu |"    
+            " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",    
+            core0_load_permille / 10, core0_load_permille % 10,    
+            af_dsp_load_permille() / 10, af_dsp_load_permille() % 10,    
+            (unsigned long)(pub - p_pub),    
+            (unsigned long)af_dsp_max_block_us(),    
+            (unsigned long)(cap - p_cap),    
+            (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,    
+            (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,    
+            (unsigned long)af_irq_both_pending, (unsigned long)af_q_fill_max,    
+            (unsigned long)(dU - p_dU), (unsigned long)(dP - p_dP),    
+            (unsigned long)(urU - p_urU), (unsigned long)(urP - p_urP),    
+            (unsigned)af_dsp_out_fill_max_usb(), (unsigned)af_dsp_out_fill_max_pwm(),    
+            (unsigned long)(uur - p_usb_ur), (unsigned long)af_usb_frames_short(),    
+            (long)af_usb_rs_adj_mhz(), (unsigned long)af_usb_reprimes(),    
+            (unsigned long)(pur - p_pwm_ur), (unsigned long)af_pwm_restarts(),    
+            (unsigned)af_pwm_duty_fill_max(),    
+            (unsigned long)af_dsp_clip_count());    
   
         // Метки последних underrun — интервалы показывают периодичность разрывов.  
         uint32_t ut[8]; uint16_t un[8];  
