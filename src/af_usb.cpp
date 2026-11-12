@@ -41,11 +41,10 @@ static volatile uint8_t  usb_ur_idx = 0;
 static bool     usb_primed    = false;      
 static volatile uint32_t usb_reprimes = 0;   // разы ушли на перезаправку      
   
-// Нижняя отметка: в out_usb всегда остаётся минимум LOW блоков подушки.    
-// Без неё внутренний цикл сливает всю очередь в буфер TinyUSB за один    
-// poll — подушка уходит туда, где регулятор её не видит, fill падает    
-// в 0 и каждые ~36 мс случается reprime (слышимая пауза).    
-#define USB_LOW_MARK  4u    // блоков; TARGET=8, гистерезис 8 -> 4      
+// USB_LOW_MARK больше не используется: вместо жёсткой нижней отметки      
+// кадр ограничивается бюджетом (fq-1) блоков — см. цикл ниже. Оставлено      
+// как справка; удалить при чистке.      
+#define USB_LOW_MARK  4u        
   
 // Диагностика джиттера подачи в TinyUSB:    
 // gap_max — макс. интервал между вызовами af_usb_poll (если > размера    
@@ -286,10 +285,25 @@ void af_usb_poll(void) {
         // Без нижней отметки: заполняем буфер AudioTools до отказа —    
         // это 46 мс подушки у самого эндпоинта, она и глотает джиттер    
         // loop(). Подушку держит буфер AudioTools, а не out_usb.    
-        int avail_frames = usb_out.availableForWrite() / 4;    
-        if (avail_frames <= 0) { ++usb_fifo_full; break; }   // FIFO полон — норма          
-        if ((uint32_t)avail_frames > usb_avail_max) usb_avail_max = (uint32_t)avail_frames;    
-        if (avail_frames > 192) avail_frames = 192;        
+        int avail_frames = usb_out.availableForWrite() / 4;      
+        if (avail_frames <= 0) { ++usb_fifo_full; break; }   // FIFO полон — норма            
+        if ((uint32_t)avail_frames > usb_avail_max) usb_avail_max = (uint32_t)avail_frames;      
+        if (avail_frames > 192) avail_frames = 192;          
+  
+        // Бюджет по запасу очереди: бурст 192 фрейма съедает ~136 входных      
+        // отсчётов ≈ 2 блока — при fill=1..2 очередь сливается до дна за      
+        // один кадр → паддинг-ступенька. Ограничиваем кадр тем, что реально      
+        // можем произвести: fill блоков × AF_OUT_BLOCK_SAMPLES × 44100/31250.      
+        // Оставляем 1 блок в резерве — регулятору нужен сигнал fill>0.      
+        {      
+            const uint8_t fq = af_dsp_out_fill_usb();      
+            if (fq <= 1) break;                       // резерв: не доедаем дно      
+            // входных отсчётов доступно: (fq-1)*BLOCK; выходных фреймов:      
+            // × 44100/31250 ≈ × 1.4112. Целочисленно: × 1444 / 1024.      
+            int budget = (int)(((uint32_t)(fq - 1) * AF_OUT_BLOCK_SAMPLES * 1444u) >> 10);      
+            if (budget <= 0) break;      
+            if (avail_frames > budget) avail_frames = budget;      
+        }       
     
         int frames = 0;    
         int16_t s = 0;    
