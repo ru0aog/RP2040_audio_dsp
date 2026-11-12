@@ -262,31 +262,35 @@ void af_capture_start(void) {
     af_dma_a_target = af_buf_a0;  
     af_dma_b_target = af_buf_b0;  
   
-    const uint32_t clk_adc_hz = clock_get_hz(clk_adc);  
-    Serial.printf("[CAP] clk_adc=%lu clk_sys=%lu\n",  
-                  (unsigned long)clk_adc_hz,  
-                  (unsigned long)clock_get_hz(clk_sys));  
+    // clk_adc от pll_sys: 250 МГц / 5 = 50 МГц. Делитель clk_adc      
+    // независим от clk_usb — USB продолжает работать от pll_usb 48 МГц.      
+    // При 50 МГц ровно 500 кс/с достижимо: DIV=99 -> период 100 тактов.      
+    clock_configure(clk_adc,      
+                    0,                       // glitchless mux off      
+                    CLOCKS_CLK_ADC_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,      
+                    250000000,               // pll_sys      
+                    50000000);               // 50 МГц      
+    
+    const uint32_t clk_adc_hz = clock_get_hz(clk_adc);    
+    Serial.printf("[CAP] clk_adc=%lu clk_sys=%lu\n",    
+                  (unsigned long)clk_adc_hz,    
+                  (unsigned long)clock_get_hz(clk_sys));    
   
     // ADC: один вход GP26 (ADC0), без round-robin.  
     adc_init();  
     adc_gpio_init(AF_ADC_PIN);  
     adc_select_input(AF_ADC_PIN - 26);      // GP26 -> input 0  
     adc_fifo_setup(true, true, 1, false, false);  
-    // DIV задаёт период выборки как (DIV+1) тактов clk_adc — off-by-one      
-    // в регистре. Преобразование занимает 96 тактов: период < 96      
-    // пропускает каждый второй триггер (половинная частота!), поэтому      
-    // минимальный рабочий период = 96 тактов, т.е. DIV >= 95.      
-    //      
-    // Ровно 500 кс/с при clk_adc=48 МГц недостижимо:      
-    //   DIV=95 -> период 96 -> 500000 Гц, но период = времени      
-    //           преобразования впритык (нестабильно, см. половинную      
-    //           частоту выше — фактически isr показал 250 кс/с);      
-    //   DIV=96 -> период 97 -> 494845 Гц — стабильно.      
-    // Поэтому AF_FS_ADC_HZ = 494845: заявленная и фактическая частоты      
-    // совпадают, регулятор USB не компенсирует фантомный дефицит.      
-    float adc_div = (float)clk_adc_hz / (float)AF_FS_ADC_HZ - 1.0f;      
-    if (adc_div < 95.0f) adc_div = 95.0f;   // минимум 96 тактов периода      
-    adc_set_clkdiv(adc_div);     
+    // DIV задаёт период выборки как (DIV+1) тактов clk_adc — off-by-one        
+    // в регистре. Преобразование занимает 96 тактов: период < 96        
+    // пропускает каждый второй триггер (половинная частота!), поэтому        
+    // минимальный рабочий период = 96 тактов, т.е. DIV >= 95.        
+    //        
+    // При clk_adc=50 МГц (pll_sys): DIV=99 -> период 100 -> ровно        
+    // 500 кс/с. Формула: adc_div = clk_adc/Fs - 1 (DIV = период-1).        
+    float adc_div = (float)clk_adc_hz / (float)AF_FS_ADC_HZ - 1.0f;        
+    if (adc_div < 95.0f) adc_div = 95.0f;   // минимум 96 тактов периода        
+    adc_set_clkdiv(adc_div);       
   
     // Два DMA-канала с аппаратным chain_to: A -> B -> A -> ...  
     af_dma_a = dma_claim_unused_channel(true);  
