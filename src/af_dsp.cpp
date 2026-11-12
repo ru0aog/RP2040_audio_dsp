@@ -668,7 +668,9 @@ void af_dsp_set_gain(float m) {
 }  
 float af_dsp_gain(void) { return (float)gain_q15 / 32768.0f; }
 
-void af_dsp_set_bypass(bool on) { bypass_on = on; }  
+void af_dsp_set_bypass(bool on) { bypass_on = on; }
+void af_dsp_set_ramp(bool on) { ramp_on = on; ramp_val = 0; }  
+bool af_dsp_ramp_on(void)     { return ramp_on; }  
 bool     af_dsp_agc_on(void)     { return agc_on; }  
 bool     af_dsp_bypass_on(void)  { return bypass_on; }
 bool     af_dsp_cw_on(void)    { return cw_on; }  
