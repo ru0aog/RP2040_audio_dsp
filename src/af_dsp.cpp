@@ -736,15 +736,20 @@ static inline void core1_update_load(uint32_t now_us) {
 // ---------------------------------------------------------------------------  
 // Главный поллинг (Core 1): блоки ADC -> весь тракт -> выходные очереди  
 // ---------------------------------------------------------------------------  
-void __not_in_flash_func(af_dsp_poll)(void) {    
-    // DC-смещение ADC: EMA k=1/256 (порт dc_i/dc_q из rx_dsp.cpp).    
-    static int32_t dc_est = 0;    
-    
-    af_store_core1_park_poll();   // если Core 0 просит парковку — встаём в RAM-spin    
-    
-    const volatile uint16_t* blk;    
-    while ((blk = af_capture_get_block()) != NULL) {
-        const uint32_t t0 = time_us_32();   // busy = только обработка блока  
+void __not_in_flash_func(af_dsp_poll)(void) {      
+    // DC-смещение ADC: EMA k=1/256 (порт dc_i/dc_q из rx_dsp.cpp).      
+    static int32_t dc_est = 0;      
+      
+    // Бюджет дрейна: не больше 2 блоков за вызов (~5 мс). Иначе при    
+    // накопленном бэклоге Core 1 уходит в длинный цикл, out_usb/out_pwm    
+    // не обслуживаются читателями вовремя — вставки/провалы на выходе.    
+    uint8_t budget = 2;  
+      
+    af_store_core1_park_poll();   // если Core 0 просит парковку — встаём в RAM-spin      
+      
+    const volatile uint16_t* blk;      
+    while (budget-- > 0 && (blk = af_capture_get_block()) != NULL) {  
+        const uint32_t t0 = time_us_32();   // busy = только обработка блока    
   
         for (uint32_t i = 0; i < AF_BLOCK_SAMPLES; i++) {  
             // Сырой отсчёт ADC: 12 бит в младших разрядах.  
@@ -795,15 +800,19 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             }    
             out_emit(sat16(s));  
         }  
-        af_capture_release();  
+        af_capture_release();    
+    
+        const uint32_t dt = time_us_32() - t0;    
+        core1_busy_us += dt;    
+        if (dt > core1_max_us) core1_max_us = dt;   // пиковая стоимость блока    
   
-        const uint32_t dt = time_us_32() - t0;  
-        core1_busy_us += dt;  
-        if (dt > core1_max_us) core1_max_us = dt;   // пиковая стоимость блока  
-    }  
-  
-    core1_update_load(time_us_32());  
-}  
+        // Парковка между блоками, а не только между вызовами:    
+        // flash-операция не ждёт конца дрейна всей очереди.    
+        af_store_core1_park_poll();  
+    }    
+    
+    core1_update_load(time_us_32());    
+}    
   
 // ---------------------------------------------------------------------------  
 // Диагностика  
