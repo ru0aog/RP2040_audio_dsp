@@ -52,10 +52,15 @@ static volatile uint32_t usb_reprimes = 0;   // разы ушли на пере�
 // TX-FIFO в мкс, FIFO гарантированно пустеет → дырка в изохронном потоке).    
 // fifo_full — сколько раз poll встретил полный FIFO (здоровое состояние).    
 // write_short — write() принял меньше байт, чем просили (потеря фреймов).    
-static volatile uint32_t usb_poll_gap_max = 0;    
-static volatile uint32_t usb_fifo_full    = 0;    
-static volatile uint32_t usb_write_short  = 0;    
-static uint32_t usb_last_poll_us = 0;    
+static volatile uint32_t usb_poll_gap_max = 0;      
+static volatile uint32_t usb_fifo_full    = 0;      
+static volatile uint32_t usb_write_short  = 0;      
+static uint32_t usb_last_poll_us = 0;      
+  
+// Максимум avail_frames за всё время ≈ ёмкость TX-FIFO TinyUSB в фреймах    
+// (×22.7 мкс = мс аудио). Если ~48–96 — FIFO ~1–2 мс, джиттер loop()    
+// больше этой величины гарантированно даёт дырку в изохронном потоке.    
+static volatile uint32_t usb_avail_max = 0;    
   
 // ---------------------------------------------------------------------------  
 // Источник: выходная очередь af_dsp (int16-блоки 31.25 ksps)  
@@ -215,10 +220,11 @@ void af_usb_init(void) {
     memset((void*)usb_ur_n, 0, sizeof(usb_ur_n));      
     usb_primed    = false;      
     usb_reprimes  = 0;      
-    usb_poll_gap_max = 0;    
-    usb_fifo_full    = 0;    
-    usb_write_short  = 0;    
-    usb_last_poll_us = 0;    
+    usb_poll_gap_max = 0;      
+    usb_fifo_full    = 0;      
+    usb_write_short  = 0;      
+    usb_last_poll_us = 0;      
+    usb_avail_max    = 0;    
   
     // Конфигурация USB Audio Class 2.0.  
     auto cfg = usb_out.defaultConfig(TX_MODE);  
@@ -276,9 +282,10 @@ void af_usb_poll(void) {
         // регулятор видит реальный fill, TinyUSB живёт на своём буфере.    
         if (af_dsp_out_fill_usb() <= USB_LOW_MARK) break;    
     
-        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм        
-        if (avail_frames <= 0) { ++usb_fifo_full; break; }   // FIFO полон — норма        
-        if (avail_frames > 192) avail_frames = 192;      
+        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм          
+        if (avail_frames <= 0) { ++usb_fifo_full; break; }   // FIFO полон — норма          
+        if ((uint32_t)avail_frames > usb_avail_max) usb_avail_max = (uint32_t)avail_frames;    
+        if (avail_frames > 192) avail_frames = 192;        
     
         int frames = 0;    
         int16_t s = 0;    
@@ -318,8 +325,9 @@ uint32_t af_usb_frames_short(void) { return usb_frames_short; }
 uint32_t af_usb_blocks_rx(void)    { return usb_blocks_rx; }      
 uint32_t af_usb_reprimes(void)     { return usb_reprimes; }      
 int32_t  af_usb_rs_adj_mhz(void)   { return usb_rs_adj_mhz; }        
-uint32_t af_usb_fifo_full(void)    { return usb_fifo_full; }    
-uint32_t af_usb_write_short(void)  { return usb_write_short; }    
+uint32_t af_usb_fifo_full(void)    { return usb_fifo_full; }      
+uint32_t af_usb_write_short(void)  { return usb_write_short; }      
+uint32_t af_usb_avail_max(void)    { return usb_avail_max; }   // ~ёмкость TX-FIFO, фреймы    
     
 // Пиковый интервал между вызовами af_usb_poll, мкс. Чтение сбрасывает пик.    
 uint32_t af_usb_poll_gap_max(void) {    
