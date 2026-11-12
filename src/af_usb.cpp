@@ -21,6 +21,21 @@
 #include "AudioTools/Communication/USB/USBAudioStream.h"  
   
 // ---------------------------------------------------------------------------  
+// Диагностика разрывов (объявлены до get_input — используются в нём)  
+// ---------------------------------------------------------------------------  
+static volatile uint32_t usb_dropped      = 0;   // (резерв) блоки, потерянные в out_usb  
+static volatile uint32_t usb_underruns    = 0;   // разы, когда источник пуст при avail>0  
+static volatile uint32_t usb_frames_short = 0;   // суммарная недостача фреймов  
+static volatile uint32_t usb_blocks_rx    = 0;   // блоков получено из out_usb  
+static volatile int32_t  usb_rs_adj_mhz   = 0;   // текущая подстройка rs_step, мГц  
+  
+// Кольцо последних 8 underrun-событий: метка micros + недостача фреймов.  
+// По интервалам между метками видна периодичность разрывов.  
+static volatile uint32_t usb_ur_t[8];  
+static volatile uint16_t usb_ur_n[8];  
+static volatile uint8_t  usb_ur_idx = 0;  
+  
+// ---------------------------------------------------------------------------  
 // Источник: выходная очередь af_dsp (int16-блоки 31.25 ksps)  
 // ---------------------------------------------------------------------------  
 static const volatile int16_t* cur_blk = nullptr;  
@@ -39,8 +54,6 @@ static bool get_input(int32_t* out) {
         if (cur_blk == nullptr) return false;    
         ++usb_blocks_rx;    
         pos = 0;    
-        if (cur_blk == nullptr) return false;  
-        pos = 0;  
     }  
   
     *out = (int32_t)cur_blk[pos];  
@@ -160,18 +173,6 @@ static bool next_frame(int16_t* s) {
 USBAudioDeviceTinyUSB usb_out;  
   
 static int16_t pcm_buffer[192 * 2];             // стерео-фреймы L/R  
-  
-static volatile uint32_t usb_dropped      = 0;   // (резерв) блоки, потерянные в out_usb  
-static volatile uint32_t usb_underruns    = 0;   // разы, когда источник пуст при avail>0  
-static volatile uint32_t usb_frames_short = 0;   // суммарная недостача фреймов  
-static volatile uint32_t usb_blocks_rx    = 0;   // блоков получено из out_usb  
-static volatile int32_t  usb_rs_adj_mhz   = 0;   // текущая подстройка rs_step, мГц  
-  
-// Кольцо последних 8 underrun-событий: метка micros + недостача фреймов.  
-// По интервалам между метками видна периодичность разрывов.  
-static volatile uint32_t usb_ur_t[8];  
-static volatile uint16_t usb_ur_n[8];  
-static volatile uint8_t  usb_ur_idx = 0;  
   
 void af_usb_init(void) {  
     memset(pcm_buffer, 0, sizeof(pcm_buffer));  
