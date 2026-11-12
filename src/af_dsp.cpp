@@ -471,17 +471,18 @@ static inline int16_t __not_in_flash_func(sat16)(int32_t x) {
 // читают af_pwm_poll и af_usb_poll (Core 0) — у каждого СВОЯ очередь  
 // (fan-out: каждый блок публикуется в обе).  
 // ---------------------------------------------------------------------------  
-typedef struct {    
-    volatile int16_t  buf[AF_OUT_NUM_BUFFERS][AF_OUT_BLOCK_SAMPLES];    
-    volatile uint8_t  busy[AF_OUT_NUM_BUFFERS];   // 1 = буфер заполнен/читается    
-    volatile uint8_t  head;                       // индекс публикации    
-    volatile uint8_t  tail;                       // индекс чтения    
-    volatile uint8_t  fill_buf;                   // буфер, который сейчас заполняется    
-    volatile uint32_t dropped;    
-    volatile uint32_t underruns;                  // читатель спросил при пустой очереди    
-    volatile uint32_t published;                  // блоков опубликовано    
-    volatile uint8_t  fill_max;                   // high-water занятых буферов    
-} out_queue_t;    
+typedef struct {      
+    volatile int16_t  buf[AF_OUT_NUM_BUFFERS][AF_OUT_BLOCK_SAMPLES];      
+    volatile uint8_t  busy[AF_OUT_NUM_BUFFERS];   // 1 = буфер заполнен/читается      
+    volatile uint8_t  order[AF_OUT_NUM_BUFFERS];  // order[слот] = индекс буфера      
+    volatile uint8_t  head;                       // слот публикации      
+    volatile uint8_t  tail;                       // слот чтения      
+    volatile uint8_t  fill_buf;                   // буфер, который сейчас заполняется      
+    volatile uint32_t dropped;      
+    volatile uint32_t underruns;                  // читатель спросил при пустой очереди      
+    volatile uint32_t published;                  // блоков опубликовано      
+    volatile uint8_t  fill_max;                   // high-water занятых буферов      
+} out_queue_t;      
   
 static out_queue_t out_pwm;    
 static out_queue_t out_usb;    
@@ -525,10 +526,11 @@ static inline void __not_in_flash_func(out_emit)(int16_t s) {
             ++oq->dropped;                 // очередь полна — блок теряется    
             continue;                      // fill_buf остаётся, перезапишем его    
         }    
-        oq->busy[oq->fill_buf] = 1;      
-        __dmb();      
-        oq->head = (oq->head + 1) % AF_OUT_NUM_BUFFERS;      
-        oq->fill_buf = nb;      
+        oq->busy[oq->fill_buf] = 1;        
+        oq->order[oq->head] = oq->fill_buf;   // явный порядок: слот -> буфер    
+        __dmb();        
+        oq->head = (oq->head + 1) % AF_OUT_NUM_BUFFERS;        
+        oq->fill_buf = nb;        
         ++oq->published;      
         // High-water: сколько буферов занято после публикации.      
         uint8_t n = 0;      
@@ -539,16 +541,19 @@ static inline void __not_in_flash_func(out_emit)(int16_t s) {
 }  
   
 // Читательская сторона (Core 0).  
-static const volatile int16_t* out_get(out_queue_t* q) {    
-    if (q->tail == q->head) { ++q->underruns; return NULL; }    
-    return q->buf[q->tail];    
-}    
+static const volatile int16_t* out_get(out_queue_t* q) {      
+    if (q->tail == q->head) { ++q->underruns; return NULL; }      
+    __dmb();    
+    return q->buf[q->order[q->tail]];   // буфер по порядку публикации    
+}      
   
-static void out_release(out_queue_t* q) {  
-    q->busy[q->tail] = 0;  
-    __dmb();  
-    q->tail = (q->tail + 1) % AF_OUT_NUM_BUFFERS;  
-}  
+static void out_release(out_queue_t* q) {    
+    if (q->tail == q->head) return;    
+    const uint8_t b = q->order[q->tail];   // освобождаем тот буфер, что читали    
+    q->tail = (q->tail + 1) % AF_OUT_NUM_BUFFERS;    
+    __dmb();    
+    q->busy[b] = 0;    
+}    
   
 const volatile int16_t* af_dsp_out_get_pwm(void)     { return out_get(&out_pwm); }  
 void                    af_dsp_out_release_pwm(void) { out_release(&out_pwm); }  
@@ -702,9 +707,13 @@ void af_dsp_init(void) {
     af_fir_init();  
     cw_design();          // начальные коэффициенты CW-секций  
   
-    memset(&out_pwm, 0, sizeof(out_pwm));  
-    memset(&out_usb, 0, sizeof(out_usb));  
-    out_fill_pos = 0;  
+    memset(&out_pwm, 0, sizeof(out_pwm));    
+    memset(&out_usb, 0, sizeof(out_usb));    
+    for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) {    
+        out_pwm.order[b] = b;   // тождественное отображение на старте    
+        out_usb.order[b] = b;    
+    }    
+    out_fill_pos = 0;    
     clip_count = 0;  
     core1_busy_us = 0;  
     core1_max_us = 0;  
