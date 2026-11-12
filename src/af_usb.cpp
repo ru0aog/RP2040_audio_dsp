@@ -277,12 +277,11 @@ void af_usb_poll(void) {
         return;      
     }      
       
-    for (;;) {        
-        // Стоп по нижней отметке: подушка остаётся в out_usb,    
-        // регулятор видит реальный fill, TinyUSB живёт на своём буфере.    
-        if (af_dsp_out_fill_usb() <= USB_LOW_MARK) break;    
-    
-        int avail_frames = usb_out.availableForWrite() / 4;   // 4 байта/фрейм          
+    for (;;) {  
+        // Без нижней отметки: заполняем буфер AudioTools до отказа —  
+        // это 46 мс подушки у самого эндпоинта, она и глотает джиттер  
+        // loop(). Подушку держит буфер AudioTools, а не out_usb.  
+        int avail_frames = usb_out.availableForWrite() / 4;  
         if (avail_frames <= 0) { ++usb_fifo_full; break; }   // FIFO полон — норма          
         if ((uint32_t)avail_frames > usb_avail_max) usb_avail_max = (uint32_t)avail_frames;    
         if (avail_frames > 192) avail_frames = 192;        
