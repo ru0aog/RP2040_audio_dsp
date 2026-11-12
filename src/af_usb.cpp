@@ -280,11 +280,13 @@ void af_usb_poll(void) {
         ++usb_reprimes;    
     }    
       
-    for (;;) {  
-        // Без нижней отметки: заполняем буфер AudioTools до отказа —  
-        // это 46 мс подушки у самого эндпоинта, она и глотает джиттер  
-        // loop(). Подушку держит буфер AudioTools, а не out_usb.  
-        int avail_frames = usb_out.availableForWrite() / 4;  
+    // Максимум 8 итераций × 192 фрейма за вызов — страховка от любого    
+    // сценария, где цикл не может завершиться (watchdog-ребут).    
+    for (int iter = 0; iter < 8; iter++) {    
+        // Без нижней отметки: заполняем буфер AudioTools до отказа —    
+        // это 46 мс подушки у самого эндпоинта, она и глотает джиттер    
+        // loop(). Подушку держит буфер AudioTools, а не out_usb.    
+        int avail_frames = usb_out.availableForWrite() / 4;    
         if (avail_frames <= 0) { ++usb_fifo_full; break; }   // FIFO полон — норма          
         if ((uint32_t)avail_frames > usb_avail_max) usb_avail_max = (uint32_t)avail_frames;    
         if (avail_frames > 192) avail_frames = 192;        
@@ -315,17 +317,21 @@ void af_usb_poll(void) {
             ++frames;    
         }    
     
-        if (frames > 0) {    
-            // write() может принять меньше, чем просили — это потерянные    
-            // фреймы и сдвиг фазы у хоста. Считаем.    
-            const size_t want = (size_t)frames * 4;    
-            const size_t sent = usb_out.write((uint8_t*)pcm_buffer, want);    
-            if (sent < want) usb_write_short += (uint32_t)(want - sent);    
-        }    
-        // Кадр всегда заполняется целиком (реальные данные или паддинг) —    
-        // условие выхода только по avail_frames/FIFO.    
-    }    
-}  
+        if (frames > 0) {      
+            // write() может принять меньше, чем просили — это потерянные      
+            // фреймы и сдвиг фазы у хоста. Считаем.      
+            const size_t want = (size_t)frames * 4;      
+            const size_t sent = usb_out.write((uint8_t*)pcm_buffer, want);      
+            if (sent < want) usb_write_short += (uint32_t)(want - sent);      
+      
+            if (sent == 0) break;   // хост не читает эндпоинт: avail>0, но      
+                                    // write не принимает — без этого break      
+                                    // цикл бесконечный → watchdog-ребут      
+        }      
+        // Кадр всегда заполняется целиком (реальные данные или паддинг) —      
+        // условие выхода: avail исчерпан, FIFO полон или write не принял.      
+    }      
+}    
   
 // ---------------------------------------------------------------------------  
 // Диагностика  
