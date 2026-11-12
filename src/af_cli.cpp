@@ -32,6 +32,7 @@
 #include "af_store.h"
 #include "af_led.h"
 #include "af_voice.h"     // подмес голосовых клипов в выход
+#include "af_cal.h"  
   
 // ---------------------------------------------------------------------------  
 // Справка  
@@ -51,10 +52,11 @@ static void cli_help(void) {
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");  
     Serial.println("#   banks             — показать все ячейки");
     Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)");
-    Serial.println("#   agc on|off       — АРУ (off -> ручное усиление, лимитер остаётся)");
-    Serial.println("#   gain <0..8>      — ручное усиление при agc off, множитель (1.0 = единичное)");
-    Serial.println("#   bypass on|off    — обход: выход = вход");  
-    Serial.println("#   ramp on|off      — пила-счётчик вместо DSP (тест целостности потока)");  
+    Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");
+    Serial.println("#   gain <0..8>       — ручное усиление при agc off, множитель (1.0 = единичное)");
+    Serial.println("#   bypass on|off     — обход: выход = вход");  
+    Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест целостности потока)");
+    Serial.println("#   cal on|off        — коррекция INL/DNL ADC");    
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT (LOW=on)");  
 }  
   
@@ -62,6 +64,7 @@ static void cli_help(void) {
 // Диагностика  
 // ---------------------------------------------------------------------------  
 static void cli_stats(void) {  
+    Serial.printf("# cal=%s\n", af_cal_is_enabled() ? "on" : "off");  
     uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);  
     Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu.%02lu  bypass=%s\n",
                   (unsigned long)af_dsp_band_lo_hz(),  
@@ -345,8 +348,23 @@ static void cli_exec(char* line) {
             Serial.println("# OK ramp=off");  
         }  
         else Serial.println("# ERR: ramp on|off");  
+    }
+
+    else if (strcmp(cmd, "cal") == 0) {    
+        char* s = strtok(NULL, " \t");    
+        if (s && strcmp(s, "on") == 0) {    
+            af_cal_set_enabled(true);    
+            Serial.println("# OK cal=on (INL/DNL correction)");    
+        } else if (s && strcmp(s, "off") == 0) {    
+            af_cal_set_enabled(false);    
+            Serial.println("# OK cal=off");    
+        } else {    
+            Serial.printf("# cal=%s (cal on|off)\n",    
+                          af_cal_is_enabled() ? "on" : "off");    
+        }    
     }  
-  
+
+
     // вставлять сюда  
   
     else {    

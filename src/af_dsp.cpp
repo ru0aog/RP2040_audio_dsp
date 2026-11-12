@@ -19,6 +19,7 @@
 #include "af_capture.h"
 #include "af_store.h"
 #include "af_voice.h"     // подмес голосовых клипов в выход
+#include "af_cal.h"  
   
 // ---------------------------------------------------------------------------  
 // Half-band дециматоры — коэффициенты 1:1 из rx_dsp.cpp приёмника  
@@ -751,9 +752,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
     while (budget-- > 0 && (blk = af_capture_get_block()) != NULL) {  
         const uint32_t t0 = time_us_32();   // busy = только обработка блока    
   
-        for (uint32_t i = 0; i < AF_BLOCK_SAMPLES; i++) {  
-            // Сырой отсчёт ADC: 12 бит в младших разрядах.  
-            int32_t meas = (int32_t)blk[i] & 0x0FFF;  
+        for (uint32_t i = 0; i < AF_BLOCK_SAMPLES; i++) {    
+            // Сырой отсчёт ADC: 12 бит в младших разрядах.    
+            // Универсальная коррекция INL/DNL RP2040 (af_cal, cal on|off).    
+            int32_t meas = af_cal_apply((int32_t)blk[i] & 0x0FFF);    
   
             // Центрирование: EMA среднего, вычитаем из измерения.  
             dc_est += ((meas << 8) - dc_est) >> 8;  
