@@ -91,7 +91,11 @@ static inline int32_t __not_in_flash_func(tx_fir_push)(tx_fir_t* f, int32_t x) {
 // При ratio=1 -> gain=1; при большом ratio -> gain=thr/env (лимитер).    
 // ---------------------------------------------------------------------------    
 static volatile uint32_t tx_ratio_x10 = AF_TX_RATIO_X10_DEFAULT;  // x10    
-static volatile uint32_t tx_clip_thr  = AF_TX_CLIP_DEFAULT;       // 0..32767    
+static volatile uint32_t tx_clip_thr  = AF_TX_CLIP_DEFAULT;       // 0..32767   
+static uint32_t tx_agc_target = AF_TX_AGC_TARGET;  // целевой уровень АРУ  
+static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)  
+static uint32_t agc_env       = 0;                 // EMA огибающей АРУ, Q16  
+static uint32_t gate_gain     = 0;                 // gain гейта, Q16 (0..65536)  
     
 static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16    
     
@@ -127,13 +131,44 @@ static inline int32_t __not_in_flash_func(tx_clip)(int32_t x) {
     // makeup: вернуть уровень к полной шкале (32767/clip_thr)    
     return (int32_t)(((int64_t)x * 32767) / t);    
 }    
-    
+
 // ---------------------------------------------------------------------------    
 // Точка входа из af_dsp_poll    
-// ---------------------------------------------------------------------------    
+// ---------------------------------------------------------------------------
+
+// АРУ: gain = target/env, кламп 1..max. EMA огибающей — общая с  
+// компрессором нет, своя (агрессивнее атака, медленнее спад).  
+static int32_t tx_agc(int32_t x) {  
+    uint32_t a = (uint32_t)(x >= 0 ? x : -x);    
+    uint32_t c = (a > (agc_env >> 8)) ? AF_TX_AGC_ATT_Q24 : AF_TX_AGC_REL_Q24;    
+    agc_env += (uint32_t)(((int64_t)((a << 8) - agc_env) * c) >> 24);    
+  
+    uint32_t env = agc_env >> 8;  
+    if (env < 64) env = 64;                          // защита от деления на ~0  
+    int64_t g = ((int64_t)tx_agc_target << 15) / (int64_t)env;   // Q15  
+    int64_t gmax = (int64_t)AF_TX_AGC_MAX_X10 * 3277;            // x10 -> Q15  
+    if (g > gmax) g = gmax;  
+    if (g < 32768) g = 32768;                        // АРУ только усиливает/держит  
+    return (int32_t)(((int64_t)x * g) >> 15);  
+}  
+  
+// Шумовой гейт: env < thr -> gain -> 0 (плавно), иначе -> 1.  
+// Плавные фронты убирают щелчки на границах открытия/закрытия.  
+static int32_t tx_gate(int32_t x) {  
+    if (tx_gate_thr == 0) return x;                  // гейт выключен  
+    uint32_t env = agc_env >> 8;                     // та же огибающая  
+    uint32_t c = (env > tx_gate_thr) ? AF_TX_GATE_ATT_Q24 : AF_TX_GATE_REL_Q24;  
+    uint32_t tgt = (env > tx_gate_thr) ? 65536u : 0u;  
+    gate_gain += (uint32_t)(((int64_t)((int32_t)tgt - (int32_t)gate_gain) * c) >> 24);    
+    if (gate_gain > 65536u) gate_gain = 65536u;  
+    return (int32_t)(((int64_t)x * (int32_t)gate_gain) >> 16);  
+}  
+
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {    
-    y = tx_fir_push(&tx_pre, y);     // речевая полоса    
-    y = tx_compress(y);              // компрессия    
+    y = tx_fir_push(&tx_pre, y);     // речевая полоса      
+    y = tx_agc(y);                   // АРУ: выравнивание уровня к target  
+    y = tx_gate(y);                  // шумовой гейт: паузы -> тишина  
+    y = tx_compress(y);              // компрессия      
     y = tx_clip(y);                  // клиппер + makeup    
     y = tx_fir_push(&tx_post, y);    // срез гармоник клиппинга    
     if (y >  32767) y =  32767;    
@@ -144,7 +179,9 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
 // ---------------------------------------------------------------------------    
 // Управление (Core 0)    
 // ---------------------------------------------------------------------------    
-void af_tx_init(void) {    
+void af_tx_init(void) {
+    agc_env   = 0;  
+    gate_gain = 0;  
     tx_fir_design();    
     memset(&tx_pre,  0, sizeof(tx_pre));    
     memset(&tx_post, 0, sizeof(tx_post));    
@@ -175,3 +212,16 @@ void af_tx_set_clip(uint32_t thr) {
     tx_clip_thr = thr;    
 }    
 uint32_t af_tx_clip(void) { return tx_clip_thr; }
+
+void af_tx_set_agc(uint32_t target) {  
+    if (target < 4096)  target = 4096;  
+    if (target > 32767) target = 32767;  
+    tx_agc_target = target;  
+}  
+uint32_t af_tx_agc(void) { return tx_agc_target; }  
+  
+void af_tx_set_gate(uint32_t thr) {  
+    if (thr > 32767) thr = 32767;  
+    tx_gate_thr = thr;               // 0 = гейт off  
+}  
+uint32_t af_tx_gate(void) { return tx_gate_thr; }  

@@ -83,7 +83,16 @@
 #define AF_TX_CLIP_DEFAULT      26000u  // порог клиппера (~80% шкалы)    
 // EMA огибающей компрессора, Q24: атака ~5 мс, спад ~150 мс @15.464 ksps    
 #define AF_TX_ENV_ATT_Q24       55000u    
-#define AF_TX_ENV_DEC_Q24       1800u    
+#define AF_TX_ENV_DEC_Q24       1800u 
+
+// TX-АРУ с шумовым гейтом (перед компрессором)  
+#define AF_TX_AGC_TARGET        AGC_REF   // целевой уровень = как у RX-АРУ  
+#define AF_TX_AGC_MAX_X10       200u      // макс. усиление 20x (x10)  
+#define AF_TX_AGC_ATT_Q24       55000u    // атака EMA огибающей ~20 мс  
+#define AF_TX_AGC_REL_Q24       1800u     // спад ~600 мс  
+#define AF_TX_GATE_THR          800u      // порог гейта (~-32 дБ от FS)  
+#define AF_TX_GATE_ATT_Q24      200000u   // открытие гейта ~5 мс  
+#define AF_TX_GATE_REL_Q24      4000u     // закрытие ~250 мс  
 
 // Ручное усиление тракта при выключенной АРУ — множитель (1.0 = единичное).  
 // Потолок РРУ отдельный от АРУ: вручную можно выкрутить до ×1000 (+60 дБ)  

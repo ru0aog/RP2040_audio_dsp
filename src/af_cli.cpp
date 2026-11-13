@@ -59,7 +59,9 @@ static void cli_help(void) {
     Serial.println("#   tx on|off         — передающий тракт (PTT: GP8 LOW=TX)");    
     Serial.println("#   txband <lo> <hi>  — речевая полоса TX, Гц (напр. 300 2700)");  
     Serial.println("#   txcomp <x10>      — компрессия x10: 10=1:1, 20=2:1, 40=4:1");  
-    Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");  
+    Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");    
+    Serial.println("#   txagc <0..32767>  — целевой уровень TX-АРУ (0 = АРУ off)");  
+    Serial.println("#   txgate <0..32767> — порог шумового гейта TX (0 = гейт off)");  
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
   
@@ -82,11 +84,13 @@ static void cli_stats(void) {
                   af_dsp_bypass_on() ? "on" : "off",
                   af_dsp_tx_on() ? "on" : "off");
     Serial.printf("# ramp=%s\n", af_dsp_ramp_on() ? "on" : "off");    
-    Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu\n",  
-                  (unsigned long)af_tx_lo_hz(),  
-                  (unsigned long)af_tx_hi_hz(),  
-                  (unsigned long)af_tx_ratio(),  
-                  (unsigned long)af_tx_clip());  
+    Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu  agc=%lu  gate=%lu\n",    
+                  (unsigned long)af_tx_lo_hz(),    
+                  (unsigned long)af_tx_hi_hz(),    
+                  (unsigned long)af_tx_ratio(),    
+                  (unsigned long)af_tx_clip(),  
+                  (unsigned long)af_tx_agc(),  
+                  (unsigned long)af_tx_gate());    
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -389,6 +393,19 @@ static void cli_exec(char* line) {
         if (v == NULL) { Serial.println("# ERR: txclip <0..32767>"); return; }  
         af_tx_set_clip((uint32_t)strtoul(v, NULL, 10));  
         Serial.printf("# OK txclip=%lu\n", (unsigned long)af_tx_clip());  
+    }  
+
+    else if (strcmp(cmd, "txagc") == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v == NULL) { Serial.println("# ERR: txagc <0..32767>"); return; }  
+        af_tx_set_agc((uint32_t)strtoul(v, NULL, 10));  
+        Serial.printf("# OK txagc=%lu\n", (unsigned long)af_tx_agc());  
+    }  
+    else if (strcmp(cmd, "txgate") == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v == NULL) { Serial.println("# ERR: txgate <0..32767>"); return; }  
+        af_tx_set_gate((uint32_t)strtoul(v, NULL, 10));  
+        Serial.printf("# OK txgate=%lu\n", (unsigned long)af_tx_gate());  
     }  
 
     // вставлять сюда  

@@ -20,3 +20,9 @@ uint32_t af_tx_ratio(void);
     
 void     af_tx_set_clip(uint32_t thr);     // порог клиппера 0..32767    
 uint32_t af_tx_clip(void);
+
+void     af_tx_set_agc(uint32_t target);   // целевой уровень АРУ 0..32767  
+uint32_t af_tx_agc(void);  
+  
+void     af_tx_set_gate(uint32_t thr);     // порог гейта 0..32767 (0 = off)  
+uint32_t af_tx_gate(void);  
