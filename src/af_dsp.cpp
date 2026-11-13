@@ -422,9 +422,11 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
         int32_t avg_hi = (int32_t)(AGC_REF / min_g);  
         if (avg < avg_lo) avg = avg_lo;  
         if (avg > avg_hi) avg = avg_hi;  
-        int64_t den = avg;  
-        int k = 63 - __builtin_clzll((uint64_t)den);  
-        y1 = (int32_t)(((int64_t)x * AGC_REF) >> k);  
+        // Точное деление вместо >>k: сдвиг по старшему биту давал  
+        // gain с ошибкой до 2x и СКАЧКИ gain при пересечении avg  
+        // границ степени двойки -> AM-модуляция -> гребёнка палок.  
+        // int64-деление ~100 циклов x 15.5 ksps = ~0.6% Core 1.  
+        y1 = (int32_t)(((int64_t)x * AGC_REF) / avg);  
     } else {  
         // АРУ off: фиксированное ручное усиление, множитель в Q15.  
         y1 = (int32_t)(((int64_t)x * (int64_t)gain_q15) >> 15);
