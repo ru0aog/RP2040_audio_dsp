@@ -56,19 +56,50 @@ static volatile bool    duty_ready[AF_OUT_NUM_BUFFERS];
 static volatile uint8_t duty_sel = 0;    
 static uint8_t          duty_fill = 0;   // следующий буфер для записи
   
-// ---------------------------------------------------------------------------  
-// int16 -> duty с дизерингом ошибки (error feedback)  
-// ---------------------------------------------------------------------------  
-static inline uint16_t __not_in_flash_func(to_duty)(int16_t s, int32_t* err) {  
-    // s: -32768..32767 -> duty: 0..AF_PWM_WRAP  
-    int32_t v = ((int32_t)s + 32768) * (int32_t)AF_PWM_WRAP;  
-    v += *err;                                  // накопленная ошибка  
-    int32_t d = v >> 16;                        // /65536  
-    if (d < 0) d = 0;  
-    if (d > (int32_t)AF_PWM_WRAP) d = AF_PWM_WRAP;  
-    *err = v - (d << 16);                       // остаток — в следующий отсчёт  
-    return (uint16_t)d;  
-}  
+// ---------------------------------------------------------------------------    
+// int16 -> duty: noise shaping 2-го порядка + TPDF-дизер    
+//    
+// Шейпинг: ошибка квантования подаётся назад как 2*e1 - e2 —    
+// спектр шума квантования выталкивается к Fs/2 (~7.7 кГц), где его    
+// давит внешний RC-фильтр. В полосе 0-3 кГц выигрыш ~10-15 дБ    
+// против 1-го порядка.    
+//    
+// TPDF-дизер ±1 LSB шага duty: размачивает предельные циклы шейпинга    
+// (тонкие "свисты" на тихих сигналах) в широкую полку.    
+// ---------------------------------------------------------------------------    
+static uint32_t dither_lfsr = 0xACE1u;          // xorshift32, не 0    
+    
+static inline uint16_t __not_in_flash_func(to_duty)(int16_t s,    
+                                                    int32_t* e1,    
+                                                    int32_t* e2) {    
+    // s: -32768..32767 -> duty: 0..AF_PWM_WRAP    
+    int32_t v = ((int32_t)s + 32768) * (int32_t)AF_PWM_WRAP;    
+    
+    // TPDF: (r1 - r2) в [-65536, +65536) = ±1 LSB шага квантования    
+    dither_lfsr ^= dither_lfsr << 13;    
+    dither_lfsr ^= dither_lfsr >> 17;    
+    dither_lfsr ^= dither_lfsr << 5;    
+    int32_t r1 = (int32_t)(dither_lfsr & 0xFFFF);    
+    dither_lfsr ^= dither_lfsr << 13;    
+    dither_lfsr ^= dither_lfsr >> 17;    
+    dither_lfsr ^= dither_lfsr << 5;    
+    int32_t r2 = (int32_t)(dither_lfsr & 0xFFFF);    
+    v += (r1 - r2);    
+    
+    v += 2 * (*e1) - (*e2);                     // обратная связь 2-го порядка    
+    int32_t d = v >> 16;                        // /65536    
+    if (d < 0) d = 0;    
+    if (d > (int32_t)AF_PWM_WRAP) d = AF_PWM_WRAP;    
+    *e2 = *e1;      
+    int32_t e = v - (d << 16);                  // остаток — в следующие отсчёты      
+    // При клиппинге d (0/WRAP) ошибка растёт неограниченно и после      
+    // клипа выстреливает обратно — "выхлоп". Ограничиваем ±2 LSB:      
+    // шейпинг сохраняется, накопление на перегрузке — нет.      
+    if (e >  131072) e =  131072;      
+    if (e < -131072) e = -131072;      
+    *e1 = e;      
+    return (uint16_t)d;      
+}    
   
 // ---------------------------------------------------------------------------  
 // DMA IRQ: блок доиграл — переключаемся на следующий готовый буфер  
@@ -158,8 +189,8 @@ void af_pwm_init(void) {
 // ---------------------------------------------------------------------------  
 // Poll (Core 0): заполнение свободных duty-буферов + отложенный старт DMA  
 // ---------------------------------------------------------------------------  
-void __not_in_flash_func(af_pwm_poll)(void) {  
-    static int32_t dither_err = 0;  
+void __not_in_flash_func(af_pwm_poll)(void) {    
+    static int32_t dither_e1 = 0, dither_e2 = 0;    
   
     if (!pwm_enabled) {  
         // Выход выключен: выкидываем готовые блоки, чтобы очередь  
@@ -176,8 +207,8 @@ void __not_in_flash_func(af_pwm_poll)(void) {
         const volatile int16_t* blk = af_dsp_out_get_pwm();  
         if (blk == NULL) break;  
   
-        for (uint32_t i = 0; i < AF_OUT_BLOCK_SAMPLES; i++)  
-            duty_buf[duty_fill][i] = to_duty(blk[i], &dither_err);  
+        for (uint32_t i = 0; i < AF_OUT_BLOCK_SAMPLES; i++)    
+            duty_buf[duty_fill][i] = to_duty(blk[i], &dither_e1, &dither_e2);    
   
         __dmb();    
         duty_ready[duty_fill] = true;    
