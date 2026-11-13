@@ -689,11 +689,15 @@ uint32_t af_dsp_cw_noise(void) { return cw_noise; }
 bool af_dsp_notch_on(void) { return notch_on; }  
 bool af_dsp_nr_on(void)    { return nr_on; }
 
-void af_dsp_set_tx(bool on) {  
-    if (tx_on == on) return;  
-    tx_on = on;  
-    // ЭТАП 1: только флаг. Переключение канала ADC и цепочки — этапы 2–3.  
-}  
+void af_dsp_set_tx(bool on) {    
+    if (tx_on == on) return;    
+    tx_on = on;    
+    // ЭТАП 2: переключение входа ADC — RX: GP26/ADC0, TX: GP27/ADC1.    
+    // Пауза ~10 мкс + дренаж FIFO внутри af_capture_set_channel.    
+    af_capture_set_channel(on ? AF_TX_ADC_CH : AF_RX_ADC_CH);    
+    // Сброс DC-EMA не нужен: dc_est — static в af_dsp_poll,    
+    // переоценится за ~256 отсчётов (~0.5 мс) — один щелчок, неслышно.    
+}
   
 bool af_dsp_tx_on(void) { return tx_on; }  
   

@@ -267,10 +267,12 @@ void af_capture_start(void) {
                   (unsigned long)clk_adc_hz,  
                   (unsigned long)clock_get_hz(clk_sys));  
   
-    // ADC: один вход GP26 (ADC0), без round-robin.  
-    adc_init();  
-    adc_gpio_init(AF_ADC_PIN);  
-    adc_select_input(AF_ADC_PIN - 26);      // GP26 -> input 0  
+    // ADC: два входа — GP26 (ADC0, RX) и GP27 (ADC1, TX), без round-robin.    
+    // Активный канал выбирается af_capture_set_channel().    
+    adc_init();    
+    adc_gpio_init(AF_ADC_PIN);    
+    adc_gpio_init(AF_TX_ADC_PIN);    
+    adc_select_input(AF_ADC_PIN - 26);      // GP26 -> input 0 (RX по умолчанию)    
     adc_fifo_setup(true, true, 1, false, false);  
     // DIV задаёт период выборки как (DIV+1) тактов clk_adc — off-by-one      
     // в регистре. Преобразование занимает 96 тактов: период < 96      
@@ -371,7 +373,20 @@ void af_capture_stop(void) {
     if (af_dma_a >= 0) { dma_channel_unclaim(af_dma_a); af_dma_a = -1; }  
     if (af_dma_b >= 0) { dma_channel_unclaim(af_dma_b); af_dma_b = -1; }  
 }  
-  
+
+// ---------------------------------------------------------------------------    
+// Переключение входного канала ADC (0=GP26/RX, 1=GP27/TX).    
+// Пауза adc_run + дренаж FIFO: DMA-цепочка продолжает ждать DREQ,    
+// разрыв потока ~мкс–мс — допустимо для PTT. Вызывать при смене RX/TX.    
+// ---------------------------------------------------------------------------    
+void af_capture_set_channel(uint8_t adc_input) {    
+    if (!af_running) return;    
+    adc_run(false);    
+    adc_fifo_drain();    
+    adc_select_input(adc_input & 1u);    
+    adc_run(true);    
+}    
+
 // ---------------------------------------------------------------------------  
 // API очереди — ТОЛЬКО Core 1 (из af_dsp_poll)  
 // ---------------------------------------------------------------------------  

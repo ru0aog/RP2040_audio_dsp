@@ -27,7 +27,12 @@ void af_capture_release(void);
 // Счётчик потерянных блоков (очередь полна / scratch / busy).  
 uint32_t af_capture_dropped(void);  
   
-bool af_capture_is_running(void);  
+bool af_capture_is_running(void);
+
+// Переключение входного канала ADC: 0 = GP26 (RX), 1 = GP27 (TX).  
+// Короткая пауза захвата (~мкс): adc_run off -> drain -> select -> run.  
+// Вызывать при смене RX/TX; DMA-цепочка не останавливается.  
+void af_capture_set_channel(uint8_t adc_input);  
   
 // Диагностика (extern, читается из CLI/статистики).  
 extern volatile uint32_t af_cap_isr_count;    // входов в DMA IRQ  
