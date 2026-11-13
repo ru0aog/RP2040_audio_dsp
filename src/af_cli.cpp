@@ -32,7 +32,8 @@
 #include "af_store.h"
 #include "af_led.h"
 #include "af_voice.h"     // подмес голосовых клипов в выход
-  
+#include "af_tx.h"        // TX-тракт: полоса/компрессия/клиппер  
+
 // ---------------------------------------------------------------------------  
 // Справка  
 // ---------------------------------------------------------------------------  
@@ -55,7 +56,10 @@ static void cli_help(void) {
     Serial.println("#   gain <0..8>       — ручное усиление при agc off, множитель (1.0 = единичное)");
     Serial.println("#   bypass on|off     — обход: выход = вход");  
     Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест целостности потока)");
-    Serial.println("#   tx on|off         — передающий тракт (PTT: GP8 LOW=TX)");  
+    Serial.println("#   tx on|off         — передающий тракт (PTT: GP8 LOW=TX)");    
+    Serial.println("#   txband <lo> <hi>  — речевая полоса TX, Гц (напр. 300 2700)");  
+    Serial.println("#   txcomp <x10>      — компрессия x10: 10=1:1, 20=2:1, 40=4:1");  
+    Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");  
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
   
@@ -77,7 +81,12 @@ static void cli_stats(void) {
                   (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),
                   af_dsp_bypass_on() ? "on" : "off",
                   af_dsp_tx_on() ? "on" : "off");
-    Serial.printf("# ramp=%s\n", af_dsp_ramp_on() ? "on" : "off");  
+    Serial.printf("# ramp=%s\n", af_dsp_ramp_on() ? "on" : "off");    
+    Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu\n",  
+                  (unsigned long)af_tx_lo_hz(),  
+                  (unsigned long)af_tx_hi_hz(),  
+                  (unsigned long)af_tx_ratio(),  
+                  (unsigned long)af_tx_clip());  
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -354,6 +363,32 @@ static void cli_exec(char* line) {
         if (a && strcmp(a, "on") == 0)       { af_dsp_set_tx(true);  Serial.println("# OK tx=on"); }  
         else if (a && strcmp(a, "off") == 0) { af_dsp_set_tx(false); Serial.println("# OK tx=off"); }  
         else Serial.println("# ERR: tx on|off");  
+    }  
+
+    else if (strcmp(cmd, "txband") == 0) {  
+        char* s_lo = strtok(NULL, " \t");  
+        char* s_hi = strtok(NULL, " \t");  
+        if (s_lo == NULL || s_hi == NULL) {  
+            Serial.println("# ERR: txband <lo> <hi>");  
+            return;  
+        }  
+        af_tx_set_band((uint32_t)strtoul(s_lo, NULL, 10),  
+                       (uint32_t)strtoul(s_hi, NULL, 10));  
+        Serial.printf("# OK txband=%lu..%lu Hz\n",  
+                      (unsigned long)af_tx_lo_hz(),  
+                      (unsigned long)af_tx_hi_hz());  
+    }  
+    else if (strcmp(cmd, "txcomp") == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v == NULL) { Serial.println("# ERR: txcomp <x10>"); return; }  
+        af_tx_set_ratio((uint32_t)strtoul(v, NULL, 10));  
+        Serial.printf("# OK txcomp=%lu\n", (unsigned long)af_tx_ratio());  
+    }  
+    else if (strcmp(cmd, "txclip") == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v == NULL) { Serial.println("# ERR: txclip <0..32767>"); return; }  
+        af_tx_set_clip((uint32_t)strtoul(v, NULL, 10));  
+        Serial.printf("# OK txclip=%lu\n", (unsigned long)af_tx_clip());  
     }  
 
     // вставлять сюда  
