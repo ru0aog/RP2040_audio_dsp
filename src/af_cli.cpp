@@ -51,11 +51,12 @@ static void cli_help(void) {
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");  
     Serial.println("#   banks             — показать все ячейки");
     Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)");
-    Serial.println("#   agc on|off       — АРУ (off -> ручное усиление, лимитер остаётся)");
-    Serial.println("#   gain <0..8>      — ручное усиление при agc off, множитель (1.0 = единичное)");
-    Serial.println("#   bypass on|off    — обход: выход = вход");  
-    Serial.println("#   ramp on|off      — пила-счётчик вместо DSP (тест целостности потока)");  
-    Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT (LOW=on)");  
+    Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");
+    Serial.println("#   gain <0..8>       — ручное усиление при agc off, множитель (1.0 = единичное)");
+    Serial.println("#   bypass on|off     — обход: выход = вход");  
+    Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест целостности потока)");
+    Serial.println("#   tx on|off         — передающий тракт (PTT: GP8 LOW=TX)");  
+    Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
   
 // ---------------------------------------------------------------------------  
@@ -63,7 +64,7 @@ static void cli_help(void) {
 // ---------------------------------------------------------------------------  
 static void cli_stats(void) {  
     uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);  
-    Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu.%02lu  bypass=%s\n",
+        Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu.%02lu  bypass=%s  tx=%s\n",
                   (unsigned long)af_dsp_band_lo_hz(),  
                   (unsigned long)af_dsp_band_hi_hz(),
                   af_dsp_notch_on() ? "on" : "off",  
@@ -73,8 +74,9 @@ static void cli_stats(void) {
                   (unsigned long)af_dsp_cw_bw(),  
                   (unsigned long)af_dsp_cw_noise(),
                   af_dsp_agc_on() ? "on" : "off",  
-                  (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),  
-                  af_dsp_bypass_on() ? "on" : "off");  
+                  (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),
+                  af_dsp_bypass_on() ? "on" : "off",
+                  af_dsp_tx_on() ? "on" : "off");
     Serial.printf("# ramp=%s\n", af_dsp_ramp_on() ? "on" : "off");  
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
@@ -346,7 +348,14 @@ static void cli_exec(char* line) {
         }  
         else Serial.println("# ERR: ramp on|off");  
     }  
-  
+
+    else if (strcmp(cmd, "tx") == 0) {  
+        char* a = strtok(NULL, " \t");  
+        if (a && strcmp(a, "on") == 0)       { af_dsp_set_tx(true);  Serial.println("# OK tx=on"); }  
+        else if (a && strcmp(a, "off") == 0) { af_dsp_set_tx(false); Serial.println("# OK tx=off"); }  
+        else Serial.println("# ERR: tx on|off");  
+    }  
+
     // вставлять сюда  
   
     else {    

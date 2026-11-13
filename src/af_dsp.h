@@ -80,4 +80,10 @@ uint32_t af_dsp_out_published_pwm(void);
 uint8_t  af_dsp_out_fill_max_usb(void);    
 uint8_t  af_dsp_out_fill_max_pwm(void);
 void af_dsp_set_ramp(bool on);  
-bool af_dsp_ramp_on(void);  
+bool af_dsp_ramp_on(void);
+
+// Режим тракта: false = RX (приём), true = TX (передача).  
+// Переключается по GP8 (PTT) или командой "tx on|off".  
+void af_dsp_set_tx(bool on);  
+bool af_dsp_tx_on(void);  
+

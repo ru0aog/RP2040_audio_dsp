@@ -11,6 +11,8 @@
 // Захват: ADC + DMA
 // ---------------------------------------------------------------------------
 #define AF_ADC_PIN              26          // GP26 = ADC0, вход НЧ-сигнала
+#define AF_TX_ADC_PIN           27          // GP27 = ADC1, вход микрофона TX  
+#define AF_TX_PWM_PIN           1           // GP1 — выход TX (модуляция), через RC  
 // Фактическая частота: adc_set_clkdiv(DIV) задаёт период DIV+1 тактов    
 // clk_adc. При clk_adc=48 МГц и DIV=96 период = 97 тактов → 494845 Гц.    
 // Ровно 500 кс/с недостижимо: преобразование занимает 96 тактов,    
@@ -147,7 +149,8 @@
 // Выключатели фильтров: LOW = фильтр включён.  
 #define AF_PIN_NR               5           // GP5 — LOW -> NR on  
 #define AF_PIN_NT               6           // GP6 — LOW -> NT on  
-#define AF_PIN_BYPASS           7           // GP7 — LOW -> bypass (выход = вход)  
+#define AF_PIN_BYPASS           7           // GP7 — LOW -> bypass (выход = вход)
+#define AF_PIN_PTT              8           // GP8 — LOW -> TX (передача), open -> RX  
 
 #define AF_BANK_COUNT           7           // ячеек настроек во flash
   

@@ -29,6 +29,7 @@ static gpio_ctl_t ctl_bank[3];   // GP2,GP3,GP4 — биты 0,1,2
 static gpio_ctl_t ctl_nr;        // GP5  
 static gpio_ctl_t ctl_nt;        // GP6
 static gpio_ctl_t ctl_bypass;    // GP7
+static gpio_ctl_t ctl_ptt;       // GP8 — LOW -> TX  
   
 static uint32_t t_next_poll = 0;  
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7  
@@ -61,6 +62,13 @@ static void apply_bypass(bool grounded) {
                   grounded ? "on" : "off");    
     if (grounded) af_voice_play(VOICE_BYPASS_ON);   // "режим обхода включен"  
 }
+
+static void apply_ptt(bool grounded) {  
+    af_dsp_set_tx(grounded);  
+    Serial.printf("[GPIO] GP%u %s -> tx=%s\n",  
+                  ctl_ptt.pin, grounded ? "GND" : "open",  
+                  grounded ? "on" : "off");  
+}  
   
 static void apply_bank(uint8_t code) {  
     bank_code = code;  
@@ -94,7 +102,8 @@ static void poll_pin(gpio_ctl_t* c) {
                 c->stable = raw;  
                 if (c == &ctl_nr)          apply_nr(raw);  
                 else if (c == &ctl_nt)     apply_nt(raw);  
-                else if (c == &ctl_bypass) apply_bypass(raw);  
+                else if (c == &ctl_bypass) apply_bypass(raw);
+                else if (c == &ctl_ptt)    apply_ptt(raw);  
                 else {  // банковый пин — пересчитать код и применить  
                     uint8_t code = 0;  
                     for (int i = 0; i < 3; i++)  
@@ -116,7 +125,10 @@ void af_gpio_ctl_init(void) {
     ctl_bank[2] = { AF_PIN_BANK2, false, false, 0 };  
     ctl_nr      = { AF_PIN_NR,    false, false, 0 };  
     ctl_nt      = { AF_PIN_NT,    false, false, 0 };
-    ctl_bypass  = { AF_PIN_BYPASS, false, false, 0 };  
+    ctl_bypass  = { AF_PIN_BYPASS, false, false, 0 };
+    ctl_ptt     = { AF_PIN_PTT,   false, false, 0 };  
+    pinMode(ctl_ptt.pin, INPUT_PULLUP);  
+    ctl_ptt.stable = ctl_ptt.last_raw = (digitalRead(ctl_ptt.pin) == LOW);  
     pinMode(ctl_bypass.pin, INPUT_PULLUP);  
     ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);  
   
@@ -140,6 +152,7 @@ void af_gpio_ctl_init(void) {
     ctl_nr.stable     = ctl_nr.last_raw     = (digitalRead(ctl_nr.pin) == LOW);  
     ctl_nt.stable     = ctl_nt.last_raw     = (digitalRead(ctl_nt.pin) == LOW);  
     ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);
+    ctl_ptt.stable    = ctl_ptt.last_raw    = (digitalRead(ctl_ptt.pin) == LOW);  
     
     // Прогон дебаунса: stable отразит установившиеся уровни,  
     // а не переходку при старте (медленный подъём pull-up, дребезг).  
@@ -147,21 +160,23 @@ void af_gpio_ctl_init(void) {
         for (int i = 0; i < 3; i++) poll_pin(&ctl_bank[i]);  
         poll_pin(&ctl_nr);  
         poll_pin(&ctl_nt);  
-        poll_pin(&ctl_bypass);  
+        poll_pin(&ctl_bypass);
+        poll_pin(&ctl_ptt);
         delay(AF_GPIO_POLL_MS);  
     }  
   
     // Теперь читаем реальное состояние пинов и применяем.  
     apply_nt(ctl_nt.stable);  
     apply_nr(ctl_nr.stable);  
-    apply_bypass(ctl_bypass.stable);  
+    apply_bypass(ctl_bypass.stable);
+    apply_ptt(ctl_ptt.stable);
     uint8_t code = 0;  
     for (int i = 0; i < 3; i++)  
         if (ctl_bank[i].stable) code |= (1 << i);  
     apply_bank(code);
   
-    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u (LOW=1/on)\n",  
-                  AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS);
+    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u ptt=GP%u (LOW=1/on)\n",  
+                  AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS, AF_PIN_PTT);  
   
     t_next_poll = millis() + AF_GPIO_POLL_MS;  
 }  
@@ -175,4 +190,5 @@ void af_gpio_ctl_poll(void) {
     poll_pin(&ctl_nr);  
     poll_pin(&ctl_nt);
     poll_pin(&ctl_bypass);
+    poll_pin(&ctl_ptt);
 }

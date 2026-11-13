@@ -394,6 +394,8 @@ static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера,
 static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)  
 static volatile uint32_t gain_q15  = 32768;   // ручное усиление, Q15 (32768 = ×1.0)
 static volatile bool     bypass_on = false;   // обход всего тракта
+
+static volatile bool tx_on = false;   // false=RX, true=TX (PTT GP8 / "tx on")  
   
 static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {  
     // --- Контур A: медленное среднее |x| ---  
@@ -685,7 +687,15 @@ uint32_t af_dsp_cw_freq(void)  { return cw_f0; }
 uint32_t af_dsp_cw_bw(void)    { return cw_bw; }  
 uint32_t af_dsp_cw_noise(void) { return cw_noise; }  
 bool af_dsp_notch_on(void) { return notch_on; }  
-bool af_dsp_nr_on(void)    { return nr_on; }  
+bool af_dsp_nr_on(void)    { return nr_on; }
+
+void af_dsp_set_tx(bool on) {  
+    if (tx_on == on) return;  
+    tx_on = on;  
+    // ЭТАП 1: только флаг. Переключение канала ADC и цепочки — этапы 2–3.  
+}  
+  
+bool af_dsp_tx_on(void) { return tx_on; }  
   
 // ---------------------------------------------------------------------------  
 // Инициализация (Core 0, до af_capture_start)  
