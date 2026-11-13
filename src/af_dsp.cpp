@@ -19,6 +19,7 @@
 #include "af_capture.h"
 #include "af_store.h"
 #include "af_voice.h"     // подмес голосовых клипов в выход
+#include "af_tx.h"        // передающий тракт SSB    
   
 // ---------------------------------------------------------------------------  
 // Half-band дециматоры — коэффициенты 1:1 из rx_dsp.cpp приёмника  
@@ -721,7 +722,8 @@ void af_dsp_init(void) {
     cic_cnt = 0;  
   
     af_fir_init();  
-    cw_design();          // начальные коэффициенты CW-секций  
+    cw_design();          // начальные коэффициенты CW-секций
+    af_tx_init();         // TX: FIR-компрессор-клиппер    
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
     memset(&out_usb, 0, sizeof(out_usb));    
@@ -792,8 +794,14 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 //out_emit(sat16(y));      
                 continue;      
             }      
-            y = af_fir_push(y);    
-            if (cw_on) {
+            if (tx_on) {    
+                // TX-тракт: FIR -> компрессор -> клиппер -> постфильтр.    
+                // RX-цепочка (FIR/CW/NT/NR/AGC) в TX не работает.    
+                out_emit(af_tx_process(y));    
+                continue;    
+            }    
+            y = af_fir_push(y);      
+            if (cw_on) {    
                 // Добавка шума: LFSR xorshift32, уровень из `cw noise`.  
                 // Фильтр всегда возбуждён — не звенит на тишине;  
                 // сигнал проходит без порогов (сквелча нет).  
