@@ -21,6 +21,10 @@ void af_pwm_poll(void);
 void af_pwm_set_enabled(bool on);  
 bool af_pwm_is_enabled(void);
 
+// Переключение выходного пина: false -> GP0 (RX), true -> GP1 (TX).    
+// Оба пина на slice0: GP0=chA, GP1=chB. Неактивный пин в SIO low.    
+void af_pwm_set_tx_pin(bool tx);    
+
 // Диагностика.  
 uint32_t af_pwm_underruns(void);   // DMA дошёл до конца, а новый блок не готов  
 bool     af_pwm_is_running(void);

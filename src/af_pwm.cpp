@@ -10,8 +10,10 @@
 //   - Кольцо из 4 буферов по AF_OUT_BLOCK_SAMPLES duty-значений;  
 //     по завершении блока DMA_IRQ_1 переключает канал на следующий  
 //     готовый буфер (4 буфера = ~64 мс slack при 15.625 ksps).  
-//   - af_pwm_poll() (Core 0) забирает int16-блоки из af_dsp_out_get_pwm(),  
-//     конвертирует int16 -> duty и заполняет свободные буферы кольца.  
+//   - af_pwm_poll() (Core 0) забирает int16-блоки из af_dsp_out_get_pwm(),    
+//     конвертирует int16 -> duty и заполняет свободные буферы кольца.    
+//   - af_pwm_set_tx_pin(): RX -> выход на GP0 (slice0 chA),    
+//     TX -> выход на GP1 (slice0 chB, тот же слайс — DMA пишет в cc+2).    
 //   - DMA стартует отложенно: только когда заполнены >=2 duty-буфера —  
 //     убирает фазовую гонку «IRQ раньше заполнения» (underruns каждый блок).  
 //  
@@ -270,6 +272,34 @@ void af_pwm_set_enabled(bool on) {
 }  
   
 bool af_pwm_is_enabled(void) { return pwm_enabled; }
+
+// ---------------------------------------------------------------------------    
+// Переключение выходного пина RX<->TX (вызывается из af_dsp_set_tx)    
+//    
+// GP0 = slice0 chA, GP1 = slice0 chB — один слайс, общие wrap/clkdiv.    
+// DMA пишет uint16 в cc: chA = &cc, chB = &cc + 1 (старшие 16 бит).    
+// Неактивный пин переводится в SIO low — несущей на нём нет.    
+// ---------------------------------------------------------------------------    
+void af_pwm_set_tx_pin(bool tx) {    
+    uint8_t rx_pin = AF_PWM_PIN;        // GP0    
+    uint8_t tx_pin = AF_TX_PWM_PIN;     // GP1    
+    uint8_t active = tx ? tx_pin : rx_pin;    
+    uint8_t idle   = tx ? rx_pin : tx_pin;    
+    
+    // Неактивный пин — в SIO low (несущая заглушена).    
+    gpio_set_function(idle, GPIO_FUNC_SIO);    
+    gpio_set_dir(idle, GPIO_OUT);    
+    gpio_put(idle, 0);    
+    
+    // Активный пин — к PWM-слайсу.    
+    gpio_set_function(active, GPIO_FUNC_PWM);    
+    
+    // DMA: запись в младшую (chA) или старшую (chB) половину cc.    
+    volatile uint16_t* cc16 =    
+        (volatile uint16_t*)&pwm_hw->slice[pwm_slice].cc;    
+    dma_channel_set_write_addr(pwm_dma_ch,    
+        tx ? (cc16 + 1) : cc16, false);    
+}    
   
 // ---------------------------------------------------------------------------  
 // Диагностика  

@@ -6,6 +6,9 @@
 // -> HB /2 (15.625 ksps) -> полосовой FIR 127 (симметричный) -> CW-биквады ->  
 // автонотч NT (NLMS) -> шумоподавление NR (LMS ALE) -> АРУ+лимитер ->  
 // две SPSC-очереди int16-блоков (PWM и USB).  
+//
+// TX-тракт (tx_on): тот же дециматор -> af_tx_process (FIR-компрессор-  
+// клиппер-постфильтр) -> те же очереди; выход PWM переключается GP0->GP1.  
 //  
 // Порт src/dsp/rx_dsp.cpp и src/audio/rx_audio.cpp из RP2040_receiver.  
 // Коэффициенты HB и константы NT/NR/AGC — 1:1 из приёмника.  
@@ -20,6 +23,7 @@
 #include "af_store.h"
 #include "af_voice.h"     // подмес голосовых клипов в выход
 #include "af_tx.h"        // передающий тракт SSB    
+#include "af_pwm.h"       // af_pwm_set_tx_pin — выход GP0(RX)/GP1(TX) 
   
 // ---------------------------------------------------------------------------  
 // Half-band дециматоры — коэффициенты 1:1 из rx_dsp.cpp приёмника  
@@ -690,15 +694,19 @@ uint32_t af_dsp_cw_noise(void) { return cw_noise; }
 bool af_dsp_notch_on(void) { return notch_on; }  
 bool af_dsp_nr_on(void)    { return nr_on; }
 
-void af_dsp_set_tx(bool on) {    
-    if (tx_on == on) return;    
-    tx_on = on;    
-    // ЭТАП 2: переключение входа ADC — RX: GP26/ADC0, TX: GP27/ADC1.    
-    // Пауза ~10 мкс + дренаж FIFO внутри af_capture_set_channel.    
-    af_capture_set_channel(on ? AF_TX_ADC_CH : AF_RX_ADC_CH);    
-    // Сброс DC-EMA не нужен: dc_est — static в af_dsp_poll,    
-    // переоценится за ~256 отсчётов (~0.5 мс) — один щелчок, неслышно.    
-}
+void af_dsp_set_tx(bool on) {      
+    if (tx_on == on) return;      
+    tx_on = on;      
+    // ЭТАП 2: переключение входа ADC — RX: GP26/ADC0, TX: GP27/ADC1.      
+    // Пауза ~10 мкс + дренаж FIFO внутри af_capture_set_channel.      
+    af_capture_set_channel(on ? AF_TX_ADC_CH : AF_RX_ADC_CH);      
+    // ЭТАП 4: переключение выхода PWM — RX: GP0 (chan A), TX: GP1 (chan B).      
+    // Оба пина на одном слайсе 0: меняется только адрес записи DMA      
+    // (cc low half = A, cc high half = B) и SIO/PWM-функция пинов.      
+    af_pwm_set_tx_pin(on);      
+    // Сброс DC-EMA не нужен: dc_est — static в af_dsp_poll,      
+    // переоценится за ~256 отсчётов (~0.5 мс) — один щелчок, неслышно.      
+}  
   
 bool af_dsp_tx_on(void) { return tx_on; }  
   
