@@ -5,15 +5,17 @@
 // Схема:  
 //   - PWM-слайс на AF_PWM_PIN, wrap = AF_PWM_WRAP, clkdiv подобран так,  
 //     чтобы несущая была ~125 кГц (clk_sys / (wrap+1) / div).  
-//   - DMA-канал пишет duty-значения (uint16) в pwm_hw->slice[n].cc,  
-//     темп выдачи — pacing-таймер DMA на AF_FS_OUT_HZ.  
-//   - Кольцо из 4 буферов по AF_OUT_BLOCK_SAMPLES duty-значений;  
-//     по завершении блока DMA_IRQ_1 переключает канал на следующий  
-//     готовый буфер (4 буфера = ~64 мс slack при 15.625 ksps).  
-//   - af_pwm_poll() (Core 0) забирает int16-блоки из af_dsp_out_get_pwm(),  
-//     конвертирует int16 -> duty и заполняет свободные буферы кольца.  
-//   - DMA стартует отложенно: только когда заполнены >=2 duty-буфера —  
-//     убирает фазовую гонку «IRQ раньше заполнения» (underruns каждый блок).  
+//   - DMA-канал пишет duty-значения (uint16) в pwm_hw->slice[n].cc,    
+//     темп выдачи — pacing-таймер DMA на AF_PWM_FS_HZ (~61.9 кГц).    
+//   - Кольцо из 4 буферов по AF_PWM_BLOCK_SAMPLES duty-значений;    
+//     по завершении блока DMA_IRQ_1 переключает канал на следующий    
+//     готовый буфер (4 буфера = ~16 мс slack при 61.856 ksps).    
+//   - af_pwm_poll() (Core 0) забирает int16-блоки 64 отсчёта @15.464 кс/с    
+//     из af_dsp_out_get_pwm(), интерполирует ×4 -> 256 duty @61.856 кс/с    
+//     (линейная интерполяция + шейпинг 2-го порядка + TPDF-дизер)    
+//     и заполняет свободные буферы кольца.    
+//   - DMA стартует отложенно: только когда заполнены >=14 duty-буферов    
+//     (~58 мс подушки) — убирает фазовую гонку «IRQ раньше заполнения».    
 //  
 // Порт src/audio/pwm_audio.cpp из RP2040_receiver.  
 // ============================================================================  
@@ -35,6 +37,9 @@ static int      pwm_dma_ch    = -1;
 static uint     pwm_slice     = 0;  
 static uint     pwm_chan      = 0;  
 static uint     pwm_dma_timer = 0;
+static uint32_t pwm_pace_den  = 0;   // базовый делитель pacing-таймера  
+static uint32_t pwm_pace_frac = 0;   // дробная часть делителя (такты на период Fs)  
+static uint32_t pwm_pace_acc  = 0;   // накопитель дробной части  
 
 static volatile bool     pwm_running   = false;    
 static volatile uint32_t pwm_underruns = 0;    
@@ -51,7 +56,7 @@ static volatile uint32_t pwm_ur_t[8];
 static volatile uint8_t  pwm_ur_idx = 0;  
   
 // Кольцо duty-буферов: DMA играет duty_sel, poll заполняет свободные.    
-static uint16_t duty_buf[AF_OUT_NUM_BUFFERS][AF_OUT_BLOCK_SAMPLES];    
+static uint16_t duty_buf[AF_OUT_NUM_BUFFERS][AF_PWM_BLOCK_SAMPLES];
 static volatile bool    duty_ready[AF_OUT_NUM_BUFFERS];    
 static volatile uint8_t duty_sel = 0;    
 static uint8_t          duty_fill = 0;   // следующий буфер для записи
@@ -59,10 +64,10 @@ static uint8_t          duty_fill = 0;   // следующий буфер для
 // ---------------------------------------------------------------------------    
 // int16 -> duty: noise shaping 2-го порядка + TPDF-дизер    
 //    
-// Шейпинг: ошибка квантования подаётся назад как 2*e1 - e2 —    
-// спектр шума квантования выталкивается к Fs/2 (~7.7 кГц), где его    
-// давит внешний RC-фильтр. В полосе 0-3 кГц выигрыш ~10-15 дБ    
-// против 1-го порядка.    
+// Шейпинг: ошибка квантования подаётся назад как 2*e1 - e2 —      
+// спектр шума квантования выталкивается к Fs/2 (~31 кГц при      
+// AF_PWM_FS_HZ=61.856 кГц), где его давит внешний RC-фильтр.      
+// В полосе 0-3 кГц выигрыш ~25-30 дБ против 1-го порядка @15.5 кс/с.      
 //    
 // TPDF-дизер ±1 LSB шага duty: размачивает предельные циклы шейпинга    
 // (тонкие "свисты" на тихих сигналах) в широкую полку.    
@@ -127,8 +132,8 @@ static void __not_in_flash_func(af_pwm_dma_irq)(void) {
     }   
   
     // Перезапуск канала на выбранный буфер (или повтор старого при underrun).    
-    dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);    
-    dma_channel_set_trans_count(pwm_dma_ch, AF_OUT_BLOCK_SAMPLES, true);
+    dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);      
+    dma_channel_set_trans_count(pwm_dma_ch, AF_PWM_BLOCK_SAMPLES, true);  
 }  
   
 // ---------------------------------------------------------------------------  
@@ -158,25 +163,29 @@ void af_pwm_init(void) {
     channel_config_set_read_increment(&c, true);  
     channel_config_set_write_increment(&c, false);  
   
-    // Pacing-таймер DMA на AF_FS_OUT_HZ.  
-    pwm_dma_timer = dma_claim_unused_timer(true);  
-    uint32_t f_sys = clock_get_hz(clk_sys);  
-    uint32_t den = 0;  
-    if (f_sys % AF_FS_OUT_HZ == 0) {  
-        den = f_sys / AF_FS_OUT_HZ;             // точный делитель  
-    } else {  
-        den = (f_sys + AF_FS_OUT_HZ / 2) / AF_FS_OUT_HZ;  
-        if (den > 0xFFFF) den = 0xFFFF;  
-    }  
-    dma_timer_set_fraction(pwm_dma_timer, 1, (uint16_t)den);  
+    // Pacing-таймер DMA на AF_PWM_FS_HZ (~61.856 кГц = 4 x AF_FS_OUT_HZ).      
+    // Точный делитель 250e6/61856 = 4041.3 — не целый. Округление до 4041      
+    // даёт 61865.6 Гц: DMA жрёт на 9.6 Гц быстрее производства -> underrun      
+    // каждые ~26 с. Решение: чередуем den 4041/4042 с шагом 0.3 — средний      
+    // темп совпадает с производством, дрейфа нет.      
+    pwm_dma_timer = dma_claim_unused_timer(true);      
+    uint32_t f_sys = clock_get_hz(clk_sys);      
+    uint32_t den = f_sys / AF_PWM_FS_HZ;        // 4041      
+    if (den > 0xFFFE) den = 0xFFFE;             // нужен запас +1 для чередования      
+    dma_timer_set_fraction(pwm_dma_timer, 1, (uint16_t)den);    
+    // Дробная часть делителя: frac = f_sys - den*AF_PWM_FS_HZ (в единицах      
+    // AF_PWM_FS_HZ). Накопитель: каждые AF_PWM_FS_HZ тиков добавляем frac      
+    // лишних тактов — реализуем в af_pwm_poll счётчиком блоков.      
+    pwm_pace_frac = f_sys - den * (uint32_t)AF_PWM_FS_HZ;  // ~0.3*Fs в тактах      
+    pwm_pace_den  = den;    
     channel_config_set_dreq(&c, dma_get_timer_dreq(pwm_dma_timer));  
   
     dma_channel_configure(  
         pwm_dma_ch, &c,  
         &pwm_hw->slice[pwm_slice].cc,           // запись в CC (канал A/B по сдвигу)  
-        duty_buf[0],  
-        AF_OUT_BLOCK_SAMPLES,  
-        false);                                 // НЕ запускаем — ждём данных  
+        duty_buf[0],    
+        AF_PWM_BLOCK_SAMPLES,    
+        false);                                 // НЕ запускаем — ждём данных    
   
     dma_channel_set_irq1_enabled(pwm_dma_ch, true);  
     irq_set_exclusive_handler(DMA_IRQ_1, af_pwm_dma_irq);  
@@ -189,31 +198,46 @@ void af_pwm_init(void) {
 // ---------------------------------------------------------------------------  
 // Poll (Core 0): заполнение свободных duty-буферов + отложенный старт DMA  
 // ---------------------------------------------------------------------------  
-void __not_in_flash_func(af_pwm_poll)(void) {    
-    static int32_t dither_e1 = 0, dither_e2 = 0;    
-  
-    if (!pwm_enabled) {  
-        // Выход выключен: выкидываем готовые блоки, чтобы очередь  
-        // af_dsp не забилась (out_dropped не росла).  
-        while (af_dsp_out_get_pwm() != NULL) af_dsp_out_release_pwm();  
-        return;  
-    }  
-  
-    // Кольцевое заполнение: пишем в буфер, который DMA уже прочитал,  
-    // а не линейно 0..N — иначе CPU перезаписывает буфер под DMA.  
-    for (uint8_t k = 0; k < AF_OUT_NUM_BUFFERS; k++) {  
-        if (duty_ready[duty_fill]) break;       // кольцо заполнено  
-  
-        const volatile int16_t* blk = af_dsp_out_get_pwm();  
-        if (blk == NULL) break;  
-  
-        for (uint32_t i = 0; i < AF_OUT_BLOCK_SAMPLES; i++)    
-            duty_buf[duty_fill][i] = to_duty(blk[i], &dither_e1, &dither_e2);    
-  
-        __dmb();    
-        duty_ready[duty_fill] = true;    
-        af_dsp_out_release_pwm();    
-        ++pwm_blocks_filled;    
+void __not_in_flash_func(af_pwm_poll)(void) {      
+    static int32_t dither_e1 = 0, dither_e2 = 0;      
+    static int32_t interp_prev = 0;             // предыдущий отсчёт для линейки    
+    
+    if (!pwm_enabled) {    
+        // Выход выключен: выкидываем готовые блоки, чтобы очередь    
+        // af_dsp не забилась (out_dropped не росла).    
+        while (af_dsp_out_get_pwm() != NULL) af_dsp_out_release_pwm();    
+        interp_prev = 0;    
+        return;    
+    }    
+    
+    // Кольцевое заполнение: пишем в буфер, который DMA уже прочитал,    
+    // а не линейно 0..N — иначе CPU перезаписывает буфер под DMA.    
+    for (uint8_t k = 0; k < AF_OUT_NUM_BUFFERS; k++) {    
+        if (duty_ready[duty_fill]) break;       // кольцо заполнено    
+    
+        const volatile int16_t* blk = af_dsp_out_get_pwm();    
+        if (blk == NULL) break;    
+    
+        // Интерполяция x4: между соседними отсчётами — 3 промежуточных    
+        // точки линейки (шаги 1/4, 2/4, 3/4). Образы спектра на    
+        // 15.5/31/46.5 кГц давятся линейкой ~-12 дБ + RC-фильтром;    
+        // шейпинг 2-го порядка работает на выходной частоте 61.856 кГц —    
+        // шум квантования уходит к ~31 кГц, за пределы полезной полосы.    
+        uint32_t o = 0;    
+        for (uint32_t i = 0; i < AF_OUT_BLOCK_SAMPLES; i++) {    
+            const int32_t cur = blk[i];    
+            const int32_t step = cur - interp_prev;    
+            duty_buf[duty_fill][o++] = to_duty((int16_t)(interp_prev + (step >> 2)),       &dither_e1, &dither_e2);    
+            duty_buf[duty_fill][o++] = to_duty((int16_t)(interp_prev + (step >> 1)),       &dither_e1, &dither_e2);    
+            duty_buf[duty_fill][o++] = to_duty((int16_t)(interp_prev + ((step * 3) >> 2)), &dither_e1, &dither_e2);    
+            duty_buf[duty_fill][o++] = to_duty((int16_t)cur,                               &dither_e1, &dither_e2);    
+            interp_prev = cur;    
+        }    
+    
+        __dmb();      
+        duty_ready[duty_fill] = true;      
+        af_dsp_out_release_pwm();      
+        ++pwm_blocks_filled;      
     
         // High-water готовых буферов: упёрлось в N — poll успевает,    
         // держится у нуля — DMA жрёт быстрее, чем приходит из af_dsp.    
@@ -224,18 +248,41 @@ void __not_in_flash_func(af_pwm_poll)(void) {
         if (++duty_fill >= AF_OUT_NUM_BUFFERS) duty_fill = 0;    
     }  
     
-    // Старт DMA только когда заполнены минимум 2 duty-буфера —    
-    // убирает фазовую гонку «IRQ раньше заполнения».    
+    // Старт DMA только когда заполнены >= AF_OUT_NUM_BUFFERS-2 (=14)      
+    // duty-буферов (~58 мс подушки) — убирает фазовую гонку      
+    // «IRQ раньше заполнения».      
     if (!pwm_running) {      
         uint8_t n = 0;      
         for (uint8_t b = 0; b < AF_OUT_NUM_BUFFERS; b++) if (duty_ready[b]) ++n;      
-        if (n >= AF_OUT_NUM_BUFFERS - 2) {      // ~48 мс подушки перед стартом    
-            dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);    
-            dma_channel_set_trans_count(pwm_dma_ch, AF_OUT_BLOCK_SAMPLES, true);    
+        if (n >= AF_OUT_NUM_BUFFERS - 2) {      // ~12 мс подушки перед стартом      
+            dma_channel_set_read_addr(pwm_dma_ch, duty_buf[duty_sel], false);      
+            dma_channel_set_trans_count(pwm_dma_ch, AF_PWM_BLOCK_SAMPLES, true);      
             pwm_running = true;    
             ++pwm_restarts;                     // каждый рестарт = был полный стоп DMA    
         }      
-    }  
+    }
+
+    // Дробная коррекция pacing: накопитель прибавляет pwm_pace_frac за        
+    // каждый доигранный ОТСЧЁТ (по дельте pwm_blocks_played — не по вызовам        
+    // poll, их темп произвольный). Когда накапливается AF_PWM_FS_HZ —        
+    // следующий блок играем с den+1 (на 1 такт медленнее).        
+    // Средний темп = точные AF_PWM_FS_HZ, дрейфа нет.        
+    if (pwm_running && pwm_pace_frac) {        
+        static uint32_t pace_played_prev = 0;        
+        const uint32_t played = pwm_blocks_played;        
+        const uint32_t dplay  = played - pace_played_prev;   // блоков с прошлого poll        
+        pace_played_prev = played;        
+        // За блок дефицит = frac*256/Fs = 165 тактов; блок на den+1 даёт      
+        // +256 тактов. acc += frac за блок, порог Fs -> den+1 на ~64.5%      
+        // блоков -> средний делитель 4041.645 = точный.      
+        pwm_pace_acc += pwm_pace_frac * dplay;          
+        if (pwm_pace_acc >= (uint32_t)AF_PWM_FS_HZ) {          
+            pwm_pace_acc -= (uint32_t)AF_PWM_FS_HZ;          
+            dma_timer_set_fraction(pwm_dma_timer, 1, (uint16_t)(pwm_pace_den + 1));          
+        } else {          
+            dma_timer_set_fraction(pwm_dma_timer, 1, (uint16_t)pwm_pace_den);          
+        }             
+    }      
 }
 
 // ---------------------------------------------------------------------------  
