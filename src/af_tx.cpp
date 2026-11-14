@@ -97,7 +97,8 @@ static volatile int32_t  tx_makeup_q15 =                          // 32767/t, Q1
 static uint32_t tx_agc_target = AF_TX_AGC_TARGET;  // целевой уровень АРУ  
 static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)    
 static volatile int32_t tx_gate_floor = AF_TX_GATE_FLOOR_Q16; // нижняя ступень, Q16  
-static uint32_t agc_env       = 0;                 // EMA огибающей АРУ, Q16  
+static uint32_t agc_env       = 0;                 // EMA огибающей АРУ, Q16
+static int32_t  tx_agc_gain_q15 = 32768;           // последний gain АРУ (debug)  
 static uint32_t gate_gain     = 0;                 // gain гейта, Q16 (0..65536)  
 static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16
 static volatile uint8_t  tx_ap_on    = AF_TX_AP_ON_DEFAULT;  
@@ -225,7 +226,8 @@ static int32_t tx_agc(int32_t x) {
     // Гейт закрыт (env ниже порога) -> не разгонять фон: gain <= 1.    
     // Иначе в паузе АРУ поднимает шум комнаты до target и гейт    
     // пропускает его на floor-уровне — «сигнал проходит всегда».    
-    if (tx_gate_thr != 0 && env < tx_gate_thr && g > 32768) g = 32768;    
+    if (tx_gate_thr != 0 && env < tx_gate_thr && g > 32768) g = 32768;  
+    tx_agc_gain_q15 = (int32_t)g;                  // для stats (этап 0)  
     return (int32_t)(((int64_t)x * g) >> 15);  
 }  
   
@@ -349,3 +351,10 @@ uint32_t af_tx_gfloor(void) { return (uint32_t)tx_gate_floor; }
 
 void af_tx_set_notch(bool on)   { tx_notch_on = on ? 1 : 0; }  
 bool af_tx_notch(void)          { return tx_notch_on != 0; }  
+
+// --- debug getters (этап 0, аудит) ---  
+// Все значения в шкале 0..32767 (env), gain — Q15.  
+uint32_t af_tx_env_lo(void)   { return (uint32_t)(tx_env_lo_q16 >> 16); }  
+uint32_t af_tx_env_hi(void)   { return (uint32_t)(tx_env_hi_q16 >> 16); }  
+uint32_t af_tx_agc_env(void)  { return agc_env >> 8; }  
+uint32_t af_tx_agc_gain(void) { return (uint32_t)tx_agc_gain_q15; }  

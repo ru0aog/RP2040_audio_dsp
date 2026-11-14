@@ -41,3 +41,8 @@ uint32_t af_tx_gfloor(void);
 
 void     af_tx_set_notch(bool on);  
 bool     af_tx_notch(void);  
+
+// Этап 0: аудит огибающих (только для stats, не в горячем пути)  
+uint32_t af_tx_agc_env(void);   // огибающая АРУ — считается ДО гейта  
+uint32_t af_tx_env_lo(void);    // огибающая НЧ-полосы компрессора — ПОСЛЕ гейта  
+uint32_t af_tx_env_hi(void);    // огибающая ВЧ-полосы компрессора — ПОСЛЕ гейта  
