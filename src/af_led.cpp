@@ -104,24 +104,31 @@ void af_led_poll(void) {
         g = 0;  
     }  
   
-    // Базовый цвет банка, масштабированный огибающей.  
-    const uint8_t* c = BANK_RGB[s_bank & 7];  
-    uint8_t r = (uint8_t)((g * c[0]) / 255);  
-    uint8_t gg = (uint8_t)((g * c[1]) / 255);  
-    uint8_t b = (uint8_t)((g * c[2]) / 255);  
+    uint8_t r, gg, b;  
   
-    // Подмес фильтров: NR -> +синий, NT -> +красный (оба -> фиолетовый).  
-    if (af_dsp_nr_on())    b = (uint8_t)(b + (g * 128) / 255);   // NR -> +синий  
-    if (af_dsp_notch_on()) r = (uint8_t)(r + g);                 // NT -> красный на полную
+    if (af_dsp_tx_on()) {  
+        // TX -> чисто красный heartbeat, поверх цвета банка и всех подмесов.  
+        r = g; gg = 0; b = 0;  
+    } else {  
+        // Базовый цвет банка, масштабированный огибающей.  
+        const uint8_t* c = BANK_RGB[s_bank & 7];  
+        r  = (uint8_t)((g * c[0]) / 255);  
+        gg = (uint8_t)((g * c[1]) / 255);  
+        b  = (uint8_t)((g * c[2]) / 255);  
   
-    // АРУ off -> оранжевый подмес (красный + половина зелёного).  
-    if (!af_dsp_agc_on()) {  
-        r  = (uint8_t)(r  + (g * 100) / 255);  
-        gg = (uint8_t)(gg + (g * 40)  / 255);  
+        // Подмес фильтров: NR -> +синий, NT -> +красный (оба -> фиолетовый).  
+        if (af_dsp_nr_on())    b = (uint8_t)(b + (g * 128) / 255);   // NR -> +синий  
+        if (af_dsp_notch_on()) r = (uint8_t)(r + g);                 // NT -> красный на полную  
+  
+        // АРУ off -> оранжевый подмес (красный + половина зелёного).  
+        if (!af_dsp_agc_on()) {  
+            r  = (uint8_t)(r  + (g * 100) / 255);  
+            gg = (uint8_t)(gg + (g * 40)  / 255);  
+        }  
+  
+        // Bypass -> доминирующий белый, поверх всего.  
+        if (af_dsp_bypass_on()) { r = g; gg = g; b = g; }  
     }  
-  
-    // Bypass -> доминирующий белый, поверх всего.  
-    if (af_dsp_bypass_on()) { r = g; gg = g; b = g; }
   
     if (r != last_r || gg != last_g || b != last_b) {  
         af_led_set(r, gg, b);  

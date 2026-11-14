@@ -65,7 +65,8 @@ static void cli_help(void) {
     Serial.println("#   txap on|off       — all-pass симметризатор пиков TX");  
     Serial.println("#   txmode soft|hard  — тип клиппера TX");
     Serial.println("#   tx2band on|off    — 2-полосная компрессия TX (split ~900 Гц)");  
-    Serial.println("#   txgfloor <0..65536> — нижняя ступень гейта Q16 (4120=-24дБ, 0=тишина)");
+    Serial.println("#   txgfloor <0..65536> — нижняя ступень гейта Q16 (4120=-24дБ, 0=тишина)");  
+    Serial.println("#   txnotch on|off    — узкие нотчи 1/2 кГц против тонов-наводок");  
     Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");    
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
@@ -89,17 +90,18 @@ static void cli_stats(void) {
                   af_dsp_bypass_on() ? "on" : "off",
                   af_dsp_tx_on() ? "on" : "off");
     Serial.printf("# ramp=%s\n", af_dsp_ramp_on() ? "on" : "off");    
-    Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu  agc=%lu  gate=%lu  gfloor=%lu  ap=%s  mode=%s  2band=%s\n",    
-                  (unsigned long)af_tx_lo_hz(),        
-                  (unsigned long)af_tx_hi_hz(),        
-                  (unsigned long)af_tx_ratio(),        
-                  (unsigned long)af_tx_clip(),      
-                  (unsigned long)af_tx_agc(),      
-                  (unsigned long)af_tx_gate(),    
-                  (unsigned long)af_tx_gfloor(),  
-                  af_tx_ap() ? "on" : "off",    
-                  af_tx_softclip() ? "soft" : "hard",  
-                  af_tx_2band() ? "on" : "off");  
+    Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu  agc=%lu  gate=%lu  gfloor=%lu  ap=%s  mode=%s  2band=%s  notch=%s\n",      
+                  (unsigned long)af_tx_lo_hz(),          
+                  (unsigned long)af_tx_hi_hz(),          
+                  (unsigned long)af_tx_ratio(),          
+                  (unsigned long)af_tx_clip(),        
+                  (unsigned long)af_tx_agc(),        
+                  (unsigned long)af_tx_gate(),      
+                  (unsigned long)af_tx_gfloor(),    
+                  af_tx_ap() ? "on" : "off",      
+                  af_tx_softclip() ? "soft" : "hard",    
+                  af_tx_2band() ? "on" : "off",  
+                  af_tx_notch() ? "on" : "off");    
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -507,6 +509,13 @@ static void cli_exec(char* line) {
                       af_tx_softclip() ? "soft" : "hard",    
                       af_tx_2band() ? "on" : "off");    
     }    
+
+    else if (strncmp(cmd, "txnotch", 7) == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v && strcmp(v, "on") == 0)       { af_tx_set_notch(true);  Serial.println("# OK txnotch=on"); }  
+        else if (v && strcmp(v, "off") == 0) { af_tx_set_notch(false); Serial.println("# OK txnotch=off"); }  
+        else Serial.println("# ERR: txnotch on|off");  
+    }  
 
     // вставлять сюда  
   

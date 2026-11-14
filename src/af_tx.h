@@ -38,3 +38,6 @@ bool     af_tx_2band(void);
 
 void     af_tx_set_gfloor(uint32_t q16);  // нижняя ступень гейта Q16 (0..65536)    
 uint32_t af_tx_gfloor(void);    
+
+void     af_tx_set_notch(bool on);  
+bool     af_tx_notch(void);  

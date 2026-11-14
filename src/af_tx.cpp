@@ -103,7 +103,14 @@ static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16
 static volatile uint8_t  tx_ap_on    = AF_TX_AP_ON_DEFAULT;  
 static volatile uint8_t  tx_softclip = AF_TX_SOFTCLIP_ON_DEFAULT;  
 static int32_t ap_x1 = 0, ap_y1 = 0;   // состояние all-pass  
-static volatile uint8_t  tx_2band_on = AF_TX_2BAND_ON_DEFAULT;  
+static volatile uint8_t  tx_2band_on = AF_TX_2BAND_ON_DEFAULT;
+static volatile uint8_t  tx_notch_on = AF_TX_NOTCH_ON_DEFAULT;  
+// Коэффициенты нотчей Q15: b = {1, -2cos(w), 1}, a = {1, -2r cos(w), r^2}  
+static int32_t n1_b1 = 0, n1_a1 = 0, n1_a2 = 0;  
+static int32_t n2_b1 = 0, n2_a1 = 0, n2_a2 = 0;  
+static int32_t n1_x1 = 0, n1_x2 = 0, n1_y1 = 0, n1_y2 = 0;  
+static int32_t n2_x1 = 0, n2_x2 = 0, n2_y1 = 0, n2_y2 = 0;  
+
 static int32_t split_lp = 0;                    // состояние ФНЧ кроссовера  
 static int64_t tx_env_lo_q16 = (int64_t)256 << 16;  // EMA огибающей НЧ-полосы  
 static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей ВЧ-полосы  
@@ -182,6 +189,19 @@ static inline int32_t __not_in_flash_func(tx_soft_clip)(int32_t x) {
     return (int32_t)((((int64_t)y * 3) >> 1) * tx_makeup_q15 >> 15);    
 }  
 
+// Биквад-нотч (Direct Form I), коэффициенты Q15.  
+// b0=1, b1=-2cos(w), b2=1; a1=-2r*cos(w), a2=r^2.  
+static inline int32_t __not_in_flash_func(tx_notch)(int32_t x,  
+        int32_t b1, int32_t a1, int32_t a2,  
+        int32_t* x1, int32_t* x2, int32_t* y1, int32_t* y2) {  
+    int64_t acc = ((int64_t)x << 15) + (int64_t)b1 * *x1 + ((int64_t)*x2 << 15)  
+                - (int64_t)a1 * *y1 - (int64_t)a2 * *y2;  
+    int32_t y = (int32_t)(acc >> 15);  
+    *x2 = *x1; *x1 = x;  
+    *y2 = *y1; *y1 = y;  
+    return y;  
+}  
+
 // ---------------------------------------------------------------------------    
 // Точка входа из af_dsp_poll    
 // ---------------------------------------------------------------------------
@@ -231,8 +251,12 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
     y = tx_compress(y);               // компрессия        
     y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)  
                     : tx_clip(y);     // жёсткий клиппер  
-    y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга      
-    if (y >  32767) y =  32767;    
+    y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга  
+    if (tx_notch_on) {                // узкие нотчи против тонов-наводок  
+        y = tx_notch(y, n1_b1, n1_a1, n1_a2, &n1_x1, &n1_x2, &n1_y1, &n1_y2);  
+        y = tx_notch(y, n2_b1, n2_a1, n2_a2, &n2_x1, &n2_x2, &n2_y1, &n2_y2);  
+    }  
+    if (y >  32767) y =  32767;      
     if (y < -32768) y = -32768;    
     return (int16_t)y;    
 }    
@@ -252,6 +276,20 @@ void af_tx_init(void) {
     split_lp = 0;  
     ap_x1 = 0;  
     ap_y1 = 0;  
+    // Коэффициенты нотчей: w = 2*pi*f0/Fs, b1 = -2cos(w), a1 = -2r*cos(w), a2 = r^2  
+    {  
+        const float r  = (float)AF_TX_NOTCH_R_Q15 / 32768.0f;  
+        const float w1 = 2.0f * PI * (float)AF_TX_NOTCH1_HZ / AF_FS_OUT_HZ;  
+        const float w2 = 2.0f * PI * (float)AF_TX_NOTCH2_HZ / AF_FS_OUT_HZ;  
+        n1_b1 = (int32_t)lroundf(-2.0f * cosf(w1) * 32768.0f);  
+        n1_a1 = (int32_t)lroundf(-2.0f * r * cosf(w1) * 32768.0f);  
+        n1_a2 = (int32_t)lroundf(r * r * 32768.0f);  
+        n2_b1 = (int32_t)lroundf(-2.0f * cosf(w2) * 32768.0f);  
+        n2_a1 = (int32_t)lroundf(-2.0f * r * cosf(w2) * 32768.0f);  
+        n2_a2 = n1_a2;  
+        n1_x1 = n1_x2 = n1_y1 = n1_y2 = 0;  
+        n2_x1 = n2_x2 = n2_y1 = n2_y2 = 0;  
+    }  
 }      
     
 void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {    
@@ -308,3 +346,6 @@ void af_tx_set_gfloor(uint32_t q16) {
     tx_gate_floor = (int32_t)q16;    // 0 = полное закрытие    
 }    
 uint32_t af_tx_gfloor(void) { return (uint32_t)tx_gate_floor; }    
+
+void af_tx_set_notch(bool on)   { tx_notch_on = on ? 1 : 0; }  
+bool af_tx_notch(void)          { return tx_notch_on != 0; }  
