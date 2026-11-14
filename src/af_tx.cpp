@@ -111,7 +111,7 @@ static int32_t n1_b1 = 0, n1_a1 = 0, n1_a2 = 0;
 static int32_t n2_b1 = 0, n2_a1 = 0, n2_a2 = 0;  
 static int32_t n1_x1 = 0, n1_x2 = 0, n1_y1 = 0, n1_y2 = 0;  
 static int32_t n2_x1 = 0, n2_x2 = 0, n2_y1 = 0, n2_y2 = 0;  
-
+static uint16_t tx_gate_hold = 0;   // счётчик hangover, в отсчётах @AF_FS_OUT_HZ  
 static int32_t split_lp = 0;                    // состояние ФНЧ кроссовера  
 static int64_t tx_env_lo_q16 = (int64_t)256 << 16;  // EMA огибающей НЧ-полосы  
 static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей ВЧ-полосы  
@@ -235,15 +235,31 @@ static int32_t tx_agc(int32_t x) {
 // иначе -> 1.0. Плавные фронты убирают щелчки на границах; нижняя  
 // ступень вместо нуля убирает «мёртвые паузы» и уменьшает скачок  
 // gain при открытии (0.063->1.0 вместо 0->1.0) — выброс FIR слабее.  
-static int32_t tx_gate(int32_t x) {    
-    if (tx_gate_thr == 0) return x;                  // гейт выключен    
-    uint32_t env = agc_env >> 8;                     // та же огибающая    
-    uint32_t c = (env > tx_gate_thr) ? AF_TX_GATE_ATT_Q24 : AF_TX_GATE_REL_Q24;    
-    uint32_t tgt = (env > tx_gate_thr) ? 65536u : (uint32_t)tx_gate_floor;      
-    gate_gain += (uint32_t)(((int64_t)((int32_t)tgt - (int32_t)gate_gain) * c) >> 24);      
-    if (gate_gain > 65536u) gate_gain = 65536u;    
-    return (int32_t)(((int64_t)x * (int32_t)gate_gain) >> 16);    
-}    
+// Шумовой гейт с гистерезисом и hangover (этап 1):  
+//   env > thr        -> открыть мгновенно, перезарядить hold  
+//   env < thr*0.7    -> отсчитывать hangover, потом закрыть на floor  
+//   между порогами   -> держать текущее состояние (нет болтанки)  
+// Открытие мгновенное — начала слов не съедаются; EMA gate_gain  
+// даёт плавные фронты без щелчков.  
+static int32_t tx_gate(int32_t x) {  
+    if (tx_gate_thr == 0) return x;                  // гейт выключен  
+    uint32_t env = agc_env >> 8;                     // та же огибающая  
+    const uint32_t thr_close = (tx_gate_thr * AF_TX_GATE_HYST_X10) / 10;  
+    const uint16_t hold_n = (uint16_t)((AF_TX_GATE_HOLD_MS * AF_FS_OUT_HZ) / 1000u);  
+  
+    if (env > tx_gate_thr) {  
+        tx_gate_hold = hold_n;                       // открытие мгновенное  
+    } else if (env < thr_close) {  
+        if (tx_gate_hold > 0) --tx_gate_hold;        // hangover  
+    }  
+    // env в [thr_close, thr] — hold не трогаем: гистерезис  
+  
+    uint32_t tgt = (tx_gate_hold > 0) ? 65536u : (uint32_t)tx_gate_floor;  
+    uint32_t c = (tx_gate_hold > 0) ? AF_TX_GATE_ATT_Q24 : AF_TX_GATE_REL_Q24;  
+    gate_gain += (uint32_t)(((int64_t)((int32_t)tgt - (int32_t)gate_gain) * c) >> 24);  
+    if (gate_gain > 65536u) gate_gain = 65536u;  
+    return (int32_t)(((int64_t)x * (int32_t)gate_gain) >> 16);  
+}  
 
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {      
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
@@ -269,6 +285,7 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
 void af_tx_init(void) {
     agc_env   = 0;  
     gate_gain = 0;  
+    tx_gate_hold = 0;
     tx_fir_design();    
     memset(&tx_pre,  0, sizeof(tx_pre));    
     memset(&tx_post, 0, sizeof(tx_post));    
@@ -277,7 +294,7 @@ void af_tx_init(void) {
     tx_env_hi_q16 = (int64_t)256 << 16;  
     split_lp = 0;  
     ap_x1 = 0;  
-    ap_y1 = 0;  
+    ap_y1 = 0;
     // Коэффициенты нотчей: w = 2*pi*f0/Fs, b1 = -2cos(w), a1 = -2r*cos(w), a2 = r^2  
     {  
         const float r  = (float)AF_TX_NOTCH_R_Q15 / 32768.0f;  

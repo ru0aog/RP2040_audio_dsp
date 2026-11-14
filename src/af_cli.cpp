@@ -66,7 +66,8 @@ static void cli_help(void) {
     Serial.println("#   txmode soft|hard  — тип клиппера TX");
     Serial.println("#   tx2band on|off    — 2-полосная компрессия TX (split ~900 Гц)");  
     Serial.println("#   txgfloor <0..65536> — нижняя ступень гейта Q16 (4120=-24дБ, 0=тишина)");  
-    Serial.println("#   txnotch on|off    — узкие нотчи 1/2 кГц против тонов-наводок");  
+    Serial.println("#   txnotch on|off    — узкие нотчи 1/2 кГц против тонов-наводок");
+    Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");  
     Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");    
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
@@ -105,12 +106,6 @@ static void cli_stats(void) {
     Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
                   (unsigned long)af_tx_agc_env(),  
                   (unsigned long)af_tx_agc_gain(),  
-                  (unsigned long)af_tx_env_lo(),  
-                  (unsigned long)af_tx_env_hi());  
-    // Этап 0.4: точки отвода огибающих — agc_env до гейта, env_lo/hi после.  
-    // Живые значения: в паузе agc_env < gate, env_lo/hi -> 0.  
-    Serial.printf("# txenv: agc_env=%lu env_lo=%lu env_hi=%lu\n",  
-                  (unsigned long)af_tx_agc_env(),  
                   (unsigned long)af_tx_env_lo(),  
                   (unsigned long)af_tx_env_hi());  
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
