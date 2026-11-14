@@ -137,7 +137,7 @@ park-механизм: во время записи DSP ставится на п
 После сборки подобрать `txgate` под шум помещения.  
   
 ## Serial CLI (115200)  
-  
+```
 --- RX ---
 band — полоса ПФ в Гц
 nt on|off — автонотч
@@ -172,7 +172,7 @@ banks — показать все ячейки
 banks clr — заводские пресеты (ребут)
 stats — диагностика
 help — справка
-
+```
 Kenwood-подобные CAT-команды — по ;:
 ID; -> ID019; FA; / FA00014074000; IF; -> IF...;
 MD; / MD3; (CW) NT; / NT0; / NT1; NR; / NR0; / NR1;
@@ -180,7 +180,7 @@ SHxx; — верх полосы SLxx; — низ полосы TX; / RX;
 
   
 ## Структура проекта  
-  
+```
 RP2040_audio_dsp/
 ├── platformio.ini # env:pico, Arduino-Pico, TinyUSB, arduino-audio-tools
 ├── RP2040_audio_dsp.cpp # setup/loop (Core 0), setup1/loop1 (Core 1)
@@ -199,7 +199,7 @@ RP2040_audio_dsp/
 ├── af_led.h/.cpp # LED-индикация (цвет банка, вспышки событий)
 ├── af_voice.h/.cpp # голосовые сообщения: плеер на Core 1, очередь с Core 0
 └── voice/ # Voice_0N.inc — PCM int16, генерирует WAV_convertor.py
-
+```
   
 ## Сборка  
   
