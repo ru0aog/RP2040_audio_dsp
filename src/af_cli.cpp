@@ -184,6 +184,12 @@ static void cli_exec(char* line) {
             Serial.println("# nr: rejected (NT on — приоритет NT)");      
         }
     }
+    else if (strncmp(cmd, "rxnotch", 7) == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v && strcmp(v, "on") == 0)       { af_dsp_set_rxnotch(true);  Serial.println("# OK rxnotch=on"); }  
+        else if (v && strcmp(v, "off") == 0) { af_dsp_set_rxnotch(false); Serial.println("# OK rxnotch=off"); }  
+        else Serial.println("# ERR: rxnotch on|off");  
+    }  
     else if (strcmp(cmd, "agc") == 0) {  
         char* a = strtok(NULL, " \t");  
         if (a && strcmp(a, "on") == 0)       { af_dsp_set_agc(true);  Serial.println("# OK agc=on"); }  

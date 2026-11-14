@@ -87,3 +87,5 @@ bool af_dsp_ramp_on(void);
 void af_dsp_set_tx(bool on);  
 bool af_dsp_tx_on(void);  
 
+void     af_dsp_set_rxnotch(bool on);  
+bool     af_dsp_rxnotch_on(void);  

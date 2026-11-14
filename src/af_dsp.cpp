@@ -177,6 +177,48 @@ static inline int32_t __not_in_flash_func(af_fir_push)(int32_t x) {
 }  
 
 // ---------------------------------------------------------------------------  
+// Фиксированные узкие нотчи RX — гребёнка наводок 1/2/3/4 кГц.  
+// Биквад-нотч (RBJ notch), Q15, Direct Form I. Частоты зашиты в  
+// af_config.h — коэффициенты считаются один раз в af_dsp_init.  
+// ---------------------------------------------------------------------------  
+static volatile bool rx_notch_on = (AF_RX_NOTCH_ON_DEFAULT != 0);  
+  
+typedef struct {  
+    int32_t b1, a1, a2;          // Q15; b0=b2=1 (нормированный нотч)  
+    int32_t x1, x2, y1, y2;  
+} rx_notch_t;  
+  
+static rx_notch_t rx_notch[4];  
+  
+static void rx_notch_design(void) {  
+    const float r  = (float)AF_RX_NOTCH_R_Q15 / 32768.0f;  
+    const float hz[4] = { (float)AF_RX_NOTCH1_HZ, (float)AF_RX_NOTCH2_HZ,  
+                          (float)AF_RX_NOTCH3_HZ, (float)AF_RX_NOTCH4_HZ };  
+    for (int i = 0; i < 4; i++) {  
+        const float w = 2.0f * PI * hz[i] / (float)AF_FS_OUT_HZ;  
+        rx_notch[i].b1 = (int32_t)lrintf(-2.0f * cosf(w) * 32768.0f);  
+        rx_notch[i].a1 = (int32_t)lrintf(-2.0f * r * cosf(w) * 32768.0f);  
+        rx_notch[i].a2 = (int32_t)lrintf(r * r * 32768.0f);  
+        rx_notch[i].x1 = rx_notch[i].x2 = rx_notch[i].y1 = rx_notch[i].y2 = 0;  
+    }  
+    __dmb();  
+}  
+  
+static inline int32_t __not_in_flash_func(rx_notch_push)(int32_t x) {  
+    for (int i = 0; i < 4; i++) {  
+        rx_notch_t* n = &rx_notch[i];  
+        int64_t acc = ((int64_t)x << 15)  
+                    + (int64_t)n->b1 * n->x1 + ((int64_t)n->x2 << 15)  
+                    - (int64_t)n->a1 * n->y1 - (int64_t)n->a2 * n->y2;  
+        int32_t y = (int32_t)(acc >> 15);  
+        n->x2 = n->x1; n->x1 = x;  
+        n->y2 = n->y1; n->y1 = y;  
+        x = y;  
+    }  
+    return x;  
+}  
+
+// ---------------------------------------------------------------------------  
 // Телеграфный фильтр: AF_CW_SECTIONS каскадных биквадов BPF (RBJ, Q15).  
 // Коэффициенты пересчитываются на Core 0 при смене f0/BW.  
 // Каскад из N одинаковых секций сужает полосу: BW_sec = BW / sqrt(2^(1/N)-1).  
@@ -613,6 +655,15 @@ int af_dsp_set_notch(bool on) {
     notch_on = on;  
     return rc;  
 }
+
+void af_dsp_set_rxnotch(bool on) {  
+    if (on && !rx_notch_on) {          // чистый старт — без переходного звона  
+        for (int i = 0; i < 4; i++)  
+            rx_notch[i].x1 = rx_notch[i].x2 = rx_notch[i].y1 = rx_notch[i].y2 = 0;  
+    }  
+    rx_notch_on = on;  
+}  
+bool af_dsp_rxnotch_on(void) { return rx_notch_on; }  
   
 // Возвращает false, если команда отклонена (NT on — приоритет NT).  
 bool af_dsp_set_nr(bool on) {    
@@ -730,7 +781,8 @@ void af_dsp_init(void) {
     cic_cnt = 0;  
   
     af_fir_init();  
-    cw_design();          // начальные коэффициенты CW-секций
+    cw_design();          // начальные коэффициенты CW-секций  
+    rx_notch_design();    // коэффициенты фиксированных нотчей RX  
     af_tx_init();         // TX: FIR-компрессор-клиппер    
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
@@ -808,8 +860,9 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 out_emit(af_tx_process(y));    
                 continue;    
             }    
-            y = af_fir_push(y);      
-            if (cw_on) {    
+            y = af_fir_push(y);  
+            if (rx_notch_on) y = rx_notch_push(y);   // гребёнка 1/2/3/4 кГц  
+            if (cw_on) {      
                 // Добавка шума: LFSR xorshift32, уровень из `cw noise`.  
                 // Фильтр всегда возбуждён — не звенит на тишине;  
                 // сигнал проходит без порогов (сквелча нет).  
