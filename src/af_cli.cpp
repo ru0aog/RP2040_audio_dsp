@@ -102,6 +102,11 @@ static void cli_stats(void) {
                   af_tx_softclip() ? "soft" : "hard",    
                   af_tx_2band() ? "on" : "off",  
                   af_tx_notch() ? "on" : "off");
+    Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
+                  (unsigned long)af_tx_agc_env(),  
+                  (unsigned long)af_tx_agc_gain(),  
+                  (unsigned long)af_tx_env_lo(),  
+                  (unsigned long)af_tx_env_hi());  
     // Этап 0.4: точки отвода огибающих — agc_env до гейта, env_lo/hi после.  
     // Живые значения: в паузе agc_env < gate, env_lo/hi -> 0.  
     Serial.printf("# txenv: agc_env=%lu env_lo=%lu env_hi=%lu\n",  
@@ -129,8 +134,8 @@ static void cli_stats(void) {
     Serial.printf("# core1: max_block_us=%lu\n", (unsigned long)af_dsp_max_block_us());
     Serial.printf("# fs: out=%lu adc=%lu div=%lu\n",  
                   (unsigned long)AF_FS_OUT_HZ,  
-                  (unsigned long)AF_ADC_FS,          // имя сверить с af_config.h  
-                  (unsigned long)(AF_ADC_FS / AF_FS_OUT_HZ));  
+                  (unsigned long)AF_FS_ADC_HZ,  
+                  (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));  
     
 }  
   

@@ -46,3 +46,4 @@ bool     af_tx_notch(void);
 uint32_t af_tx_agc_env(void);   // огибающая АРУ — считается ДО гейта  
 uint32_t af_tx_env_lo(void);    // огибающая НЧ-полосы компрессора — ПОСЛЕ гейта  
 uint32_t af_tx_env_hi(void);    // огибающая ВЧ-полосы компрессора — ПОСЛЕ гейта  
+uint32_t af_tx_agc_gain(void);  // последний gain АРУ, Q15 (debug)  
