@@ -191,7 +191,10 @@ static inline int32_t __not_in_flash_func(tx_soft_clip)(int32_t x) {
 static int32_t tx_agc(int32_t x) {  
     uint32_t a = (uint32_t)(x >= 0 ? x : -x);    
     uint32_t c = (a > (agc_env >> 8)) ? AF_TX_AGC_ATT_Q24 : AF_TX_AGC_REL_Q24;    
-    agc_env += (uint32_t)(((int64_t)((a << 8) - agc_env) * c) >> 24);    
+    // ВАЖНО: вычитание в int64 — иначе при agc_env > a<<8 беззнаковый    
+    // андерфлоу даёт +4 млрд и огибающая залипает на UINT32_MAX    
+    // (гейт permanently открыт, АРУ застревает на gain=1).    
+    agc_env += (uint32_t)(((int64_t)((int64_t)(a << 8) - (int64_t)agc_env) * c) >> 24);      
   
     uint32_t env = agc_env >> 8;  
     if (env < 64) env = 64;                          // защита от деления на ~0  
