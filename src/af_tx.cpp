@@ -95,7 +95,8 @@ static volatile uint32_t tx_clip_thr  = AF_TX_CLIP_DEFAULT;       // 0..32767
 static volatile int32_t  tx_makeup_q15 =                          // 32767/t, Q15  
     (int32_t)(((int64_t)32767 << 15) / AF_TX_CLIP_DEFAULT);  
 static uint32_t tx_agc_target = AF_TX_AGC_TARGET;  // целевой уровень АРУ  
-static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)  
+static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)    
+static volatile int32_t tx_gate_floor = AF_TX_GATE_FLOOR_Q16; // нижняя ступень, Q16  
 static uint32_t agc_env       = 0;                 // EMA огибающей АРУ, Q16  
 static uint32_t gate_gain     = 0;                 // gain гейта, Q16 (0..65536)  
 static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16
@@ -194,24 +195,30 @@ static int32_t tx_agc(int32_t x) {
   
     uint32_t env = agc_env >> 8;  
     if (env < 64) env = 64;                          // защита от деления на ~0  
-    int64_t g = ((int64_t)tx_agc_target << 15) / (int64_t)env;   // Q15  
-    int64_t gmax = (int64_t)AF_TX_AGC_MAX_X10 * 3277;            // x10 -> Q15  
-    if (g > gmax) g = gmax;  
-    if (g < 32768) g = 32768;                        // АРУ только усиливает/держит  
+    int64_t g = ((int64_t)tx_agc_target << 15) / (int64_t)env;   // Q15    
+    int64_t gmax = (int64_t)AF_TX_AGC_MAX_X10 * 3277;            // x10 -> Q15    
+    if (g > gmax) g = gmax;    
+    if (g < 32768) g = 32768;                        // АРУ только усиливает/держит    
+    // Гейт закрыт (env ниже порога) -> не разгонять фон: gain <= 1.    
+    // Иначе в паузе АРУ поднимает шум комнаты до target и гейт    
+    // пропускает его на floor-уровне — «сигнал проходит всегда».    
+    if (tx_gate_thr != 0 && env < tx_gate_thr && g > 32768) g = 32768;    
     return (int32_t)(((int64_t)x * g) >> 15);  
 }  
   
-// Шумовой гейт: env < thr -> gain -> 0 (плавно), иначе -> 1.  
-// Плавные фронты убирают щелчки на границах открытия/закрытия.  
-static int32_t tx_gate(int32_t x) {  
-    if (tx_gate_thr == 0) return x;                  // гейт выключен  
-    uint32_t env = agc_env >> 8;                     // та же огибающая  
-    uint32_t c = (env > tx_gate_thr) ? AF_TX_GATE_ATT_Q24 : AF_TX_GATE_REL_Q24;  
-    uint32_t tgt = (env > tx_gate_thr) ? 65536u : 0u;  
-    gate_gain += (uint32_t)(((int64_t)((int32_t)tgt - (int32_t)gate_gain) * c) >> 24);    
-    if (gate_gain > 65536u) gate_gain = 65536u;  
-    return (int32_t)(((int64_t)x * (int32_t)gate_gain) >> 16);  
-}  
+// Шумовой гейт: env < thr -> gain -> AF_TX_GATE_FLOOR_Q16 (-24 дБ),  
+// иначе -> 1.0. Плавные фронты убирают щелчки на границах; нижняя  
+// ступень вместо нуля убирает «мёртвые паузы» и уменьшает скачок  
+// gain при открытии (0.063->1.0 вместо 0->1.0) — выброс FIR слабее.  
+static int32_t tx_gate(int32_t x) {    
+    if (tx_gate_thr == 0) return x;                  // гейт выключен    
+    uint32_t env = agc_env >> 8;                     // та же огибающая    
+    uint32_t c = (env > tx_gate_thr) ? AF_TX_GATE_ATT_Q24 : AF_TX_GATE_REL_Q24;    
+    uint32_t tgt = (env > tx_gate_thr) ? 65536u : (uint32_t)tx_gate_floor;      
+    gate_gain += (uint32_t)(((int64_t)((int32_t)tgt - (int32_t)gate_gain) * c) >> 24);      
+    if (gate_gain > 65536u) gate_gain = 65536u;    
+    return (int32_t)(((int64_t)x * (int32_t)gate_gain) >> 16);    
+}    
 
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {      
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
@@ -292,3 +299,9 @@ bool af_tx_softclip(void)         { return tx_softclip != 0; }
 
 void af_tx_set_2band(bool on)     { tx_2band_on = on ? 1 : 0; }  
 bool af_tx_2band(void)            { return tx_2band_on != 0; }  
+
+void af_tx_set_gfloor(uint32_t q16) {    
+    if (q16 > 65536u) q16 = 65536u;    
+    tx_gate_floor = (int32_t)q16;    // 0 = полное закрытие    
+}    
+uint32_t af_tx_gfloor(void) { return (uint32_t)tx_gate_floor; }    
