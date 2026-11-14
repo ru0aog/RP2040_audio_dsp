@@ -81,7 +81,7 @@
 #define AF_RX_NOTCH3_HZ         3000u  
 #define AF_RX_NOTCH4_HZ         4000u  
 #define AF_RX_NOTCH_R_Q15       32650   // r = 0.995 (шире -> 32000)  
-#define AF_RX_NOTCH_ON_DEFAULT  0       // 0 = выключены (вкл. командой rxnotch)  
+#define AF_RX_NOTCH_ON_DEFAULT  1       // 1 = нотчи включены при старте  
 
 // ---------------------------------------------------------------------------    
 // TX-тракт (SSB): речевая полоса, компрессор, клиппер    

@@ -346,3 +346,14 @@ txmode/tx2band + пресеты txpreset aggro|max|flat|def.
 история багов: BUGS.MD (BUG-005/006 — EMA-андерфлоу, aae28b6).  
   
 Производительность: L1 ~82-88% в TX, запас ~5-8% по max_block_us.  
+
+## RX-нотчи и TX-нотчи (a4116a1)  
+  
+RX: 4 фиксированных биквад-нотча 1/2/3/4 кГц после agc_limit  
+(команда rxnotch on|off) — против гребёнки наводок. Размещение  
+после АРУ обязательно: до АРУ нотчи отменяются контуром.  
+TX: 2 нотча 1/2 кГц в конце тракта (txnotch on|off, дефолт on).  
+  
+Гейт TX: дефолт AF_TX_GATE_THR = 400. Heartbeat в TX — красный.  
+Пресеты: txpreset aggro|max|flat|def; max смягчён (comp 80,  
+clip 6144, band 300-2400).  
