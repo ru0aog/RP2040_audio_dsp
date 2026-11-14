@@ -66,7 +66,7 @@ static void cli_help(void) {
     Serial.println("#   txmode soft|hard  — тип клиппера TX");
     Serial.println("#   tx2band on|off    — 2-полосная компрессия TX (split ~900 Гц)");  
     Serial.println("#   txgfloor <0..65536> — нижняя ступень гейта Q16 (4120=-24дБ, 0=тишина)");
-    Serial.println("#   txpreset <aggro|flat|def> — пресет речевого процессора одной командой");  
+    Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");    
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
   
@@ -444,58 +444,69 @@ static void cli_exec(char* line) {
         Serial.printf("# OK txgfloor=%lu\n", (unsigned long)af_tx_gfloor());  
     }  
 
-    else if (strncmp(cmd, "txpreset", 8) == 0) {  
-        char* v = strtok(NULL, " \t");  
-        if (v == NULL) { Serial.println("# ERR: txpreset <aggro|flat|def>"); return; }  
-  
-        if (strcmp(v, "aggro") == 0) {          // агрессивный «кирпич»  
-            af_tx_set_band(300, 2700);  
-            af_tx_set_ratio(80);                // 8:1  
-            af_tx_set_clip(8192);               // 0.25 FS  
-            af_tx_set_agc(18000);  
-            af_tx_set_gate(800);  
-            af_tx_set_gfloor(4120);             // -24 дБ  
-            af_tx_set_ap(true);  
-            af_tx_set_softclip(true);  
-            af_tx_set_2band(true);  
+    else if (strncmp(cmd, "txpreset", 8) == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txpreset <aggro|max|flat|def>"); return; }    
+    
+        if (strcmp(v, "aggro") == 0) {          // агрессивный «кирпич»    
+            af_tx_set_band(300, 2700);    
+            af_tx_set_ratio(80);                // 8:1    
+            af_tx_set_clip(8192);               // 0.25 FS    
+            af_tx_set_agc(18000);    
+            af_tx_set_gate(800);    
+            af_tx_set_gfloor(4120);             // -24 дБ    
+            af_tx_set_ap(true);    
+            af_tx_set_softclip(true);    
+            af_tx_set_2band(true);    
         }  
-        else if (strcmp(v, "flat") == 0) {      // линейный тракт (только FIR+АРУ)  
-            af_tx_set_band(300, 2700);  
-            af_tx_set_ratio(10);                // 1:1 — компрессия off  
-            af_tx_set_clip(32767);              // клиппер off  
-            af_tx_set_agc(18000);  
-            af_tx_set_gate(0);                  // гейт off  
-            af_tx_set_gfloor(4120);  
-            af_tx_set_ap(false);  
-            af_tx_set_softclip(true);  
-            af_tx_set_2band(false);  
-        }  
-        else if (strcmp(v, "def") == 0) {       // заводские дефолты из af_config.h  
-            af_tx_set_band(AF_TX_LO_HZ_DEFAULT, AF_TX_HI_HZ_DEFAULT);  
-            af_tx_set_ratio(AF_TX_RATIO_X10_DEFAULT);  
-            af_tx_set_clip(AF_TX_CLIP_DEFAULT);  
-            af_tx_set_agc(AF_TX_AGC_TARGET);  
-            af_tx_set_gate(AF_TX_GATE_THR);  
-            af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);  
-            af_tx_set_ap(AF_TX_AP_ON_DEFAULT != 0);  
-            af_tx_set_softclip(AF_TX_SOFTCLIP_ON_DEFAULT != 0);  
-            af_tx_set_2band(AF_TX_2BAND_ON_DEFAULT != 0);  
-        }  
-        else { Serial.println("# ERR: txpreset <aggro|flat|def>"); return; }  
-  
-        Serial.printf("# OK txpreset=%s  band=%lu..%lu comp=%lu clip=%lu agc=%lu gate=%lu gfloor=%lu ap=%s mode=%s 2band=%s\n",  
-                      v,  
-                      (unsigned long)af_tx_lo_hz(),  
-                      (unsigned long)af_tx_hi_hz(),  
-                      (unsigned long)af_tx_ratio(),  
-                      (unsigned long)af_tx_clip(),  
-                      (unsigned long)af_tx_agc(),  
-                      (unsigned long)af_tx_gate(),  
-                      (unsigned long)af_tx_gfloor(),  
-                      af_tx_ap() ? "on" : "off",  
-                      af_tx_softclip() ? "soft" : "hard",  
-                      af_tx_2band() ? "on" : "off");  
-    }  
+        else if (strcmp(v, "max") == 0) {       // максимальная плотность    
+            af_tx_set_band(300, 2200);    
+            af_tx_set_ratio(100);               // 10:1 — лимитер    
+            af_tx_set_clip(4096);               // мин. порог    
+            af_tx_set_agc(18000);    
+            af_tx_set_gate(800);    
+            af_tx_set_gfloor(4120);    
+            af_tx_set_ap(true);    
+            af_tx_set_softclip(true);    
+            af_tx_set_2band(true);    
+        }    
+        else if (strcmp(v, "flat") == 0) {      // линейный тракт (только FIR+АРУ)    
+            af_tx_set_band(300, 2700);    
+            af_tx_set_ratio(10);                // 1:1 — компрессия off    
+            af_tx_set_clip(32767);              // клиппер off    
+            af_tx_set_agc(18000);    
+            af_tx_set_gate(0);                  // гейт off    
+            af_tx_set_gfloor(4120);    
+            af_tx_set_ap(false);    
+            af_tx_set_softclip(true);    
+            af_tx_set_2band(false);    
+        }    
+        else if (strcmp(v, "def") == 0) {       // заводские дефолты из af_config.h    
+            af_tx_set_band(AF_TX_LO_HZ_DEFAULT, AF_TX_HI_HZ_DEFAULT);    
+            af_tx_set_ratio(AF_TX_RATIO_X10_DEFAULT);    
+            af_tx_set_clip(AF_TX_CLIP_DEFAULT);    
+            af_tx_set_agc(AF_TX_AGC_TARGET);    
+            af_tx_set_gate(AF_TX_GATE_THR);    
+            af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);    
+            af_tx_set_ap(AF_TX_AP_ON_DEFAULT != 0);    
+            af_tx_set_softclip(AF_TX_SOFTCLIP_ON_DEFAULT != 0);    
+            af_tx_set_2band(AF_TX_2BAND_ON_DEFAULT != 0);    
+        }    
+        else { Serial.println("# ERR: txpreset <aggro|max|flat|def>"); return; }    
+    
+        Serial.printf("# OK txpreset=%s  band=%lu..%lu comp=%lu clip=%lu agc=%lu gate=%lu gfloor=%lu ap=%s mode=%s 2band=%s\n",    
+                      v,    
+                      (unsigned long)af_tx_lo_hz(),    
+                      (unsigned long)af_tx_hi_hz(),    
+                      (unsigned long)af_tx_ratio(),    
+                      (unsigned long)af_tx_clip(),    
+                      (unsigned long)af_tx_agc(),    
+                      (unsigned long)af_tx_gate(),    
+                      (unsigned long)af_tx_gfloor(),    
+                      af_tx_ap() ? "on" : "off",    
+                      af_tx_softclip() ? "soft" : "hard",    
+                      af_tx_2band() ? "on" : "off");    
+    }    
 
     // вставлять сюда  
   
