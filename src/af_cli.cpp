@@ -455,7 +455,7 @@ static void cli_exec(char* line) {
             af_tx_set_ratio(80);                // 8:1    
             af_tx_set_clip(8192);               // 0.25 FS    
             af_tx_set_agc(18000);    
-            af_tx_set_gate(800);    
+            af_tx_set_gate(AF_TX_GATE_THR);  
             af_tx_set_gfloor(4120);             // -24 дБ    
             af_tx_set_ap(true);    
             af_tx_set_softclip(true);    
@@ -466,7 +466,7 @@ static void cli_exec(char* line) {
             af_tx_set_ratio(100);               // 10:1 — лимитер    
             af_tx_set_clip(4096);               // мин. порог    
             af_tx_set_agc(18000);    
-            af_tx_set_gate(800);    
+            af_tx_set_gate(AF_TX_GATE_THR);  
             af_tx_set_gfloor(4120);    
             af_tx_set_ap(true);    
             af_tx_set_softclip(true);    
