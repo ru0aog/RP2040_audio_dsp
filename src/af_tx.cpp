@@ -126,6 +126,7 @@ static int64_t pres_nf_q16    = (int64_t)256 << 16;          // noise floor, Q16
 static int32_t k_dyn_q15      = 0;                           // сглаженный k_dyn, Q15    
 static int32_t k_dyn_tgt_q15  = 0;                           // цель k_dyn (per-block)    
 static uint8_t pres_blk_cnt   = 0;                           // счётчик до пересчёта k    
+static uint8_t pres_decim = 0;   // дециматор sidechain ÷2    
 static uint32_t tx_presmax_db_x10 = 30;                      // потолок, дБ x10 (для stats)    
   
 // Peaking-биквад 2–2.7 кГц (после компрессора, до клиппера)  
@@ -224,29 +225,37 @@ static inline int32_t __not_in_flash_func(tx_notch)(int32_t x,
 }  
 
 // HP-биквад (Direct Form I), коэффициенты Q15 — отвод для env_hi_pre.  
-static inline int32_t __not_in_flash_func(tx_hp_push)(int32_t x) {  
-    int64_t acc = (int64_t)hp_b0 * x + (int64_t)hp_b1 * hp_x1  
-                + (int64_t)hp_b2 * hp_x2  
-                - (int64_t)hp_a1 * hp_y1 - (int64_t)hp_a2 * hp_y2;  
-    int32_t y = (int32_t)(acc >> 15);  
-    hp_x2 = hp_x1; hp_x1 = x;  
-    hp_y2 = hp_y1; hp_y1 = y;  
-    return y;  
-}  
+// int32-умножения: коэффициенты Q15, сигнал int16 — произведение    
+// <= 2^30, сумма 5 членов <= 2^32. Переполнения нет (HP-выход    
+// ограничен |x|, а |x| <= 32767). Каждое умножение 1 такт вместо ~35.    
+static inline int32_t __not_in_flash_func(tx_hp_push)(int32_t x) {    
+    int32_t acc = (hp_b0 * x + hp_b1 * hp_x1 + hp_b2 * hp_x2    
+                 - hp_a1 * hp_y1 - hp_a2 * hp_y2) >> 15;    
+    int32_t y = acc;    
+    hp_x2 = hp_x1; hp_x1 = x;    
+    hp_y2 = hp_y1; hp_y1 = y;    
+    return y;    
+}    
   
 // Обновление env_hi_pre, noise floor и k_dyn — вызывается после tx_agc,  
 // ДО tx_gate. env_hi_pre живёт на незагейтованном сигнале: в паузах  
 // виден реальный шум ВЧ-полосы, а не ноль.  
-static inline void __not_in_flash_func(tx_pres_sidechain)(int32_t x_agc) {  
-    int32_t hp = tx_hp_push(x_agc);  
-    int64_t ax = (hp < 0) ? -(int64_t)hp : (int64_t)hp;  
-  
-    // EMA огибающей ВЧ (атака/спад — общие константы компрессора)  
-    int64_t tgt = ax << 16;  
-    int64_t da  = tgt - env_hi_pre_q16;  
-    env_hi_pre_q16 += (da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24  
-                                    : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;  
-    if (env_hi_pre_q16 < ((int64_t)1 << 16)) env_hi_pre_q16 = (int64_t)1 << 16;  
+static inline void __not_in_flash_func(tx_pres_sidechain)(int32_t x_agc) {    
+    // Огибающая 50 мс не нуждается в 15.4 ksps — считаем на 7.7 ksps.    
+    // Экономит половину стоимости HP-биквада + EMA.    
+    if (++pres_decim & 1) return;    
+    int32_t hp = tx_hp_push(x_agc);    
+    int32_t ax = (hp < 0) ? -hp : hp;    
+    
+    // EMA огибающей ВЧ — int32: da <= 2^31, c <= 2^24,    
+    // произведение <= 2^55 — нужен int64 только для сдвига,    
+    // но da*c в int64 один раз дешевле, чем весь блок в int64.    
+    // Компромисс: da в int32, умножение через int64 один раз.    
+    int32_t tgt = ax << 16;    
+    int32_t da  = tgt - (int32_t)(env_hi_pre_q16 >> 0);  // env_hi_pre_q16 int64    
+    env_hi_pre_q16 += ((int64_t)da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24    
+                                            : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;    
+    if (env_hi_pre_q16 < ((int64_t)1 << 16)) env_hi_pre_q16 = (int64_t)1 << 16;    
   
     // Noise floor: минимум-трекер — вниз быстро, вверх медленно.  
     // Обновление только при закрытом гейте (agc_env < txgate):  
@@ -293,14 +302,22 @@ static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {
     // Биквад работает всегда — иначе при возврате k_dyn>0 состояния    
     // pe_x1/pe_y1 устарели и дают щелчок. При k_dyn=0 выход = x    
     // (dry-подмес), цена — один биквад ~0.3% L1.    
-    int64_t acc = (int64_t)pe_b0 * x + (int64_t)pe_b1 * pe_x1    
-                + (int64_t)pe_b2 * pe_x2    
-                - (int64_t)pe_a1 * pe_y1 - (int64_t)pe_a2 * pe_y2;    
-    int32_t wet = (int32_t)(acc >> 15);    
+    // int32-умножения: peaking-биквад с подъёмом <= +12 дБ —    
+    // внутренний wet <= ~4*|x|, произведения <= 2^32, сумма    
+    // может кратковременно превысить int32 на пиках — но    
+    // коэффициенты peaking с A<=4 дают запас; при переполнении    
+    // int32 wrap даст выброс на 1 отсчёт — слышимо как треск.    
+    // Страховка: сатурация wet в int16-диапазон после сдвига.    
+    int32_t acc = (pe_b0 * x + pe_b1 * pe_x1 + pe_b2 * pe_x2    
+                 - pe_a1 * pe_y1 - pe_a2 * pe_y2) >> 15;    
+    int32_t wet = acc;    
+    if (wet >  32767) wet =  32767;    
+    if (wet < -32768) wet = -32768;    
     pe_x2 = pe_x1; pe_x1 = x;    
     pe_y2 = pe_y1; pe_y1 = wet;    
-    // y = x + k_dyn*(wet - x): k_dyn Q15    
-    return x + (int32_t)(((int64_t)(wet - x) * k_dyn_q15) >> 15);    
+    // y = x + k_dyn*(wet - x): (wet-x) <= 2^16, k_dyn <= 2^15,    
+    // произведение <= 2^31 — int32 безопасен.    
+    return x + (((wet - x) * k_dyn_q15) >> 15);     
 }    
 
 // ---------------------------------------------------------------------------    
@@ -386,7 +403,9 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
 // ---------------------------------------------------------------------------    
 void af_tx_init(void) {
     agc_env   = 0;  
-    gate_gain = 0;  
+    gate_gain = 0;
+    pres_blk_cnt   = 0;    
+    pres_decim     = 0;    
     tx_gate_hold = 0;
     tx_fir_design();    
     memset(&tx_pre,  0, sizeof(tx_pre));    
