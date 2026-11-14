@@ -47,3 +47,15 @@ uint32_t af_tx_agc_env(void);   // огибающая АРУ — считает�
 uint32_t af_tx_env_lo(void);    // огибающая НЧ-полосы компрессора — ПОСЛЕ гейта  
 uint32_t af_tx_env_hi(void);    // огибающая ВЧ-полосы компрессора — ПОСЛЕ гейта  
 uint32_t af_tx_agc_gain(void);  // последний gain АРУ, Q15 (debug)  
+
+// Этап 2: Dynamic Presence EQ (SNR-адаптивный подъём 2–2.7 кГц)  
+void     af_tx_set_pres(bool on);        // presence EQ on/off  
+bool     af_tx_pres(void);  
+  
+void     af_tx_set_presmax(uint32_t db_x10);  // потолок подъёма, дБ×10 (30=+3дБ)  
+uint32_t af_tx_presmax(void);  
+  
+// Этап 2: debug-геттеры (только для stats)  
+uint32_t af_tx_env_hi_pre(void);  // ВЧ-огибающая ДО гейта (источник k_dyn)  
+uint32_t af_tx_pres_nf(void);     // оценка шумовой полки ВЧ  
+uint32_t af_tx_k_dyn(void);       // текущий k_dyn, Q15 (0..32768)  

@@ -67,6 +67,8 @@ static void cli_help(void) {
     Serial.println("#   tx2band on|off    — 2-полосная компрессия TX (split ~900 Гц)");  
     Serial.println("#   txgfloor <0..65536> — нижняя ступень гейта Q16 (4120=-24дБ, 0=тишина)");  
     Serial.println("#   txnotch on|off    — узкие нотчи 1/2 кГц против тонов-наводок");
+    Serial.println("#   txpres on|off     — dynamic presence EQ (подъём 2-2.7 кГц по SNR)");  
+    Serial.println("#   txpresmax <дБx10> — потолок подъёма presence (30=+3дБ, 60=+6дБ)");  
     Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");  
     Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");    
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
@@ -103,11 +105,18 @@ static void cli_stats(void) {
                   af_tx_softclip() ? "soft" : "hard",    
                   af_tx_2band() ? "on" : "off",  
                   af_tx_notch() ? "on" : "off");
+    Serial.printf("  pres=%s pmax=%lu\n",  
+                  af_tx_pres() ? "on" : "off",  
+                  (unsigned long)af_tx_presmax());
     Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
                   (unsigned long)af_tx_agc_env(),  
                   (unsigned long)af_tx_agc_gain(),  
                   (unsigned long)af_tx_env_lo(),  
-                  (unsigned long)af_tx_env_hi());  
+                  (unsigned long)af_tx_env_hi());
+    Serial.printf("  hi_pre=%lu nf=%lu k=%lu\n",  
+                  (unsigned long)af_tx_env_hi_pre(),  
+                  (unsigned long)af_tx_pres_nf(),  
+                  (unsigned long)af_tx_k_dyn());  
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -531,6 +540,19 @@ static void cli_exec(char* line) {
         if (v && strcmp(v, "on") == 0)       { af_tx_set_notch(true);  Serial.println("# OK txnotch=on"); }  
         else if (v && strcmp(v, "off") == 0) { af_tx_set_notch(false); Serial.println("# OK txnotch=off"); }  
         else Serial.println("# ERR: txnotch on|off");  
+    }  
+
+    else if (strncmp(cmd, "txpresmax", 9) == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v == NULL) { Serial.println("# ERR: txpresmax <дБx10>"); return; }  
+        af_tx_set_presmax((uint32_t)strtoul(v, NULL, 10));  
+        Serial.printf("# OK txpresmax=%lu (дБx10)\n", (unsigned long)af_tx_presmax());  
+    }  
+    else if (strncmp(cmd, "txpres", 6) == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v && strcmp(v, "on") == 0)       { af_tx_set_pres(true);  Serial.println("# OK txpres=on"); }  
+        else if (v && strcmp(v, "off") == 0) { af_tx_set_pres(false); Serial.println("# OK txpres=off"); }  
+        else Serial.println("# ERR: txpres on|off");  
     }  
 
     // вставлять сюда  

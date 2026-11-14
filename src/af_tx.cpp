@@ -111,7 +111,24 @@ static int32_t n1_b1 = 0, n1_a1 = 0, n1_a2 = 0;
 static int32_t n2_b1 = 0, n2_a1 = 0, n2_a2 = 0;  
 static int32_t n1_x1 = 0, n1_x2 = 0, n1_y1 = 0, n1_y2 = 0;  
 static int32_t n2_x1 = 0, n2_x2 = 0, n2_y1 = 0, n2_y2 = 0;  
-static uint16_t tx_gate_hold = 0;   // счётчик hangover, в отсчётах @AF_FS_OUT_HZ  
+static uint16_t tx_gate_hold = 0;   // счётчик hangover, в отсчётах @AF_FS_OUT_HZ
+
+// --- Этап 2: Dynamic Presence EQ (SNR-адаптивный) ---  
+static volatile uint8_t  tx_pres_on    = AF_TX_PRES_ON_DEFAULT;  
+static volatile int32_t  tx_presmax_q15 = AF_TX_PRES_MAX_Q15;  // потолок подъёма, Q15  
+  
+// Отвод env_hi_pre: HP ~1.5 кГц (биквад) + EMA — после АРУ, ДО гейта.  
+// Источник для k_dyn и noise floor (env_hi компрессора в паузах = 0).  
+static int32_t hp_x1 = 0, hp_x2 = 0, hp_y1 = 0, hp_y2 = 0;   // HP-биквад  
+static int32_t hp_b0 = 0, hp_b1 = 0, hp_b2 = 0, hp_a1 = 0, hp_a2 = 0;  
+static int64_t env_hi_pre_q16 = (int64_t)256 << 16;          // EMA |hp|, Q16  
+static int64_t pres_nf_q16    = (int64_t)256 << 16;          // noise floor, Q16  
+static int32_t k_dyn_q15      = 0;                           // сглаженный k_dyn, Q15  
+  
+// Peaking-биквад 2–2.7 кГц (после компрессора, до клиппера)  
+static int32_t pe_x1 = 0, pe_x2 = 0, pe_y1 = 0, pe_y2 = 0;  
+static int32_t pe_b0 = 0, pe_b1 = 0, pe_b2 = 0, pe_a1 = 0, pe_a2 = 0;  
+
 static int32_t split_lp = 0;                    // состояние ФНЧ кроссовера  
 static int64_t tx_env_lo_q16 = (int64_t)256 << 16;  // EMA огибающей НЧ-полосы  
 static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей ВЧ-полосы  
@@ -203,6 +220,79 @@ static inline int32_t __not_in_flash_func(tx_notch)(int32_t x,
     return y;  
 }  
 
+// HP-биквад (Direct Form I), коэффициенты Q15 — отвод для env_hi_pre.  
+static inline int32_t __not_in_flash_func(tx_hp_push)(int32_t x) {  
+    int64_t acc = (int64_t)hp_b0 * x + (int64_t)hp_b1 * hp_x1  
+                + (int64_t)hp_b2 * hp_x2  
+                - (int64_t)hp_a1 * hp_y1 - (int64_t)hp_a2 * hp_y2;  
+    int32_t y = (int32_t)(acc >> 15);  
+    hp_x2 = hp_x1; hp_x1 = x;  
+    hp_y2 = hp_y1; hp_y1 = y;  
+    return y;  
+}  
+  
+// Обновление env_hi_pre, noise floor и k_dyn — вызывается после tx_agc,  
+// ДО tx_gate. env_hi_pre живёт на незагейтованном сигнале: в паузах  
+// виден реальный шум ВЧ-полосы, а не ноль.  
+static inline void __not_in_flash_func(tx_pres_sidechain)(int32_t x_agc) {  
+    int32_t hp = tx_hp_push(x_agc);  
+    int64_t ax = (hp < 0) ? -(int64_t)hp : (int64_t)hp;  
+  
+    // EMA огибающей ВЧ (атака/спад — общие константы компрессора)  
+    int64_t tgt = ax << 16;  
+    int64_t da  = tgt - env_hi_pre_q16;  
+    env_hi_pre_q16 += (da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24  
+                                    : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;  
+    if (env_hi_pre_q16 < ((int64_t)1 << 16)) env_hi_pre_q16 = (int64_t)1 << 16;  
+  
+    // Noise floor: минимум-трекер — вниз быстро, вверх медленно.  
+    // Обновление только при закрытом гейте (agc_env < txgate):  
+    // в речи floor заморожен, «залипания» нет — при появлении паузы  
+    // подстраивается за ~0.5 с.  
+    uint32_t env8 = agc_env >> 8;  
+    if (tx_gate_thr != 0 && env8 < tx_gate_thr) {  
+        if (env_hi_pre_q16 < pres_nf_q16)  
+            pres_nf_q16 = env_hi_pre_q16;                    // вниз — мгновенно  
+        else  
+            pres_nf_q16 += (env_hi_pre_q16 - pres_nf_q16) >> AF_TX_PRES_NF_UP_SHIFT;  
+    }  
+    if (pres_nf_q16 < ((int64_t)1 << 16)) pres_nf_q16 = (int64_t)1 << 16;  
+  
+    // k_dyn = clamp((env_hi_pre - 2*nf) / (4*nf), 0..1), Q15.  
+    // Одна формула: и опорный уровень, и SNR-гейтинг — шум пауз  
+    // (env ~ nf) даёт k_dyn ~ 0, речь (env >> nf) — k_dyn -> 1.  
+    int64_t nf  = pres_nf_q16 >> 16;                          // в шкалу 0..32767  
+    int64_t env = env_hi_pre_q16 >> 16;  
+    int64_t num = env - 2 * nf;  
+    int32_t k = 0;  
+    if (num > 0) {  
+        int64_t den = 4 * nf;  
+        k = (int32_t)((num << 15) / den);  
+        if (k > 32768) k = 32768;  
+    }  
+  
+    // Сглаживание k_dyn: атака ~10 мс, спад ~100 мс — без щелчков  
+    // на границах слогов.  
+    int32_t c = (k > k_dyn_q15) ? AF_TX_PRES_K_ATT_Q24 : AF_TX_PRES_K_REL_Q24;  
+    k_dyn_q15 += (int32_t)(((int64_t)(k - k_dyn_q15) * c) >> 24);  
+}  
+  
+// Peaking-биквад с переменным подъёмом: gain = 1 + k_dyn*(presmax-1).  
+// Реализовано как dry + k_dyn*(wet - dry): при k_dyn=0 — прозрачный  
+// байпас, при k_dyn=1 — полный подъём presmax. Коэффициенты биквада  
+// посчитаны на максимальный подъём; промежуточные k — линейный подмес.  
+static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {  
+    if (!tx_pres_on || k_dyn_q15 <= 0) return x;  
+    int64_t acc = (int64_t)pe_b0 * x + (int64_t)pe_b1 * pe_x1  
+                + (int64_t)pe_b2 * pe_x2  
+                - (int64_t)pe_a1 * pe_y1 - (int64_t)pe_a2 * pe_y2;  
+    int32_t wet = (int32_t)(acc >> 15);  
+    pe_x2 = pe_x1; pe_x1 = x;  
+    pe_y2 = pe_y1; pe_y1 = wet;  
+    // y = x + k_dyn*(wet - x): k_dyn Q15  
+    return x + (int32_t)(((int64_t)(wet - x) * k_dyn_q15) >> 15);  
+}  
+
 // ---------------------------------------------------------------------------    
 // Точка входа из af_dsp_poll    
 // ---------------------------------------------------------------------------
@@ -264,11 +354,13 @@ static int32_t tx_gate(int32_t x) {
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {      
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
     if (tx_ap_on) y = tx_allpass(y);  // симметризатор пиков речи  
-    y = tx_agc(y);                    // АРУ: выравнивание уровня к target    
-    y = tx_gate(y);                   // шумовой гейт: паузы -> тишина    
-    y = tx_compress(y);               // компрессия        
-    y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)  
-                    : tx_clip(y);     // жёсткий клиппер  
+    y = tx_agc(y);                    // АРУ: выравнивание уровня к target      
+    tx_pres_sidechain(y);             // env_hi_pre/nf/k_dyn — ДО гейта  
+    y = tx_gate(y);                   // шумовой гейт: паузы -> тишина      
+    y = tx_compress(y);               // компрессия          
+    y = tx_presence(y);               // dyn-presence EQ (этап 2)  
+    y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)    
+                    : tx_clip(y);     // жёсткий клиппер    
     y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга  
     if (tx_notch_on) {                // узкие нотчи против тонов-наводок  
         y = tx_notch(y, n1_b1, n1_a1, n1_a2, &n1_x1, &n1_x2, &n1_y1, &n1_y2);  
@@ -308,7 +400,37 @@ void af_tx_init(void) {
         n2_a2 = n1_a2;  
         n1_x1 = n1_x2 = n1_y1 = n1_y2 = 0;  
         n2_x1 = n2_x2 = n2_y1 = n2_y2 = 0;  
+    }
+    // Этап 2: HP-биквад ~1.5 кГц для env_hi_pre (RBJ high-pass, Q=0.707)  
+    {  
+        const float w  = 2.0f * PI * (float)AF_TX_PRES_HP_HZ / AF_FS_OUT_HZ;  
+        const float cw = cosf(w), sw = sinf(w);  
+        const float al = sw / (2.0f * 0.7071f);  
+        const float a0 = 1.0f + al;  
+        hp_b0 = (int32_t)lroundf(((1.0f + cw) * 0.5f / a0) * 32768.0f);  
+        hp_b1 = (int32_t)lroundf((-(1.0f + cw) / a0) * 32768.0f);  
+        hp_b2 = hp_b0;  
+        hp_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
+        hp_a2 = (int32_t)lroundf(((1.0f - al) / a0) * 32768.0f);  
+        hp_x1 = hp_x2 = hp_y1 = hp_y2 = 0;  
     }  
+    // Этап 2: peaking-биквад AF_TX_PRES_FREQ_HZ, Q, подъём presmax (RBJ)  
+    {  
+        const float A  = sqrtf((float)tx_presmax_q15 / 32768.0f); // лин. амплитуда  
+        const float w  = 2.0f * PI * (float)AF_TX_PRES_FREQ_HZ / AF_FS_OUT_HZ;  
+        const float cw = cosf(w), sw = sinf(w);  
+        const float al = sw / (2.0f * AF_TX_PRES_Q_X100 / 100.0f);  
+        const float a0 = 1.0f + al / A;  
+        pe_b0 = (int32_t)lroundf(((1.0f + al * A) / a0) * 32768.0f);  
+        pe_b1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
+        pe_b2 = (int32_t)lroundf(((1.0f - al * A) / a0) * 32768.0f);  
+        pe_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
+        pe_a2 = (int32_t)lroundf(((1.0f - al / A) / a0) * 32768.0f);  
+        pe_x1 = pe_x2 = pe_y1 = pe_y2 = 0;  
+    }  
+    env_hi_pre_q16 = (int64_t)256 << 16;  
+    pres_nf_q16    = (int64_t)256 << 16;  
+    k_dyn_q15      = 0;  
 }      
     
 void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {    
@@ -375,3 +497,29 @@ uint32_t af_tx_env_lo(void)   { return (uint32_t)(tx_env_lo_q16 >> 16); }
 uint32_t af_tx_env_hi(void)   { return (uint32_t)(tx_env_hi_q16 >> 16); }  
 uint32_t af_tx_agc_env(void)  { return agc_env >> 8; }  
 uint32_t af_tx_agc_gain(void) { return (uint32_t)tx_agc_gain_q15; }  
+
+void af_tx_set_pres(bool on)  { tx_pres_on = on ? 1 : 0; }  
+bool af_tx_pres(void)         { return tx_pres_on != 0; }  
+  
+void af_tx_set_presmax(uint32_t db_x10) {   // потолок подъёма, дБ x10  
+    if (db_x10 > 120) db_x10 = 120;         // max +12 дБ  
+    // Q15 = 10^(dB/20): float только в сеттере, не в горячем пути  
+    tx_presmax_q15 = (int32_t)lroundf(powf(10.0f, (float)db_x10 / 200.0f) * 32768.0f);  
+    // пересчёт коэффициентов peaking-биквада под новый потолок  
+    const float A  = sqrtf((float)tx_presmax_q15 / 32768.0f);  
+    const float w  = 2.0f * PI * (float)AF_TX_PRES_FREQ_HZ / AF_FS_OUT_HZ;  
+    const float cw = cosf(w), sw = sinf(w);  
+    const float al = sw / (2.0f * AF_TX_PRES_Q_X100 / 100.0f);  
+    const float a0 = 1.0f + al / A;  
+    pe_b0 = (int32_t)lroundf(((1.0f + al * A) / a0) * 32768.0f);  
+    pe_b1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
+    pe_b2 = (int32_t)lroundf(((1.0f - al * A) / a0) * 32768.0f);  
+    pe_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
+    pe_a2 = (int32_t)lroundf(((1.0f - al / A) / a0) * 32768.0f);  
+}  
+uint32_t af_tx_presmax(void) { return (uint32_t)tx_presmax_q15; }  
+  
+// --- debug getters (этап 2) ---  
+uint32_t af_tx_env_hi_pre(void) { return (uint32_t)(env_hi_pre_q16 >> 16); }  
+uint32_t af_tx_pres_nf(void)    { return (uint32_t)(pres_nf_q16 >> 16); }  
+uint32_t af_tx_k_dyn(void)      { return (uint32_t)k_dyn_q15; }  
