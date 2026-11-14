@@ -88,8 +88,12 @@ static inline int32_t __not_in_flash_func(tx_fir_push)(tx_fir_t* f, int32_t x) {
 //   gain = 1 - (1 - thr/env) * (1 - 1/ratio)    
 // При ratio=1 -> gain=1; при большом ratio -> gain=thr/env (лимитер).    
 // ---------------------------------------------------------------------------    
-static volatile uint32_t tx_ratio_x10 = AF_TX_RATIO_X10_DEFAULT;  // x10    
-static volatile uint32_t tx_clip_thr  = AF_TX_CLIP_DEFAULT;       // 0..32767   
+static volatile uint32_t tx_ratio_x10 = AF_TX_RATIO_X10_DEFAULT;  // x10
+static volatile int32_t  tx_depth_q15 =                           // 1-1/r, Q15  
+    32768 - (32768 * 10) / (int32_t)AF_TX_RATIO_X10_DEFAULT;  
+static volatile uint32_t tx_clip_thr  = AF_TX_CLIP_DEFAULT;       // 0..32767
+static volatile int32_t  tx_makeup_q15 =                          // 32767/t, Q15  
+    (int32_t)(((int64_t)32767 << 15) / AF_TX_CLIP_DEFAULT);  
 static uint32_t tx_agc_target = AF_TX_AGC_TARGET;  // целевой уровень АРУ  
 static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)  
 static uint32_t agc_env       = 0;                 // EMA огибающей АРУ, Q16  
@@ -131,9 +135,8 @@ static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,
     int32_t env = (int32_t)(*env_q16 >> 16);  
     if (env <= thr) return x;                  // ниже порога — без компрессии  
   
-    int32_t inv    = (int32_t)(((int64_t)thr << 15) / env);         // thr/env Q15  
-    int32_t depth  = 32768 - (32768 * 10) / (int32_t)tx_ratio_x10;  // 1-1/r Q15  
-    int32_t gain   = 32768 - (((32768 - inv) * depth) >> 15);       // Q15  
+    int32_t inv    = (int32_t)(((int64_t)thr << 15) / env);         // thr/env Q15    
+    int32_t gain   = 32768 - (((32768 - inv) * tx_depth_q15) >> 15); // Q15    
     return (int32_t)(((int64_t)x * gain) >> 15);  
 }  
   
@@ -157,13 +160,12 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {
 // ---------------------------------------------------------------------------    
 // Клиппер + makeup    
 // ---------------------------------------------------------------------------    
-static inline int32_t __not_in_flash_func(tx_clip)(int32_t x) {    
-    int32_t t = (int32_t)tx_clip_thr;    
-    if (x >  t) x =  t;    
-    if (x < -t) x = -t;    
-    // makeup: вернуть уровень к полной шкале (32767/clip_thr)    
-    return (int32_t)(((int64_t)x * 32767) / t);    
-}    
+static inline int32_t __not_in_flash_func(tx_clip)(int32_t x) {      
+    int32_t t = (int32_t)tx_clip_thr;      
+    if (x >  t) x =  t;      
+    if (x < -t) x = -t;      
+    return (int32_t)(((int64_t)x * tx_makeup_q15) >> 15);   // makeup кеширован  
+}      
 
 // Кубический клиппер: y = x - x^3/(3*t^2), нормирован к t на выходе.  
 // Мягче hard clip — меньше гармоник на входе пост-FIR.  
@@ -173,10 +175,10 @@ static inline int32_t __not_in_flash_func(tx_soft_clip)(int32_t x) {
     if (x >  t) x =  t;  
     if (x < -t) x = -t;  
     // x^3/(3*t^2): x*x может переполнить int32 при x~32767 -> int64  
-    int64_t x3 = ((int64_t)x * x * x) / ((int64_t)t * t);   // ~x^3/t^2  
-    int32_t y = x - (int32_t)(x3 / 3);  
-    // нормировка: y_max = 2/3*t -> *3/2; затем makeup к 32767 как в hard  
-    return (int32_t)(((int64_t)y * 3 * 32767) / (2 * (int64_t)t));  
+    int64_t x3 = ((int64_t)x * x * x) / ((int64_t)t * t);   // ~x^3/t^2    
+    int32_t y = x - (int32_t)(x3 / 3);    
+    // нормировка *3/2 + makeup к 32767 — кешировано в tx_makeup_q15    
+    return (int32_t)((((int64_t)y * 3) >> 1) * tx_makeup_q15 >> 15);    
 }  
 
 // ---------------------------------------------------------------------------    
@@ -253,18 +255,20 @@ void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {
 uint32_t af_tx_lo_hz(void) { return tx_lo_hz; }    
 uint32_t af_tx_hi_hz(void) { return tx_hi_hz; }    
     
-void af_tx_set_ratio(uint32_t r_x10) {    
-    if (r_x10 < 10)  r_x10 = 10;    // 1:1 — обход    
-    if (r_x10 > 100) r_x10 = 100;   // 10:1 — почти лимитер    
-    tx_ratio_x10 = r_x10;    
-}    
+void af_tx_set_ratio(uint32_t r_x10) {      
+    if (r_x10 < 10)  r_x10 = 10;    // 1:1 — обход      
+    if (r_x10 > 100) r_x10 = 100;   // 10:1 — почти лимитер      
+    tx_ratio_x10 = r_x10;      
+    tx_depth_q15 = 32768 - (32768 * 10) / (int32_t)r_x10;  // кеш, 1 деление  
+}      
 uint32_t af_tx_ratio(void) { return tx_ratio_x10; }    
     
-void af_tx_set_clip(uint32_t thr) {    
-    if (thr < 4096)  thr = 4096;    
-    if (thr > 32767) thr = 32767;    
-    tx_clip_thr = thr;    
-}    
+void af_tx_set_clip(uint32_t thr) {      
+    if (thr < 4096)  thr = 4096;      
+    if (thr > 32767) thr = 32767;      
+    tx_clip_thr = thr;      
+    tx_makeup_q15 = (int32_t)(((int64_t)32767 << 15) / (int64_t)thr); // кеш  
+}      
 uint32_t af_tx_clip(void) { return tx_clip_thr; }
 
 void af_tx_set_agc(uint32_t target) {  
