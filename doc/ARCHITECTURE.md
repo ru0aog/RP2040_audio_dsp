@@ -455,3 +455,48 @@ af_gpio_ctl.cpp/.h — дебаунс GP2/GP3/GP4
 
   Heartbeat в TX: чисто красный (перекрывает цвет банка и все  
   подмесы) — однозначная индикация «на передаче».  
+
+  ## TX-тракт (актуальная цепочка, @AF_FS_OUT_HZ = 15464 Гц)  
+  
+  y -> полосовой FIR (band 300..2700)  
+    -> all-pass (симметризатор)  
+    -> АРУ (agc_env — ДО гейта)  
+    -> [env_hi_pre: HP 1.5 кГц + EMA — отвод ДО гейта, sidechain  
+        для presence EQ и noise floor]  
+    -> гейт (hangover 180 мс, гистерезис 0.7: open>250, close<175)  
+    -> 2-полосная компрессия (split 900 Гц, комплементарный  
+       hi = x - lo; env_lo/env_hi — ПОСЛЕ гейта)  
+    -> Dynamic Presence EQ (peaking 2–2.7 кГц, k_dyn от  
+       env_hi_pre с SNR-гейтингом по nf)  
+    -> клиппер (кубический/жёсткий)  
+    -> постфильтр -> int16  
+  
+### Огибающие и точки отвода (важно для новых блоков)  
+  
+- agc_env — ДО гейта; условие «гейт закрыт» для SNR-оценщика:  
+  agc_env < txgate.  
+- env_hi_pre — ДО гейта (HP 1.5 кГц + EMA, децимация ÷2):  
+  источник k_dyn и noise floor. env_hi компрессора для этого  
+  НЕ пригоден — он после гейта и в паузах = 0.  
+- env_lo/env_hi — ПОСЛЕ гейта, внутри tx_comp_band.  
+  
+### Бюджет Core 1  
+  
+- Окно блока ~4136 мкс (64 отсчёта @15464). L1 в TX ~85–90%,  
+  max_block_us ~3900 — запас ~5–10%.  
+- Правило: int64-умножение ~35 тактов (библиотечный вызов M0+),  
+  int32 — 1 такт. Новые биквады — на int32 где возможно.  
+- Деления — только per-block (раз в 64 отсчёта) или через  
+  кешированный reciprocal. int64-деление per-sample = ~17% L1.  
+- Оверклок недоступен: clk_sys = 250 МГц (custom PLL), PWM и  
+  тайминги завязаны на неё.  
+  
+### Команды CLI (TX)  
+  
+  tx on|off, txband <lo> <hi>, txcomp <x10>, txclip <thr>,  
+  txagc <tgt>, txgate <thr>, txgfloor <q16>, txap on|off,  
+  txclip soft|hard, tx2band on|off, txnotch on|off,  
+  txpres on|off, txpresmax <дБ×10>  
+  stats -> txenv: agc_env agc_gain env_lo env_hi hi_pre nf k  
+
+  
