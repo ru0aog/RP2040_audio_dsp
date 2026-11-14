@@ -61,7 +61,9 @@ static void cli_help(void) {
     Serial.println("#   txcomp <x10>      — компрессия x10: 10=1:1, 20=2:1, 40=4:1");  
     Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");    
     Serial.println("#   txagc <0..32767>  — целевой уровень TX-АРУ (0 = АРУ off)");  
-    Serial.println("#   txgate <0..32767> — порог шумового гейта TX (0 = гейт off)");  
+    Serial.println("#   txgate <0..32767> — порог шумового гейта TX (0 = гейт off)");
+    Serial.println("#   txap on|off       — all-pass симметризатор пиков TX");  
+    Serial.println("#   txmode soft|hard  — тип клиппера TX");  
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
   
@@ -84,13 +86,15 @@ static void cli_stats(void) {
                   af_dsp_bypass_on() ? "on" : "off",
                   af_dsp_tx_on() ? "on" : "off");
     Serial.printf("# ramp=%s\n", af_dsp_ramp_on() ? "on" : "off");    
-    Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu  agc=%lu  gate=%lu\n",    
-                  (unsigned long)af_tx_lo_hz(),    
-                  (unsigned long)af_tx_hi_hz(),    
-                  (unsigned long)af_tx_ratio(),    
-                  (unsigned long)af_tx_clip(),  
-                  (unsigned long)af_tx_agc(),  
-                  (unsigned long)af_tx_gate());    
+    Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu  agc=%lu  gate=%lu  ap=%s  mode=%s\n",      
+                  (unsigned long)af_tx_lo_hz(),      
+                  (unsigned long)af_tx_hi_hz(),      
+                  (unsigned long)af_tx_ratio(),      
+                  (unsigned long)af_tx_clip(),    
+                  (unsigned long)af_tx_agc(),    
+                  (unsigned long)af_tx_gate(),  
+                  af_tx_ap() ? "on" : "off",  
+                  af_tx_softclip() ? "soft" : "hard");        
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -406,6 +410,19 @@ static void cli_exec(char* line) {
         if (v == NULL) { Serial.println("# ERR: txgate <0..32767>"); return; }  
         af_tx_set_gate((uint32_t)strtoul(v, NULL, 10));  
         Serial.printf("# OK txgate=%lu\n", (unsigned long)af_tx_gate());  
+    }  
+
+    else if (strncmp(cmd, "txap", 4) == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v && strcmp(v, "on") == 0)       { af_tx_set_ap(true);  Serial.println("# OK txap=on"); }  
+        else if (v && strcmp(v, "off") == 0) { af_tx_set_ap(false); Serial.println("# OK txap=off"); }  
+        else Serial.println("# ERR: txap on|off");  
+    }  
+    else if (strncmp(cmd, "txmode", 6) == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v && strcmp(v, "soft") == 0)     { af_tx_set_softclip(true);  Serial.println("# OK txmode=soft"); }  
+        else if (v && strcmp(v, "hard") == 0){ af_tx_set_softclip(false); Serial.println("# OK txmode=hard"); }  
+        else Serial.println("# ERR: txmode soft|hard");  
     }  
 
     // вставлять сюда  

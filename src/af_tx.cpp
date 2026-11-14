@@ -3,8 +3,8 @@
 // af_tx.cpp — передающий тракт SSB (Core 1)    
 //    
 // Цепочка на AF_FS_OUT_HZ (~15.464 ksps):    
-//   y -> полосовой FIR (tx_lo..tx_hi, 300..2700 по умолч.)    
-//     -> компрессор (EMA-огибающая, gain = (thr/env)^(1-1/ratio))    
+//   y -> полосовой FIR -> all-pass (симметризатор) -> АРУ -> гейт  
+//     -> компрессор -> клиппер (кубический/жёсткий) -> постфильтр -> int16  
 //     -> клиппер (жёсткий, порог tx_clip)    
 //     -> постфильтр (тот же FIR — срезает гармоники клиппинга)    
 //     -> makeup-gain -> int16    
@@ -96,12 +96,24 @@ static uint32_t tx_agc_target = AF_TX_AGC_TARGET;  // целевой урове�
 static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)  
 static uint32_t agc_env       = 0;                 // EMA огибающей АРУ, Q16  
 static uint32_t gate_gain     = 0;                 // gain гейта, Q16 (0..65536)  
-    
-static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16    
-    
+static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16
+static volatile uint8_t  tx_ap_on    = AF_TX_AP_ON_DEFAULT;  
+static volatile uint8_t  tx_softclip = AF_TX_SOFTCLIP_ON_DEFAULT;  
+static int32_t ap_x1 = 0, ap_y1 = 0;   // состояние all-pass  
+
 // Порог компрессора — фиксированный, ~25% шкалы.    
 #define TX_COMP_THR   8192    
-    
+
+// All-pass 1-го порядка (phase rotator): y = a*(x - y1) + x1.  
+// Амплитуда не меняется, фаза крутится — пики речи симметрируются,  
+// клипперу достаётся более «квадратный» сигнал.  
+static inline int32_t tx_allpass(int32_t x) {  
+    int32_t y = (int32_t)(((int64_t)AF_TX_AP_COEFF_Q15 * (x - ap_y1)) >> 15) + ap_x1;  
+    ap_x1 = x;  
+    ap_y1 = y;  
+    return y;  
+}  
+
 static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {    
     int64_t ax  = (x < 0) ? -x : x;    
     int64_t tgt = ax << 16;    
@@ -131,6 +143,20 @@ static inline int32_t __not_in_flash_func(tx_clip)(int32_t x) {
     // makeup: вернуть уровень к полной шкале (32767/clip_thr)    
     return (int32_t)(((int64_t)x * 32767) / t);    
 }    
+
+// Кубический клиппер: y = x - x^3/(3*t^2), нормирован к t на выходе.  
+// Мягче hard clip — меньше гармоник на входе пост-FIR.  
+// При |x| >= t выход = ±(2/3)*t*1.5 = ±t — непрерывно.  
+static inline int32_t __not_in_flash_func(tx_soft_clip)(int32_t x) {  
+    int32_t t = (int32_t)tx_clip_thr;  
+    if (x >  t) x =  t;  
+    if (x < -t) x = -t;  
+    // x^3/(3*t^2): x*x может переполнить int32 при x~32767 -> int64  
+    int64_t x3 = ((int64_t)x * x * x) / ((int64_t)t * t);   // ~x^3/t^2  
+    int32_t y = x - (int32_t)(x3 / 3);  
+    // нормировка: y_max = 2/3*t -> *3/2; затем makeup к 32767 как в hard  
+    return (int32_t)(((int64_t)y * 3 * 32767) / (2 * (int64_t)t));  
+}  
 
 // ---------------------------------------------------------------------------    
 // Точка входа из af_dsp_poll    
@@ -164,13 +190,15 @@ static int32_t tx_gate(int32_t x) {
     return (int32_t)(((int64_t)x * (int32_t)gate_gain) >> 16);  
 }  
 
-int16_t __not_in_flash_func(af_tx_process)(int32_t y) {    
-    y = tx_fir_push(&tx_pre, y);     // речевая полоса      
-    y = tx_agc(y);                   // АРУ: выравнивание уровня к target  
-    y = tx_gate(y);                  // шумовой гейт: паузы -> тишина  
-    y = tx_compress(y);              // компрессия      
-    y = tx_clip(y);                  // клиппер + makeup    
-    y = tx_fir_push(&tx_post, y);    // срез гармоник клиппинга    
+int16_t __not_in_flash_func(af_tx_process)(int32_t y) {      
+    y = tx_fir_push(&tx_pre, y);      // речевая полоса        
+    if (tx_ap_on) y = tx_allpass(y);  // симметризатор пиков речи  
+    y = tx_agc(y);                    // АРУ: выравнивание уровня к target    
+    y = tx_gate(y);                   // шумовой гейт: паузы -> тишина    
+    y = tx_compress(y);               // компрессия        
+    y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)  
+                    : tx_clip(y);     // жёсткий клиппер  
+    y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга      
     if (y >  32767) y =  32767;    
     if (y < -32768) y = -32768;    
     return (int16_t)y;    
@@ -185,8 +213,10 @@ void af_tx_init(void) {
     tx_fir_design();    
     memset(&tx_pre,  0, sizeof(tx_pre));    
     memset(&tx_post, 0, sizeof(tx_post));    
-    tx_env_q16 = (int64_t)256 << 16;    
-}    
+    tx_env_q16 = (int64_t)256 << 16;      
+    ap_x1 = 0;  
+    ap_y1 = 0;  
+}      
     
 void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {    
     const uint32_t FS2 = AF_FS_OUT_HZ / 2;    
@@ -225,3 +255,9 @@ void af_tx_set_gate(uint32_t thr) {
     tx_gate_thr = thr;               // 0 = гейт off  
 }  
 uint32_t af_tx_gate(void) { return tx_gate_thr; }  
+
+void af_tx_set_ap(bool on)        { tx_ap_on = on ? 1 : 0; }  
+bool af_tx_ap(void)               { return tx_ap_on != 0; }  
+  
+void af_tx_set_softclip(bool on)  { tx_softclip = on ? 1 : 0; }  
+bool af_tx_softclip(void)         { return tx_softclip != 0; }  

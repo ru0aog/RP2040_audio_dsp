@@ -26,3 +26,9 @@ uint32_t af_tx_agc(void);
   
 void     af_tx_set_gate(uint32_t thr);     // порог гейта 0..32767 (0 = off)  
 uint32_t af_tx_gate(void);  
+
+void     af_tx_set_ap(bool on);        // all-pass симметризатор on/off  
+bool     af_tx_ap(void);  
+  
+void     af_tx_set_softclip(bool on);  // кубический клиппер (off = hard)  
+bool     af_tx_softclip(void);  
