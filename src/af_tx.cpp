@@ -122,8 +122,11 @@ static volatile int32_t  tx_presmax_q15 = AF_TX_PRES_MAX_Q15;  // потолок
 static int32_t hp_x1 = 0, hp_x2 = 0, hp_y1 = 0, hp_y2 = 0;   // HP-биквад  
 static int32_t hp_b0 = 0, hp_b1 = 0, hp_b2 = 0, hp_a1 = 0, hp_a2 = 0;  
 static int64_t env_hi_pre_q16 = (int64_t)256 << 16;          // EMA |hp|, Q16  
-static int64_t pres_nf_q16    = (int64_t)256 << 16;          // noise floor, Q16  
-static int32_t k_dyn_q15      = 0;                           // сглаженный k_dyn, Q15  
+static int64_t pres_nf_q16    = (int64_t)256 << 16;          // noise floor, Q16    
+static int32_t k_dyn_q15      = 0;                           // сглаженный k_dyn, Q15    
+static int32_t k_dyn_tgt_q15  = 0;                           // цель k_dyn (per-block)    
+static uint8_t pres_blk_cnt   = 0;                           // счётчик до пересчёта k    
+static uint32_t tx_presmax_db_x10 = 30;                      // потолок, дБ x10 (для stats)    
   
 // Peaking-биквад 2–2.7 кГц (после компрессора, до клиппера)  
 static int32_t pe_x1 = 0, pe_x2 = 0, pe_y1 = 0, pe_y2 = 0;  
@@ -258,40 +261,47 @@ static inline void __not_in_flash_func(tx_pres_sidechain)(int32_t x_agc) {
     }  
     if (pres_nf_q16 < ((int64_t)1 << 16)) pres_nf_q16 = (int64_t)1 << 16;  
   
-    // k_dyn = clamp((env_hi_pre - 2*nf) / (4*nf), 0..1), Q15.  
-    // Одна формула: и опорный уровень, и SNR-гейтинг — шум пауз  
-    // (env ~ nf) даёт k_dyn ~ 0, речь (env >> nf) — k_dyn -> 1.  
-    int64_t nf  = pres_nf_q16 >> 16;                          // в шкалу 0..32767  
-    int64_t env = env_hi_pre_q16 >> 16;  
-    int64_t num = env - 2 * nf;  
-    int32_t k = 0;  
-    if (num > 0) {  
-        int64_t den = 4 * nf;  
-        k = (int32_t)((num << 15) / den);  
-        if (k > 32768) k = 32768;  
-    }  
-  
-    // Сглаживание k_dyn: атака ~10 мс, спад ~100 мс — без щелчков  
-    // на границах слогов.  
-    int32_t c = (k > k_dyn_q15) ? AF_TX_PRES_K_ATT_Q24 : AF_TX_PRES_K_REL_Q24;  
-    k_dyn_q15 += (int32_t)(((int64_t)(k - k_dyn_q15) * c) >> 24);  
-}  
+    // k_dyn = clamp((env_hi_pre - 2*nf) / (4*nf), 0..1), Q15.    
+    // Деление — раз в 64 отсчёта (~4 мс): огибающая медленная,    
+    // per-sample пересчёт не нужен и стоил +17% L1 (int64-div).    
+    if (++pres_blk_cnt >= 64) {    
+        pres_blk_cnt = 0;    
+        int64_t nf  = pres_nf_q16 >> 16;    
+        int64_t env = env_hi_pre_q16 >> 16;    
+        int64_t num = env - 2 * nf;    
+        int32_t k = 0;    
+        if (num > 0) {    
+            k = (int32_t)((num << 15) / (4 * nf));    
+            if (k > 32768) k = 32768;    
+        }    
+        k_dyn_tgt_q15 = k;    
+    }    
+    
+    // Сглаживание k_dyn к цели: атака ~10 мс, спад ~100 мс —    
+    // без щелчков на границах слогов. Только EMA, без деления.    
+    int32_t c = (k_dyn_tgt_q15 > k_dyn_q15) ? AF_TX_PRES_K_ATT_Q24    
+                                          : AF_TX_PRES_K_REL_Q24;    
+    k_dyn_q15 += (int32_t)(((int64_t)(k_dyn_tgt_q15 - k_dyn_q15) * c) >> 24);    
+}    
   
 // Peaking-биквад с переменным подъёмом: gain = 1 + k_dyn*(presmax-1).  
 // Реализовано как dry + k_dyn*(wet - dry): при k_dyn=0 — прозрачный  
 // байпас, при k_dyn=1 — полный подъём presmax. Коэффициенты биквада  
 // посчитаны на максимальный подъём; промежуточные k — линейный подмес.  
-static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {  
-    if (!tx_pres_on || k_dyn_q15 <= 0) return x;  
-    int64_t acc = (int64_t)pe_b0 * x + (int64_t)pe_b1 * pe_x1  
-                + (int64_t)pe_b2 * pe_x2  
-                - (int64_t)pe_a1 * pe_y1 - (int64_t)pe_a2 * pe_y2;  
-    int32_t wet = (int32_t)(acc >> 15);  
-    pe_x2 = pe_x1; pe_x1 = x;  
-    pe_y2 = pe_y1; pe_y1 = wet;  
-    // y = x + k_dyn*(wet - x): k_dyn Q15  
-    return x + (int32_t)(((int64_t)(wet - x) * k_dyn_q15) >> 15);  
-}  
+static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {    
+    if (!tx_pres_on) return x;    
+    // Биквад работает всегда — иначе при возврате k_dyn>0 состояния    
+    // pe_x1/pe_y1 устарели и дают щелчок. При k_dyn=0 выход = x    
+    // (dry-подмес), цена — один биквад ~0.3% L1.    
+    int64_t acc = (int64_t)pe_b0 * x + (int64_t)pe_b1 * pe_x1    
+                + (int64_t)pe_b2 * pe_x2    
+                - (int64_t)pe_a1 * pe_y1 - (int64_t)pe_a2 * pe_y2;    
+    int32_t wet = (int32_t)(acc >> 15);    
+    pe_x2 = pe_x1; pe_x1 = x;    
+    pe_y2 = pe_y1; pe_y1 = wet;    
+    // y = x + k_dyn*(wet - x): k_dyn Q15    
+    return x + (int32_t)(((int64_t)(wet - x) * k_dyn_q15) >> 15);    
+}    
 
 // ---------------------------------------------------------------------------    
 // Точка входа из af_dsp_poll    
@@ -428,9 +438,11 @@ void af_tx_init(void) {
         pe_a2 = (int32_t)lroundf(((1.0f - al / A) / a0) * 32768.0f);  
         pe_x1 = pe_x2 = pe_y1 = pe_y2 = 0;  
     }  
-    env_hi_pre_q16 = (int64_t)256 << 16;  
-    pres_nf_q16    = (int64_t)256 << 16;  
-    k_dyn_q15      = 0;  
+    env_hi_pre_q16 = (int64_t)256 << 16;    
+    pres_nf_q16    = (int64_t)256 << 16;    
+    k_dyn_q15      = 0;    
+    k_dyn_tgt_q15  = 0;    
+    pres_blk_cnt   = 0;    
 }      
     
 void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {    
@@ -501,10 +513,11 @@ uint32_t af_tx_agc_gain(void) { return (uint32_t)tx_agc_gain_q15; }
 void af_tx_set_pres(bool on)  { tx_pres_on = on ? 1 : 0; }  
 bool af_tx_pres(void)         { return tx_pres_on != 0; }  
   
-void af_tx_set_presmax(uint32_t db_x10) {   // потолок подъёма, дБ x10  
-    if (db_x10 > 120) db_x10 = 120;         // max +12 дБ  
-    // Q15 = 10^(dB/20): float только в сеттере, не в горячем пути  
-    tx_presmax_q15 = (int32_t)lroundf(powf(10.0f, (float)db_x10 / 200.0f) * 32768.0f);  
+void af_tx_set_presmax(uint32_t db_x10) {   // потолок подъёма, дБ x10    
+    if (db_x10 > 120) db_x10 = 120;         // max +12 дБ    
+    tx_presmax_db_x10 = db_x10;             // для stats    
+    // Q15 = 10^(dB/20): float только в сеттере, не в горячем пути    
+    tx_presmax_q15 = (int32_t)lroundf(powf(10.0f, (float)db_x10 / 200.0f) * 32768.0f);    
     // пересчёт коэффициентов peaking-биквада под новый потолок  
     const float A  = sqrtf((float)tx_presmax_q15 / 32768.0f);  
     const float w  = 2.0f * PI * (float)AF_TX_PRES_FREQ_HZ / AF_FS_OUT_HZ;  
@@ -517,7 +530,7 @@ void af_tx_set_presmax(uint32_t db_x10) {   // потолок подъёма, д
     pe_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
     pe_a2 = (int32_t)lroundf(((1.0f - al / A) / a0) * 32768.0f);  
 }  
-uint32_t af_tx_presmax(void) { return (uint32_t)tx_presmax_q15; }  
+uint32_t af_tx_presmax(void) { return tx_presmax_db_x10; }   // дБ x10    
   
 // --- debug getters (этап 2) ---  
 uint32_t af_tx_env_hi_pre(void) { return (uint32_t)(env_hi_pre_q16 >> 16); }  
