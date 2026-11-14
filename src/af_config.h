@@ -90,7 +90,7 @@
 #define AF_TX_AGC_MAX_X10       200u      // макс. усиление 20x (x10)  
 #define AF_TX_AGC_ATT_Q24       55000u    // атака EMA огибающей ~20 мс  
 #define AF_TX_AGC_REL_Q24       1800u     // спад ~600 мс  
-#define AF_TX_GATE_THR          200u      // порог гейта (~-44 дБ от FS, 0 = off)  
+#define AF_TX_GATE_THR          500u      // порог гейта (~-36 дБ от FS, 0 = off)  
 #define AF_TX_GATE_ATT_Q24      200000u   // открытие гейта ~5 мс  
 #define AF_TX_GATE_REL_Q24      4000u     // закрытие ~250 мс  
 

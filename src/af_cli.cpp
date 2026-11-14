@@ -461,17 +461,17 @@ static void cli_exec(char* line) {
             af_tx_set_softclip(true);    
             af_tx_set_2band(true);    
         }  
-        else if (strcmp(v, "max") == 0) {       // максимальная плотность    
-            af_tx_set_band(300, 2200);    
-            af_tx_set_ratio(100);               // 10:1 — лимитер    
-            af_tx_set_clip(4096);               // мин. порог    
-            af_tx_set_agc(18000);    
+        else if (strcmp(v, "max") == 0) {           // максимум плотности без пережатия  
+            af_tx_set_band(300, 2400);              // чуть уже SSB, но сибилянты живы  
+            af_tx_set_ratio(80);                    // 8:1 — как aggro  
+            af_tx_set_clip(6144);                   // ниже aggro, но не в «мясо»  
+            af_tx_set_agc(18000);  
             af_tx_set_gate(AF_TX_GATE_THR);  
-            af_tx_set_gfloor(4120);    
-            af_tx_set_ap(true);    
-            af_tx_set_softclip(true);    
-            af_tx_set_2band(true);    
-        }    
+            af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);  
+            af_tx_set_ap(true);  
+            af_tx_set_softclip(true);  
+            af_tx_set_2band(true);  
+        }  
         else if (strcmp(v, "flat") == 0) {      // линейный тракт (только FIR+АРУ)    
             af_tx_set_band(300, 2700);    
             af_tx_set_ratio(10);                // 1:1 — компрессия off    
