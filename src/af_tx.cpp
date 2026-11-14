@@ -3,11 +3,9 @@
 // af_tx.cpp — передающий тракт SSB (Core 1)    
 //    
 // Цепочка на AF_FS_OUT_HZ (~15.464 ksps):    
-//   y -> полосовой FIR -> all-pass (симметризатор) -> АРУ -> гейт  
-//     -> компрессор -> клиппер (кубический/жёсткий) -> постфильтр -> int16  
-//     -> клиппер (жёсткий, порог tx_clip)    
-//     -> постфильтр (тот же FIR — срезает гармоники клиппинга)    
-//     -> makeup-gain -> int16    
+//   y -> полосовой FIR -> all-pass (симметризатор) -> АРУ -> гейт    
+//     -> 2-полосная компрессия (split ~900 Гц: НЧ/ВЧ раздельно)    
+//     -> клиппер (кубический/жёсткий) -> постфильтр -> int16    
 //    
 // Цель — «плотный» речевой сигнал: компрессия поднимает среднюю    
 // мощность, клиппер добавляет ещё ~4-6 дБ, постфильтр убирает    
@@ -100,6 +98,10 @@ static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16
 static volatile uint8_t  tx_ap_on    = AF_TX_AP_ON_DEFAULT;  
 static volatile uint8_t  tx_softclip = AF_TX_SOFTCLIP_ON_DEFAULT;  
 static int32_t ap_x1 = 0, ap_y1 = 0;   // состояние all-pass  
+static volatile uint8_t  tx_2band_on = AF_TX_2BAND_ON_DEFAULT;  
+static int32_t split_lp = 0;                    // состояние ФНЧ кроссовера  
+static int64_t tx_env_lo_q16 = (int64_t)256 << 16;  // EMA огибающей НЧ-полосы  
+static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей ВЧ-полосы  
 
 // Порог компрессора — фиксированный, ~25% шкалы.    
 #define TX_COMP_THR   8192    
@@ -114,24 +116,43 @@ static inline int32_t tx_allpass(int32_t x) {
     return y;  
 }  
 
-static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {    
-    int64_t ax  = (x < 0) ? -x : x;    
-    int64_t tgt = ax << 16;    
-    int64_t da  = tgt - tx_env_q16;    
-    // атака ~5 мс, спад ~150 мс при 15.464 ksps    
-    tx_env_q16 += (da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24    
-                                : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;    
-    if (tx_env_q16 < ((int64_t)1 << 16)) tx_env_q16 = (int64_t)1 << 16;    
-    
-    int32_t env = (int32_t)(tx_env_q16 >> 16);    
-    if (env <= TX_COMP_THR) return x;          // ниже порога — без компрессии    
-    
-    // gain = 1 - (1 - thr/env) * (1 - 1/ratio), всё в Q15    
-    int32_t inv    = (int32_t)(((int64_t)TX_COMP_THR << 15) / env); // thr/env Q15    
-    int32_t depth  = 32768 - (32768 * 10) / (int32_t)tx_ratio_x10;  // 1-1/r Q15    
-    int32_t gain   = 32768 - (((32768 - inv) * depth) >> 15);       // Q15    
-    return (int32_t)(((int64_t)x * gain) >> 15);    
-}    
+// Компрессия одной полосы: своя EMA-огибающая, свой порог.  
+// gain = 1 - (1 - thr/env) * (1 - 1/ratio), всё в Q15.  
+static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,  
+                                                        int64_t* env_q16,  
+                                                        int32_t thr) {  
+    int64_t ax  = (x < 0) ? -x : x;  
+    int64_t tgt = ax << 16;  
+    int64_t da  = tgt - *env_q16;  
+    *env_q16 += (da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24  
+                              : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;  
+    if (*env_q16 < ((int64_t)1 << 16)) *env_q16 = (int64_t)1 << 16;  
+  
+    int32_t env = (int32_t)(*env_q16 >> 16);  
+    if (env <= thr) return x;                  // ниже порога — без компрессии  
+  
+    int32_t inv    = (int32_t)(((int64_t)thr << 15) / env);         // thr/env Q15  
+    int32_t depth  = 32768 - (32768 * 10) / (int32_t)tx_ratio_x10;  // 1-1/r Q15  
+    int32_t gain   = 32768 - (((32768 - inv) * depth) >> 15);       // Q15  
+    return (int32_t)(((int64_t)x * gain) >> 15);  
+}  
+  
+// 2-полосная компрессия: комплементарный split на ~900 Гц.  
+// lo = ФНЧ(x), hi = x - lo — сумма тождественно равна x (фазово согласованы).  
+// НЧ (гласные) и ВЧ (согласные) сжимаются раздельно -> нет pumping.  
+static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {  
+    if (!tx_2band_on)  
+        return tx_comp_band(x, &tx_env_q16, TX_COMP_THR);   // старый 1-полосный  
+  
+    // Кроссовер: ФНЧ 1-го порядка, k = AF_TX_SPLIT_K_Q15  
+    split_lp += (int32_t)(((int64_t)(x - split_lp) * AF_TX_SPLIT_K_Q15) >> 15);  
+    int32_t lo = split_lp;  
+    int32_t hi = x - lo;  
+  
+    lo = tx_comp_band(lo, &tx_env_lo_q16, AF_TX_COMP_THR_LO);  
+    hi = tx_comp_band(hi, &tx_env_hi_q16, AF_TX_COMP_THR_HI);  
+    return lo + hi;  
+}  
     
 // ---------------------------------------------------------------------------    
 // Клиппер + makeup    
@@ -213,7 +234,10 @@ void af_tx_init(void) {
     tx_fir_design();    
     memset(&tx_pre,  0, sizeof(tx_pre));    
     memset(&tx_post, 0, sizeof(tx_post));    
-    tx_env_q16 = (int64_t)256 << 16;      
+    tx_env_q16    = (int64_t)256 << 16;  
+    tx_env_lo_q16 = (int64_t)256 << 16;  
+    tx_env_hi_q16 = (int64_t)256 << 16;  
+    split_lp = 0;  
     ap_x1 = 0;  
     ap_y1 = 0;  
 }      
@@ -261,3 +285,6 @@ bool af_tx_ap(void)               { return tx_ap_on != 0; }
   
 void af_tx_set_softclip(bool on)  { tx_softclip = on ? 1 : 0; }  
 bool af_tx_softclip(void)         { return tx_softclip != 0; }  
+
+void af_tx_set_2band(bool on)     { tx_2band_on = on ? 1 : 0; }  
+bool af_tx_2band(void)            { return tx_2band_on != 0; }  

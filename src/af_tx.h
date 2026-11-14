@@ -32,3 +32,7 @@ bool     af_tx_ap(void);
   
 void     af_tx_set_softclip(bool on);  // кубический клиппер (off = hard)  
 bool     af_tx_softclip(void);  
+
+void     af_tx_set_2band(bool on);   // 2-полосная компрессия (split ~900 Гц)  
+bool     af_tx_2band(void);  
+
