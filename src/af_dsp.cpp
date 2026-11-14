@@ -860,9 +860,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 out_emit(af_tx_process(y));    
                 continue;    
             }    
-            y = af_fir_push(y);  
-            if (rx_notch_on) y = rx_notch_push(y);   // гребёнка 1/2/3/4 кГц  
-            if (cw_on) {      
+            y = af_fir_push(y);    
+            if (cw_on) {    
                 // Добавка шума: LFSR xorshift32, уровень из `cw noise`.  
                 // Фильтр всегда возбуждён — не звенит на тишине;  
                 // сигнал проходит без порогов (сквелча нет).  
@@ -875,8 +874,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             }  
             if (notch_on) y = notch_lms_push(y);  
             if (nr_on)    y = nr_lms_push(y);  
-            int16_t s = agc_limit(y);      
-            s = af_voice_mix(s);          // голосовые сообщения      
+            int16_t s = agc_limit(y);        
+            if (rx_notch_on) s = (int16_t)rx_notch_push(s);  // гребёнка — после АРУ,  
+                                                           // чтобы контур не «отменял» нотчи  
+            s = af_voice_mix(s);          // голосовые сообщения        
             if (ramp_on) {    
                 // Пила: +100 на отсчёт при 15.625 ksps → период ~21 мс,    
                 // амплитуда полная. Скачок ≠ +100 (mod 65536) = потеря/дубль.    
