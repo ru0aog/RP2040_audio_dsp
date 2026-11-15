@@ -171,9 +171,10 @@ static int32_t k_duck_tgt_q15 = 0;      // цель k_duck (per-block)
 static uint8_t duck_blk_cnt   = 0;      // счётчик пересчёта    
   
 // --- Этап 6: ВЧ-эксайтер ---      
-static volatile uint8_t  tx_exc_on   = AF_TX_EXC_ON_DEFAULT;   // дефолт off      
-static volatile int32_t  tx_exc_mix  = AF_TX_EXC_MIX_Q15;      // подмес, Q15      
-static int64_t exc_env_q16 = (int64_t)256 << 16;               // EMA |hi|, Q16      
+static volatile uint8_t  tx_exc_on   = AF_TX_EXC_ON_DEFAULT;   // дефолт off        
+static volatile int32_t  tx_exc_mix  = AF_TX_EXC_MIX_Q15;      // подмес, Q15        
+static int64_t exc_env_q16 = (int64_t)256 << 16;               // EMA |hi|, Q16        
+static uint8_t exc_decim   = 0;                                // дециматор EMA ÷2           
 
 // Порог компрессора — фиксированный, ~25% шкалы.    
 #define TX_COMP_THR   8192    
@@ -460,18 +461,24 @@ static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {
 // Гармоники в фазе с исходной ВЧ — «воздух» согласным без чужого      
 // сигнала. В паузах hi~0 -> exc~0, нагрузки нет.      
 // ~3 int64-mul per-sample при включённом ~+0.5% L1.      
-static inline int32_t __not_in_flash_func(tx_exciter)(int32_t x, int32_t hi) {      
-    if (!tx_exc_on) return x;      
-    int32_t a = (hi < 0) ? -hi : hi;      
-    int64_t tgt = (int64_t)a << 16;      
-    int64_t da  = tgt - exc_env_q16;      
-    exc_env_q16 += (da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24      
-                                : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;      
-    // exc = env(|hi|) * hi * mix: env Q16 -> >>16, mix Q15 -> >>15      
-    int32_t env = (int32_t)(exc_env_q16 >> 16);      
-    int32_t exc = (int32_t)(((int64_t)env * hi) >> 15);      
-    return x + (int32_t)(((int64_t)exc * tx_exc_mix) >> 15);      
-}      
+static inline int32_t __not_in_flash_func(tx_exciter)(int32_t x, int32_t hi) {        
+    if (!tx_exc_on) return x;        
+    // EMA огибающей ~10 мс не нуждается в 15.4 ksps — считаем на      
+    // 7.7 ksps (децимация /2, как в tx_pres_sidechain). Подмес      
+    // env*hi*mix остаётся per-sample — он дешёвый (2 int64-mul).      
+    if (!(++exc_decim & 1)) {      
+        int32_t a = (hi < 0) ? -hi : hi;        
+        int64_t tgt = (int64_t)a << 16;        
+        int64_t da  = tgt - exc_env_q16;        
+        // Своя константа AF_TX_EXC_ENV_Q24 (~10 мс): раньше бралась      
+        // ATT_Q24=400 — огибающая была в ~7 раз быстрее задуманной.      
+        exc_env_q16 += (da * (int64_t)AF_TX_EXC_ENV_Q24) >> 24;        
+    }      
+    // exc = env(|hi|) * hi * mix: env Q16 -> >>16, mix Q15 -> >>15        
+    int32_t env = (int32_t)(exc_env_q16 >> 16);        
+    int32_t exc = (int32_t)(((int64_t)env * hi) >> 15);        
+    return x + (int32_t)(((int64_t)exc * tx_exc_mix) >> 15);        
+}        
 
 // ---------------------------------------------------------------------------    
 // Точка входа из af_dsp_poll    
@@ -570,7 +577,8 @@ void af_tx_init(void) {
     k_duck_q15     = 0;      
     k_duck_tgt_q15 = 0;      
     duck_blk_cnt   = 0;      
-    exc_env_q16    = (int64_t)256 << 16;      
+    exc_env_q16    = (int64_t)256 << 16;        
+    exc_decim      = 0;        
     tx_fir_design();  
     memset(&tx_pre,  0, sizeof(tx_pre));      
     memset(&tx_post, 0, sizeof(tx_post));      
