@@ -628,12 +628,16 @@ static int32_t tx_gate(int32_t x) {
 // Q15: R = 32510. Страховка от DC после клиппера/эксайтера.  
 static int32_t dc_x1 = 0, dc_y1 = 0;  
   
-static inline int32_t __not_in_flash_func(tx_dc_block)(int32_t x) {  
-    const int32_t y = x - dc_x1 + (int32_t)(((int64_t)32510 * dc_y1) >> 15);  
-    dc_x1 = x;  
-    dc_y1 = y;  
-    return y;  
-}  
+static inline int32_t __not_in_flash_func(tx_dc_block)(int32_t x) {    
+    int32_t y = x - dc_x1 + (int32_t)(((int64_t)32510 * dc_y1) >> 15);    
+    // Кламп состояния: без него при большом DC на входе dc_y1      
+    // накапливается и переполняет int32 -> wrap = щелчок.      
+    if (y >  32767) y =  32767;    
+    if (y < -32768) y = -32768;    
+    dc_x1 = x;    
+    dc_y1 = y;    
+    return y;    
+}    
 
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {      
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
@@ -732,8 +736,9 @@ void af_tx_init(void) {
         pe_x1 = pe_x2 = pe_y1 = pe_y2 = 0;  
     }
 
-    // Этап 4: LR2-кроссовер на AF_TX_SPLIT_HZ — RBJ lowpass + highpass,    
-    // Q = 0.7071 (Баттерворт-пара: сумма all-pass, -6 дБ на кроссовере).    
+    // Этап 4: кроссовер Баттерворта 2-го порядка на AF_TX_SPLIT_HZ —      
+    // RBJ LP+HP, Q=0.7071; HP инвертирован -> сумма all-pass, -3 дБ      
+    // каждой ветви на разделе. Не LR2 (у LR2 Q=0.5, -6 дБ на разделе).      
     {    
         const float w  = 2.0f * PI * (float)AF_TX_SPLIT_HZ / AF_FS_OUT_HZ;    
         const float cw = cosf(w), sw = sinf(w);    
@@ -745,11 +750,10 @@ void af_tx_init(void) {
         xo_lp_b2 = xo_lp_b0;    
         xo_lp_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);    
         xo_lp_a2 = (int32_t)lroundf(((1.0f - al) / a0) * 32768.0f);    
-        // HP    
-        // HP — b-коэффициенты инвертированы: у RBJ-пары LP/HP выходы      
-        // на fc в противофазе (180°), сумма lo+hi дала бы провал на      
-        // кроссовере. С инверсией HP сумма = all-pass (настоящий LR2,      
-        // перекрытие -6 дБ).      
+        // HP — b-коэффициенты инвертированы: у RBJ-пары LP/HP выходы        
+        // на fc в противофазе (180°), сумма lo+hi дала бы провал на        
+        // кроссовере. С инверсией HP сумма = all-pass (плоская АЧХ,        
+        // подтверждено спектром).        
         xo_hp_b0 = -(int32_t)lroundf(((1.0f + cw) * 0.5f / a0) * 32768.0f);      
         xo_hp_b1 = -(int32_t)lroundf((-(1.0f + cw) / a0) * 32768.0f);      
         xo_hp_b2 = xo_hp_b0;      
