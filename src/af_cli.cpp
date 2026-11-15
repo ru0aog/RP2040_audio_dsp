@@ -184,27 +184,28 @@ static void tx_apply_profile(uint8_t idx) {
     switch (idx) {  
     case 1: // natural — мягкий повседневный  
         af_tx_set_ratio(30);  af_tx_set_clip(20000);  
-        af_tx_set_exc(false);  
+        af_tx_set_exc(false);  af_tx_set_duck(false);  
         break;  
     case 2: // dx — пробив на слабом сигнале  
         af_tx_set_ratio(60);  af_tx_set_clip(12000);  
         af_tx_set_presmax(30);  af_tx_set_shelf(20);  
         break;  
     case 3: // bass — низкий голос  
-        af_tx_set_band(200, 2700);  
-        af_tx_set_presmax(20);  af_tx_set_duck(false);  af_tx_set_shelf(10);  
+        af_tx_set_presmax(20);  af_tx_set_shelf(10);
+        af_tx_set_band(350, 2700);                      // было 200 — срез «бочки»  
+        af_tx_set_duck(true);  af_tx_set_duckmax(40);   // было off — критично для баса 
         break;  
     case 4: // whisper — тихая речь  
-        af_tx_set_agc(22000);  af_tx_set_gate(150);  
+        af_tx_set_agc(22000);  af_tx_set_gate(150);  af_tx_set_duck(false); 
         af_tx_set_ratio(50);   af_tx_set_excmix(1638);  
         break;  
     case 5: // loud — громкий голос  
         af_tx_set_agc(14000);  af_tx_set_gate(350);  
-        af_tx_set_ratio(50);   af_tx_set_clip(16000);  
+        af_tx_set_ratio(50);   af_tx_set_clip(24000);   // было 16000 — клиппер «хрипел» бы  
         break;  
     case 6: // flat — линейный тракт  
         af_tx_set_ratio(10);  af_tx_set_clip(32767);  af_tx_set_gate(0);  
-        af_tx_set_ap(false);  af_tx_set_2band(false);  
+        af_tx_set_ap(false);  af_tx_set_2band(false);  af_tx_set_gfloor(65536);  
         af_tx_set_pres(false); af_tx_set_lr2(false);  af_tx_set_duck(false);  
         af_tx_set_exc(false);  af_tx_set_intel(false); af_tx_set_notch(false);  
         break;  
