@@ -62,3 +62,10 @@ uint32_t af_tx_k_dyn(void);       // текущий k_dyn, Q15 (0..32768)
 
 void     af_tx_set_lr2(bool on);    // LR2-кроссовер + раздельный клиппинг (этап 4)    
 bool     af_tx_lr2(void);    
+
+// Этап 5: HF ducking    
+void     af_tx_set_duck(bool on);    
+bool     af_tx_duck(void);    
+void     af_tx_set_duckmax(uint32_t db_x10);    
+uint32_t af_tx_duckmax(void);    
+uint32_t af_tx_k_duck(void);   // debug, Q15    

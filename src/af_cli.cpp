@@ -18,7 +18,9 @@
 //   banks clr          — перезаписать все банки заводскими пресетами (ребут)
 //   pwm on|off         — PWM-выход (off = несущая заглушена, пин в 0)
 //   ramp on|off        — пила-счётчик вместо DSP (тест целостности потока)
-//   txlr2 on|off       — кроссовер LR2 + раздельный клиппинг полос  
+//   txlr2 on|off       — кроссовер LR2 + раздельный клиппинг полос
+//   txduck on|off      — HF ducking: НЧ приглушается при доминировании ВЧ    
+//   txduckmax <дБx10>  — потолок ослабления НЧ (30 = -3 дБ)    
 //   help               — справка  
 // ============================================================================  
 #include <Arduino.h>  
@@ -70,8 +72,10 @@ static void cli_help(void) {
     Serial.println("#   txnotch on|off    — узкие нотчи 1/2 кГц против тонов-наводок");
     Serial.println("#   txpres on|off     — dynamic presence EQ (подъём 2-2.7 кГц по SNR)");  
     Serial.println("#   txpresmax <дБx10> — потолок подъёма presence (30=+3дБ, 60=+6дБ)");    
-    Serial.println("#   txlr2 on|off      — кроссовер LR2 900 Гц + раздельный клиппинг полос");    
-    Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");  
+    Serial.println("#   txlr2 on|off      — кроссовер LR2 900 Гц + раздельный клиппинг полос");      
+    Serial.println("#   txduck on|off     — HF ducking: НЧ приглушается при доминировании ВЧ");    
+    Serial.println("#   txduckmax <дБx10> — потолок ослабления НЧ (30 = -3 дБ)");    
+    Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");    
     Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");    
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
@@ -107,19 +111,22 @@ static void cli_stats(void) {
                   af_tx_softclip() ? "soft" : "hard",    
                   af_tx_2band() ? "on" : "off",  
                   af_tx_notch() ? "on" : "off");
-    Serial.printf("  pres=%s pmax=%lu lr2=%s\n",    
-                  af_tx_pres() ? "on" : "off",    
-                  (unsigned long)af_tx_presmax(),  
-                  af_tx_lr2() ? "on" : "off");  
+    Serial.printf("  pres=%s pmax=%lu lr2=%s duck=%s dmax=%lu\n",      
+                  af_tx_pres() ? "on" : "off",      
+                  (unsigned long)af_tx_presmax(),    
+                  af_tx_lr2() ? "on" : "off",  
+                  af_tx_duck() ? "on" : "off",  
+                  (unsigned long)af_tx_duckmax());    
     Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
                   (unsigned long)af_tx_agc_env(),  
                   (unsigned long)af_tx_agc_gain(),  
                   (unsigned long)af_tx_env_lo(),  
                   (unsigned long)af_tx_env_hi());
-    Serial.printf("  hi_pre=%lu nf=%lu k=%lu\n",  
-                  (unsigned long)af_tx_env_hi_pre(),  
-                  (unsigned long)af_tx_pres_nf(),  
-                  (unsigned long)af_tx_k_dyn());  
+    Serial.printf("  hi_pre=%lu nf=%lu k=%lu kd=%lu\n",    
+                  (unsigned long)af_tx_env_hi_pre(),    
+                  (unsigned long)af_tx_pres_nf(),    
+                  (unsigned long)af_tx_k_dyn(),  
+                  (unsigned long)af_tx_k_duck());    
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -563,6 +570,20 @@ static void cli_exec(char* line) {
         if (v == NULL) { Serial.println("# ERR: txlr2 on|off"); return; }    
         af_tx_set_lr2(strcmp(v, "on") == 0);    
         Serial.printf("# OK txlr2=%s\n", af_tx_lr2() ? "on" : "off");    
+    }    
+
+    else if (strncmp(cmd, "txduckmax", 9) == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txduckmax <дБx10>"); return; }    
+        af_tx_set_duckmax((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txduckmax=%lu\n", (unsigned long)af_tx_duckmax());    
+    }    
+    else if (strncmp(cmd, "txduck", 6) == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txduck on|off"); return; }    
+        bool on = (strncmp(v, "on", 2) == 0);    
+        af_tx_set_duck(on);    
+        Serial.printf("# OK txduck=%s\n", on ? "on" : "off");    
     }    
 
     // вставлять сюда  

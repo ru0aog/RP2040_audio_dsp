@@ -162,6 +162,14 @@ static int32_t xo_hp_x1 = 0, xo_hp_x2 = 0, xo_hp_y1 = 0, xo_hp_y2 = 0;
 static int64_t tx_env_lo_q16 = (int64_t)256 << 16;  // EMA огибающей НЧ-полосы  
 static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей ВЧ-полосы  
 
+// --- Этап 5: HF ducking ---    
+static volatile uint8_t  tx_duck_on     = AF_TX_DUCK_ON_DEFAULT;    
+static volatile int32_t  tx_duckmax_q15 = AF_TX_DUCK_MAX_Q15;  // потолок, Q15    
+static uint32_t tx_duckmax_db_x10 = 30;                        // для stats, дБ x10    
+static int32_t k_duck_q15     = 0;      // сглаженный k_duck, Q15    
+static int32_t k_duck_tgt_q15 = 0;      // цель k_duck (per-block)    
+static uint8_t duck_blk_cnt   = 0;      // счётчик пересчёта    
+
 // Порог компрессора — фиксированный, ~25% шкалы.    
 #define TX_COMP_THR   8192    
 
@@ -255,10 +263,40 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {
         hi = x - lo;    
     }    
     
-    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);    
-    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);    
-    
-    if (tx_lr2_on) {    
+    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);      
+    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);      
+      
+    // Этап 5: HF ducking — НЧ приглушается, когда ВЧ доминирует.    
+    // k_duck = clamp((env_hi - env_lo/2) / (env_lo + eps), 0..1):    
+    // env_hi > env_lo/2 -> согласные сильнее половины гласных ->    
+    // НЧ давится до duck_max. Деление per-block (~4 мс).    
+    if (tx_duck_on) {    
+        if (++duck_blk_cnt >= 64) {    
+            duck_blk_cnt = 0;    
+            int64_t e_lo = tx_env_lo_q16 >> 16;    
+            int64_t e_hi = tx_env_hi_q16 >> 16;    
+            int64_t num  = e_hi - (e_lo >> 1);    
+            int32_t k = 0;    
+            if (num > 0) {    
+                int64_t den = e_lo + 64;              // eps от деления на ~0    
+                k = (int32_t)((num << 15) / den);    
+                if (k > 32768) k = 32768;    
+            }    
+            k_duck_tgt_q15 = k;    
+        }    
+        // EMA-сглаживание: атака ~5 мс, спад ~80 мс — без щелчков    
+        int32_t c = (k_duck_tgt_q15 > k_duck_q15) ? AF_TX_DUCK_ATT_Q24    
+                                                : AF_TX_DUCK_REL_Q24;    
+        k_duck_q15 += (int32_t)(((int64_t)(k_duck_tgt_q15 - k_duck_q15) * c) >> 24);    
+        // lo *= (1 - k_duck*duck_max): gain_duck = 32768 - k_duck*duck_max>>15    
+        int32_t g_duck = 32768 - ((k_duck_q15 * tx_duckmax_q15) >> 15);    
+        lo = (int32_t)(((int64_t)lo * g_duck) >> 15);    
+    } else {    
+        k_duck_q15 = 0;    
+        k_duck_tgt_q15 = 0;    
+    }    
+      
+    if (tx_lr2_on) {      
         // Раздельный клиппинг полос до суммирования: НЧ-пики гласных    
         // не модулируют согласные. Порог общий tx_clip_thr, без makeup —    
         // makeup применяется в основном клиппере дальше по цепочке.    
@@ -498,6 +536,9 @@ void af_tx_init(void) {
     pres_blk_cnt   = 0;    
     pres_decim     = 0;    
     tx_gate_hold = 0;
+    k_duck_q15     = 0;    
+    k_duck_tgt_q15 = 0;    
+    duck_blk_cnt   = 0;    
     tx_fir_design();  
     memset(&tx_pre,  0, sizeof(tx_pre));      
     memset(&tx_post, 0, sizeof(tx_post));      
@@ -632,6 +673,18 @@ bool af_tx_2band(void)            { return tx_2band_on != 0; }
 
 void af_tx_set_lr2(bool on)       { tx_lr2_on = on ? 1 : 0; }    
 bool af_tx_lr2(void)              { return tx_lr2_on != 0; }    
+
+void af_tx_set_duck(bool on)    { tx_duck_on = on ? 1 : 0; }    
+bool af_tx_duck(void)           { return tx_duck_on != 0; }    
+    
+void af_tx_set_duckmax(uint32_t db_x10) {   // потолок ослабления, дБ x10    
+    if (db_x10 > 120) db_x10 = 120;         // max -12 дБ    
+    tx_duckmax_db_x10 = db_x10;    
+    // Q15 = 1 - 10^(-dB/20): ослабление, не усиление    
+    tx_duckmax_q15 = (int32_t)lroundf((1.0f - powf(10.0f, -(float)db_x10 / 200.0f)) * 32768.0f);    
+}    
+uint32_t af_tx_duckmax(void) { return tx_duckmax_db_x10; }   // дБ x10    
+uint32_t af_tx_k_duck(void)  { return (uint32_t)k_duck_q15; }    
 
 void af_tx_set_gfloor(uint32_t q16) {    
     if (q16 > 65536u) q16 = 65536u;    
