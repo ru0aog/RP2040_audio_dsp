@@ -223,22 +223,27 @@ static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,
                 ? (int64_t)AF_TX_ENV_DEC_FAST_Q24    
                 : (int64_t)AF_TX_ENV_DEC_Q24;    
     }    
-    *env_q16 += (da * c) >> 24;    
-    if (*env_q16 < ((int64_t)1 << 16)) *env_q16 = (int64_t)1 << 16;  
+    *env_q16 += (da * c) >> 24;      
+    if (*env_q16 < ((int64_t)1 << 16)) *env_q16 = (int64_t)1 << 16;    
+    // gain пересчитывается в tx_compress раз в 64 ОТСЧЁТА для обеих    
+    // полос одновременно — раньше счётчик жил здесь и в 2-полосном    
+    // режиме срабатывал только на вызове hi: lo оставался без    
+    // компрессии (gain=1 навсегда), hi обновлялся вдвое чаще.    
+    return (int32_t)(((int64_t)x * *gain_q15) >> 15);    
+}    
   
-    if (++comp_blk_cnt >= 64) {             // свой счётчик; в 2-полосном режиме    
-        comp_blk_cnt = 0;                   // срабатывает поочерёдно для lo/hi —    
-                                            // каждая полоса ~раз в 64 отсчёта    
-        int32_t env = (int32_t)(*env_q16 >> 16);  
-        if (env > thr) {  
-            int32_t inv  = (int32_t)(((int64_t)thr << 15) / env);   // thr/env Q15  
-            *gain_q15    = 32768 - (((32768 - inv) * tx_depth_q15) >> 15);  
-        } else {  
-            *gain_q15 = 32768;              // ниже порога — без компрессии  
-        }  
-    }  
-    return (int32_t)(((int64_t)x * *gain_q15) >> 15);  
-}  
+// Пересчёт gain одной полосы по её огибающей — вызывается из    
+// tx_compress раз в 64 отсчёта.    
+static inline void tx_comp_gain_update(int64_t env_q16, int32_t* gain_q15,    
+                                       int32_t thr) {    
+    int32_t env = (int32_t)(env_q16 >> 16);    
+    if (env > thr) {    
+        int32_t inv = (int32_t)(((int64_t)thr << 15) / env);   // thr/env Q15    
+        *gain_q15   = 32768 - (((32768 - inv) * tx_depth_q15) >> 15);    
+    } else {    
+        *gain_q15 = 32768;    
+    }    
+}    
 
 // Биквад Direct Form I, коэффициенты Q15 — для LR2-кроссовера.    
 // int64-аккумулятор: a1 ~1.9*Q15, сумма 5 произведений > int32.    
@@ -261,10 +266,15 @@ static inline int32_t __not_in_flash_func(tx_biquad)(int32_t x,
 // lo = ФНЧ(x), hi = x - lo — сумма тождественно равна x (фазово согласованы).  
 // НЧ (гласные) и ВЧ (согласные) сжимаются раздельно -> нет pumping.  
 static inline int32_t __not_in_flash_func(tx_compress)(int32_t x, int32_t* hi_out) {      
-    if (!tx_2band_on) {      
-        *hi_out = 0;                    // 1-полосный режим: эксайтер молчит      
-        return tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);      
-    }      
+    if (!tx_2band_on) {        
+        *hi_out = 0;                    // 1-полосный режим: эксайтер молчит    
+        int32_t r = tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);    
+        if (++comp_blk_cnt >= 64) {     // тот же счётчик, раз в 64 отсчёта    
+            comp_blk_cnt = 0;    
+            tx_comp_gain_update(tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);    
+        }    
+        return r;    
+    }        
       
     int32_t lo, hi;      
     if (tx_lr2_on) {    
@@ -282,8 +292,15 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x, int32_t* hi_ou
         hi = x - lo;    
     }    
     
-    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);      
-    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);      
+    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);        
+    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);        
+  
+    // Per-block пересчёт gain ОБЕИХ полос раз в 64 отсчёта (~4 мс).    
+    if (++comp_blk_cnt >= 64) {    
+        comp_blk_cnt = 0;    
+        tx_comp_gain_update(tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);    
+        tx_comp_gain_update(tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);    
+    }       
       
     // Этап 5: HF ducking — НЧ приглушается, когда ВЧ доминирует.    
     // k_duck = clamp((env_hi - env_lo/2) / (env_lo + eps), 0..1):    
