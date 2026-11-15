@@ -169,6 +169,11 @@ static uint32_t tx_duckmax_db_x10 = 30;                        // для stats, 
 static int32_t k_duck_q15     = 0;      // сглаженный k_duck, Q15    
 static int32_t k_duck_tgt_q15 = 0;      // цель k_duck (per-block)    
 static uint8_t duck_blk_cnt   = 0;      // счётчик пересчёта    
+  
+// --- Этап 6: ВЧ-эксайтер ---      
+static volatile uint8_t  tx_exc_on   = AF_TX_EXC_ON_DEFAULT;   // дефолт off      
+static volatile int32_t  tx_exc_mix  = AF_TX_EXC_MIX_Q15;      // подмес, Q15      
+static int64_t exc_env_q16 = (int64_t)256 << 16;               // EMA |hi|, Q16      
 
 // Порог компрессора — фиксированный, ~25% шкалы.    
 #define TX_COMP_THR   8192    
@@ -243,11 +248,13 @@ static inline int32_t __not_in_flash_func(tx_biquad)(int32_t x,
 // 2-полосная компрессия: комплементарный split на ~900 Гц.  
 // lo = ФНЧ(x), hi = x - lo — сумма тождественно равна x (фазово согласованы).  
 // НЧ (гласные) и ВЧ (согласные) сжимаются раздельно -> нет pumping.  
-static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {    
-    if (!tx_2band_on)    
-        return tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);    
-    
-    int32_t lo, hi;    
+static inline int32_t __not_in_flash_func(tx_compress)(int32_t x, int32_t* hi_out) {      
+    if (!tx_2band_on) {      
+        *hi_out = 0;                    // 1-полосный режим: эксайтер молчит      
+        return tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);      
+    }      
+      
+    int32_t lo, hi;      
     if (tx_lr2_on) {    
         // Этап 4: LR2-кроссовер — LP и HP биквады Баттерворта Q=0.7071.    
         // Сумма полос all-pass (плоская АЧХ), перекрытие -6 дБ на    
@@ -308,8 +315,9 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {
         if (hi >  t) hi =  t;    
         if (hi < -t) hi = -t;    
     }    
-    return lo + hi;    
-}    
+    *hi_out = hi;                       // ВЧ-полоса для эксайтера (этап 6)      
+    return lo + hi;      
+}      
     
 // ---------------------------------------------------------------------------    
 // Клиппер + makeup    
@@ -444,7 +452,26 @@ static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {
     // y = x + k_dyn*(wet - x): (wet-x) <= 2^16, k_dyn <= 2^15,    
     // произведение <= 2^31 — int32 безопасен.    
     return x + (((wet - x) * k_dyn_q15) >> 15);     
-}    
+} 
+
+// Этап 6: ВЧ-эксайтер. Берёт ВЧ-полосу (hi из кроссовера — уже      
+// посчитана в tx_compress, передаём сюда), выпрямляет |hi| ->      
+// EMA-огибающая -> подмес env*|hi|*sign(hi)*mix = env*hi*mix.      
+// Гармоники в фазе с исходной ВЧ — «воздух» согласным без чужого      
+// сигнала. В паузах hi~0 -> exc~0, нагрузки нет.      
+// ~3 int64-mul per-sample при включённом ~+0.5% L1.      
+static inline int32_t __not_in_flash_func(tx_exciter)(int32_t x, int32_t hi) {      
+    if (!tx_exc_on) return x;      
+    int32_t a = (hi < 0) ? -hi : hi;      
+    int64_t tgt = (int64_t)a << 16;      
+    int64_t da  = tgt - exc_env_q16;      
+    exc_env_q16 += (da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24      
+                                : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;      
+    // exc = env(|hi|) * hi * mix: env Q16 -> >>16, mix Q15 -> >>15      
+    int32_t env = (int32_t)(exc_env_q16 >> 16);      
+    int32_t exc = (int32_t)(((int64_t)env * hi) >> 15);      
+    return x + (int32_t)(((int64_t)exc * tx_exc_mix) >> 15);      
+}      
 
 // ---------------------------------------------------------------------------    
 // Точка входа из af_dsp_poll    
@@ -514,9 +541,11 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
     y = tx_agc(y);                    // АРУ: выравнивание уровня к target      
     tx_pres_sidechain(y);             // env_hi_pre/nf/k_dyn — ДО гейта  
     y = tx_gate(y);                   // шумовой гейт: паузы -> тишина      
-    y = tx_compress(y);               // компрессия          
-    y = tx_presence(y);               // dyn-presence EQ (этап 2)  
-    y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)    
+    int32_t hi_band = 0;      
+    y = tx_compress(y, &hi_band);     // компрессия + отвод ВЧ-полосы      
+    y = tx_presence(y);               // dyn-presence EQ (этап 2)    
+    y = tx_exciter(y, hi_band);       // ВЧ-эксайтер (этап 6)    
+    y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)      
                     : tx_clip(y);     // жёсткий клиппер    
     y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга  
     if (tx_notch_on) {                // узкие нотчи против тонов-наводок  
@@ -538,9 +567,10 @@ void af_tx_init(void) {
     pres_blk_cnt   = 0;    
     pres_decim     = 0;    
     tx_gate_hold = 0;
-    k_duck_q15     = 0;    
-    k_duck_tgt_q15 = 0;    
-    duck_blk_cnt   = 0;    
+    k_duck_q15     = 0;      
+    k_duck_tgt_q15 = 0;      
+    duck_blk_cnt   = 0;      
+    exc_env_q16    = (int64_t)256 << 16;      
     tx_fir_design();  
     memset(&tx_pre,  0, sizeof(tx_pre));      
     memset(&tx_post, 0, sizeof(tx_post));      
@@ -730,3 +760,13 @@ uint32_t af_tx_presmax(void) { return tx_presmax_db_x10; }   // дБ x10
 uint32_t af_tx_env_hi_pre(void) { return (uint32_t)(env_hi_pre_q16 >> 16); }  
 uint32_t af_tx_pres_nf(void)    { return (uint32_t)(pres_nf_q16 >> 16); }  
 uint32_t af_tx_k_dyn(void)      { return (uint32_t)k_dyn_q15; }  
+
+// --- Этап 6: ВЧ-эксайтер ---      
+void af_tx_set_exc(bool on)  { tx_exc_on = on ? 1 : 0; }      
+bool af_tx_exc(void)         { return tx_exc_on != 0; }      
+      
+void af_tx_set_excmix(uint32_t q15) {   // подмес, Q15 (3277 ~ -20 дБ)      
+    if (q15 > 16384u) q15 = 16384u;     // потолок -6 дБ — защита от «металла»      
+    tx_exc_mix = (int32_t)q15;      
+}      
+uint32_t af_tx_excmix(void) { return (uint32_t)tx_exc_mix; }      

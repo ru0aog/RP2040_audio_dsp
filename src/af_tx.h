@@ -69,3 +69,9 @@ bool     af_tx_duck(void);
 void     af_tx_set_duckmax(uint32_t db_x10);    
 uint32_t af_tx_duckmax(void);    
 uint32_t af_tx_k_duck(void);   // debug, Q15    
+
+// Этап 6: ВЧ-эксайтер      
+void     af_tx_set_exc(bool on);      
+bool     af_tx_exc(void);      
+void     af_tx_set_excmix(uint32_t q15);      
+uint32_t af_tx_excmix(void);      
