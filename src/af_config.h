@@ -243,7 +243,7 @@
 // Коэффициенты пересчитываются при смене txpresmax (не в горячем пути).  
 #define AF_TX_PRES_FREQ_HZ      2300u   // центр presence-пика  
 #define AF_TX_PRES_Q_X100       100u    // Q = 1.00  
-#define AF_TX_PRES_MAX_Q15      (int32_t)(1.4125f * 32768.0f)  // +3 дБ старт  
+#define AF_TX_PRES_MAX_Q15      (int32_t)(1.1885f * 32768.0f)  // +1.5 дБ = 15 дБx10
 #define AF_TX_PRES_ON_DEFAULT   1       // 1 = включён при старте  
 
 

@@ -145,7 +145,7 @@ static int32_t k_dyn_q15      = 0;                           // сглаженн
 static int32_t k_dyn_tgt_q15  = 0;                           // цель k_dyn (per-block)    
 static uint8_t pres_blk_cnt   = 0;                           // счётчик до пересчёта k    
 static uint8_t pres_decim = 0;   // дециматор sidechain ÷2    
-static uint32_t tx_presmax_db_x10 = AF_TX_PRES_MAX_DB_X10;   // из конфига, не 30  
+static uint32_t tx_presmax_db_x10 = AF_TX_PRES_MAX_DB_X10;   // из конфига
 static uint32_t tx_duckmax_db_x10 = AF_TX_DUCK_MAX_DB_X10;  
   
 // Peaking-биквад 2–2.7 кГц (после компрессора, до клиппера)  
@@ -282,9 +282,9 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x, int32_t* hi_ou
       
     int32_t lo, hi;      
     if (tx_lr2_on) {    
-        // Этап 4: LR2-кроссовер — LP и HP биквады Баттерворта Q=0.7071.    
-        // Сумма полос all-pass (плоская АЧХ), перекрытие -6 дБ на    
-        // кроссовере, склоны 12 дБ/окт — меньше интермодуляции НЧ<->ВЧ.    
+        // Этап 4: кроссовер Баттерворта 2-го порядка на AF_TX_SPLIT_HZ —  
+        // RBJ LP+HP, Q=0.7071; HP инвертирован -> сумма all-pass, -3 дБ на  
+        // разделе. Не LR2: у LR2 Q=0.5 и -6 дБ на разделе.  
         lo = tx_biquad(x, xo_lp_b0, xo_lp_b1, xo_lp_b2, xo_lp_a1, xo_lp_a2,    
                        &xo_lp_x1, &xo_lp_x2, &xo_lp_y1, &xo_lp_y2);    
         hi = tx_biquad(x, xo_hp_b0, xo_hp_b1, xo_hp_b2, xo_hp_a1, xo_hp_a2,    
@@ -863,7 +863,7 @@ void af_tx_set_presmax(uint32_t db_x10) {   // потолок подъёма, д
     const float A  = sqrtf((float)tx_presmax_q15 / 32768.0f);  
     const float w  = 2.0f * PI * (float)AF_TX_PRES_FREQ_HZ / AF_FS_OUT_HZ;  
     const float cw = cosf(w), sw = sinf(w);  
-    const float al = sw / (2.0f * AF_TX_PRES_Q_X100 / 100.0f);  
+    const float al = sw / (2.0f * AF_TX_PRES_Q_X100 / 100.0f);
     const float a0 = 1.0f + al / A;  
     pe_b0 = (int32_t)lroundf(((1.0f + al * A) / a0) * 32768.0f);  
     pe_b1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  

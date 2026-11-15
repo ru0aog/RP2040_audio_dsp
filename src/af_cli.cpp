@@ -517,7 +517,7 @@ static void cli_exec(char* line) {
             af_tx_set_band(300, 2400);              // чуть уже SSB, но сибилянты живы  
             af_tx_set_ratio(80);                    // 8:1 — как aggro  
             af_tx_set_clip(6144);                   // ниже aggro, но не в «мясо»  
-            af_tx_set_agc(18000);  af_tx_set_shelf(20);         // +2 дБ @1.8к — максимальная разборчивость
+            af_tx_set_agc(18000);  af_tx_set_shelf(40);         // +4 дБ @1.8к — максимальная разборчивость
             af_tx_set_gate(AF_TX_GATE_THR);  
             af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);  
             af_tx_set_ap(true);    
