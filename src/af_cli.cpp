@@ -21,7 +21,7 @@
 //   txlr2 on|off       — кроссовер LR2 + раздельный клиппинг полос
 //   txduck on|off      — HF ducking: НЧ приглушается при доминировании ВЧ      
 //   txduckmax <дБx10>  — потолок ослабления НЧ (30 = -3 дБ)      
-//   txexc on|off       — ВЧ-эксайтер: синтез гармоник 2-3 кГц (дефолт off)      
+//   txexc on|off       — ВЧ-эксайтер: синтез гармоник 2-3 кГц (дефолт on)        
 //   txexcmix <q15>     — подмес эксайтера (3277 = -20 дБ)
 //   txintel on|off     — автобаланс НЧ/ВЧ-полос (этап 7)    
 //   help               — справка    
@@ -502,9 +502,14 @@ static void cli_exec(char* line) {
             af_tx_set_agc(18000);    
             af_tx_set_gate(AF_TX_GATE_THR);  
             af_tx_set_gfloor(4120);             // -24 дБ    
-            af_tx_set_ap(true);    
-            af_tx_set_softclip(true);    
-            af_tx_set_2band(true);    
+            af_tx_set_ap(true);      
+            af_tx_set_softclip(true);      
+            af_tx_set_2band(true);      
+            af_tx_set_pres(true);   af_tx_set_presmax(15);    // подтверждённая точка    
+            af_tx_set_lr2(true);    
+            af_tx_set_duck(true);   af_tx_set_duckmax(30);    
+            af_tx_set_exc(true);    af_tx_set_excmix(3277);    
+            af_tx_set_intel(true);    
         }  
         else if (strcmp(v, "max") == 0) {           // максимум плотности без пережатия  
             af_tx_set_band(300, 2400);              // чуть уже SSB, но сибилянты живы  
@@ -513,9 +518,14 @@ static void cli_exec(char* line) {
             af_tx_set_agc(18000);  
             af_tx_set_gate(AF_TX_GATE_THR);  
             af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);  
-            af_tx_set_ap(true);  
-            af_tx_set_softclip(true);  
-            af_tx_set_2band(true);  
+            af_tx_set_ap(true);    
+            af_tx_set_softclip(true);    
+            af_tx_set_2band(true);    
+            af_tx_set_pres(true);   af_tx_set_presmax(15);    
+            af_tx_set_lr2(true);    
+            af_tx_set_duck(true);   af_tx_set_duckmax(30);    
+            af_tx_set_exc(true);    af_tx_set_excmix(3277);    
+            af_tx_set_intel(true);    
         }  
         else if (strcmp(v, "flat") == 0) {      // линейный тракт (только FIR+АРУ)    
             af_tx_set_band(300, 2700);    
@@ -524,9 +534,14 @@ static void cli_exec(char* line) {
             af_tx_set_agc(18000);    
             af_tx_set_gate(0);                  // гейт off    
             af_tx_set_gfloor(4120);    
-            af_tx_set_ap(false);    
-            af_tx_set_softclip(true);    
-            af_tx_set_2band(false);    
+            af_tx_set_ap(false);      
+            af_tx_set_softclip(true);      
+            af_tx_set_2band(false);      
+            af_tx_set_pres(false);    
+            af_tx_set_lr2(false);    
+            af_tx_set_duck(false);    
+            af_tx_set_exc(false);    
+            af_tx_set_intel(false);    
         }    
         else if (strcmp(v, "def") == 0) {       // заводские дефолты из af_config.h    
             af_tx_set_band(AF_TX_LO_HZ_DEFAULT, AF_TX_HI_HZ_DEFAULT);    
@@ -535,9 +550,17 @@ static void cli_exec(char* line) {
             af_tx_set_agc(AF_TX_AGC_TARGET);    
             af_tx_set_gate(AF_TX_GATE_THR);    
             af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);    
-            af_tx_set_ap(AF_TX_AP_ON_DEFAULT != 0);    
-            af_tx_set_softclip(AF_TX_SOFTCLIP_ON_DEFAULT != 0);    
-            af_tx_set_2band(AF_TX_2BAND_ON_DEFAULT != 0);    
+            af_tx_set_ap(AF_TX_AP_ON_DEFAULT != 0);      
+            af_tx_set_softclip(AF_TX_SOFTCLIP_ON_DEFAULT != 0);      
+            af_tx_set_2band(AF_TX_2BAND_ON_DEFAULT != 0);      
+            af_tx_set_pres(AF_TX_PRES_ON_DEFAULT != 0);    
+            af_tx_set_presmax(AF_TX_PRES_MAX_DB_X10);    
+            af_tx_set_lr2(AF_TX_LR2_ON_DEFAULT != 0);    
+            af_tx_set_duck(AF_TX_DUCK_ON_DEFAULT != 0);    
+            af_tx_set_duckmax(AF_TX_DUCK_MAX_DB_X10);    
+            af_tx_set_exc(AF_TX_EXC_ON_DEFAULT != 0);    
+            af_tx_set_excmix(AF_TX_EXC_MIX_Q15);    
+            af_tx_set_intel(AF_TX_INTEL_ON_DEFAULT != 0);  
         }    
         else { Serial.println("# ERR: txpreset <aggro|max|flat|def>"); return; }    
     
