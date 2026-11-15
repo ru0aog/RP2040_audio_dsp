@@ -508,7 +508,7 @@ static void cli_exec(char* line) {
             af_tx_set_softclip(true);      
             af_tx_set_2band(true);      
             af_tx_set_pres(true);   af_tx_set_presmax(15);    // подтверждённая точка    
-            af_tx_set_lr2(true);    
+            af_tx_set_lr2(true);    af_tx_set_shelf(20);
             af_tx_set_duck(true);   af_tx_set_duckmax(30);    
             af_tx_set_exc(true);    af_tx_set_excmix(3277);    
             af_tx_set_intel(true);    
@@ -517,7 +517,7 @@ static void cli_exec(char* line) {
             af_tx_set_band(300, 2400);              // чуть уже SSB, но сибилянты живы  
             af_tx_set_ratio(80);                    // 8:1 — как aggro  
             af_tx_set_clip(6144);                   // ниже aggro, но не в «мясо»  
-            af_tx_set_agc(18000);  
+            af_tx_set_agc(18000);  af_tx_set_shelf(20);
             af_tx_set_gate(AF_TX_GATE_THR);  
             af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);  
             af_tx_set_ap(true);    
@@ -537,7 +537,7 @@ static void cli_exec(char* line) {
             af_tx_set_gate(0);                  // гейт off    
             af_tx_set_gfloor(4120);    
             af_tx_set_ap(false);      
-            af_tx_set_softclip(true);      
+            af_tx_set_softclip(true);      af_tx_set_shelf(0);
             af_tx_set_2band(false);      
             af_tx_set_pres(false);    
             af_tx_set_lr2(false);    
@@ -562,7 +562,8 @@ static void cli_exec(char* line) {
             af_tx_set_duckmax(AF_TX_DUCK_MAX_DB_X10);    
             af_tx_set_exc(AF_TX_EXC_ON_DEFAULT != 0);    
             af_tx_set_excmix(AF_TX_EXC_MIX_Q15);    
-            af_tx_set_intel(AF_TX_INTEL_ON_DEFAULT != 0);  
+            af_tx_set_intel(AF_TX_INTEL_ON_DEFAULT != 0);
+            af_tx_set_shelf(AF_TX_SHELF_DB_X10_DEFAULT);
         }    
         else { Serial.println("# ERR: txpreset <aggro|max|flat|def>"); return; }    
     

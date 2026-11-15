@@ -501,18 +501,16 @@ static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {
 // для разборчивости SSB-речи нужен подъём +3..+6 дБ на согласных.  
 // Коэффициенты RBJ high-shelf, пересчёт в af_tx_set_shelf.  
 // При shelf=0 — байпас, ноль нагрузки.  
-static inline int32_t __not_in_flash_func(tx_shelf)(int32_t x) {  
-    if (tx_shelf_db_x10 == 0) return x;  
-    int64_t acc = (int64_t)sh_b0 * x + (int64_t)sh_b1 * sh_x1  
-                + (int64_t)sh_b2 * sh_x2  
-                - (int64_t)sh_a1 * sh_y1 - (int64_t)sh_a2 * sh_y2;  
-    int32_t y = (int32_t)(acc >> 15);  
-    if (y >  32767) y =  32767;  
-    if (y < -32768) y = -32768;  
-    sh_x2 = sh_x1; sh_x1 = x;  
-    sh_y2 = sh_y1; sh_y1 = y;  
-    return y;  
-}  
+static inline int32_t __not_in_flash_func(tx_shelf)(int32_t x) {    
+    if (tx_shelf_db_x10 == 0) return x;    
+    // tx_biquad: int32-произведения + int64-накопление.    
+    // |b0|~1.3*Q15, |a1|~1.5*Q15 при +4 дБ -> произведения < 2^31.    
+    int32_t y = tx_biquad(x, sh_b0, sh_b1, sh_b2, sh_a1, sh_a2,    
+                          &sh_x1, &sh_x2, &sh_y1, &sh_y2);    
+    if (y >  32767) y =  32767;    
+    if (y < -32768) y = -32768;    
+    return y;    
+}    
 
 // Этап 6: ВЧ-эксайтер. Берёт ВЧ-полосу (hi из кроссовера — уже      
 // посчитана в tx_compress, передаём сюда), выпрямляет |hi| ->      
