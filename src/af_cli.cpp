@@ -555,6 +555,13 @@ static void cli_exec(char* line) {
         else Serial.println("# ERR: txpres on|off");  
     }  
 
+    else if (strncmp(cmd, "txlr2", 5) == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txlr2 on|off"); return; }    
+        af_tx_set_lr2(strcmp(v, "on") == 0);    
+        Serial.printf("# OK txlr2=%s\n", af_tx_lr2() ? "on" : "off");    
+    }    
+
     // вставлять сюда  
   
     else {    

@@ -59,3 +59,6 @@ uint32_t af_tx_presmax(void);
 uint32_t af_tx_env_hi_pre(void);  // ВЧ-огибающая ДО гейта (источник k_dyn)  
 uint32_t af_tx_pres_nf(void);     // оценка шумовой полки ВЧ  
 uint32_t af_tx_k_dyn(void);       // текущий k_dyn, Q15 (0..32768)  
+
+void     af_tx_set_lr2(bool on);    // LR2-кроссовер + раздельный клиппинг (этап 4)    
+bool     af_tx_lr2(void);    

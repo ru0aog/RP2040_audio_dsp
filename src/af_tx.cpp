@@ -141,7 +141,14 @@ static uint32_t tx_presmax_db_x10 = 30;                      // потолок, 
 static int32_t pe_x1 = 0, pe_x2 = 0, pe_y1 = 0, pe_y2 = 0;  
 static int32_t pe_b0 = 0, pe_b1 = 0, pe_b2 = 0, pe_a1 = 0, pe_a2 = 0;  
 
-static int32_t split_lp = 0;                    // состояние ФНЧ кроссовера  
+static int32_t split_lp = 0;                    // состояние ФНЧ кроссовера (1-й порядок)    
+static volatile uint8_t tx_lr2_on = AF_TX_LR2_ON_DEFAULT;    
+// LR2-кроссовер: LP и HP биквады Баттерворта Q=0.7071 на AF_TX_SPLIT_HZ.    
+// Коэффициенты Q15, считаются в af_tx_init (RBJ lowpass/highpass).    
+static int32_t xo_lp_b0 = 0, xo_lp_b1 = 0, xo_lp_b2 = 0, xo_lp_a1 = 0, xo_lp_a2 = 0;    
+static int32_t xo_hp_b0 = 0, xo_hp_b1 = 0, xo_hp_b2 = 0, xo_hp_a1 = 0, xo_hp_a2 = 0;    
+static int32_t xo_lp_x1 = 0, xo_lp_x2 = 0, xo_lp_y1 = 0, xo_lp_y2 = 0;    
+static int32_t xo_hp_x1 = 0, xo_hp_x2 = 0, xo_hp_y1 = 0, xo_hp_y2 = 0;    
 static int64_t tx_env_lo_q16 = (int64_t)256 << 16;  // EMA огибающей НЧ-полосы  
 static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей ВЧ-полосы  
 
@@ -197,23 +204,58 @@ static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,
     }  
     return (int32_t)(((int64_t)x * *gain_q15) >> 15);  
 }  
-  
+
+// Биквад Direct Form I, коэффициенты Q15 — для LR2-кроссовера.    
+// int64-аккумулятор: a1 ~1.9*Q15, сумма 5 произведений > int32.    
+static inline int32_t __not_in_flash_func(tx_biquad)(int32_t x,    
+        int32_t b0, int32_t b1, int32_t b2, int32_t a1, int32_t a2,    
+        int32_t* x1, int32_t* x2, int32_t* y1, int32_t* y2) {    
+    int64_t acc = (int64_t)b0 * x + (int64_t)b1 * *x1 + (int64_t)b2 * *x2    
+                - (int64_t)a1 * *y1 - (int64_t)a2 * *y2;    
+    int32_t y = (int32_t)(acc >> 15);    
+    *x2 = *x1; *x1 = x;    
+    *y2 = *y1; *y1 = y;    
+    return y;    
+}    
+
 // 2-полосная компрессия: комплементарный split на ~900 Гц.  
 // lo = ФНЧ(x), hi = x - lo — сумма тождественно равна x (фазово согласованы).  
 // НЧ (гласные) и ВЧ (согласные) сжимаются раздельно -> нет pumping.  
-static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {  
-    if (!tx_2band_on)  
-        return tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);  
-  
-    // Кроссовер: ФНЧ 1-го порядка, k = AF_TX_SPLIT_K_Q15  
-    split_lp += (int32_t)(((int64_t)(x - split_lp) * AF_TX_SPLIT_K_Q15) >> 15);  
-    int32_t lo = split_lp;  
-    int32_t hi = x - lo;  
-  
-    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);  
-    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);  
-    return lo + hi;  
-}  
+static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {    
+    if (!tx_2band_on)    
+        return tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);    
+    
+    int32_t lo, hi;    
+    if (tx_lr2_on) {    
+        // Этап 4: LR2-кроссовер — LP и HP биквады Баттерворта Q=0.7071.    
+        // Сумма полос all-pass (плоская АЧХ), перекрытие -6 дБ на    
+        // кроссовере, склоны 12 дБ/окт — меньше интермодуляции НЧ<->ВЧ.    
+        lo = tx_biquad(x, xo_lp_b0, xo_lp_b1, xo_lp_b2, xo_lp_a1, xo_lp_a2,    
+                       &xo_lp_x1, &xo_lp_x2, &xo_lp_y1, &xo_lp_y2);    
+        hi = tx_biquad(x, xo_hp_b0, xo_hp_b1, xo_hp_b2, xo_hp_a1, xo_hp_a2,    
+                       &xo_hp_x1, &xo_hp_x2, &xo_hp_y1, &xo_hp_y2);    
+    } else {    
+        // Старый комплементарный split: ФНЧ 1-го порядка, hi = x - lo    
+        split_lp += (int32_t)(((int64_t)(x - split_lp) * AF_TX_SPLIT_K_Q15) >> 15);    
+        lo = split_lp;    
+        hi = x - lo;    
+    }    
+    
+    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);    
+    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);    
+    
+    if (tx_lr2_on) {    
+        // Раздельный клиппинг полос до суммирования: НЧ-пики гласных    
+        // не модулируют согласные. Порог общий tx_clip_thr, без makeup —    
+        // makeup применяется в основном клиппере дальше по цепочке.    
+        int32_t t = (int32_t)tx_clip_thr;    
+        if (lo >  t) lo =  t;    
+        if (lo < -t) lo = -t;    
+        if (hi >  t) hi =  t;    
+        if (hi < -t) hi = -t;    
+    }    
+    return lo + hi;    
+}    
     
 // ---------------------------------------------------------------------------    
 // Клиппер + makeup    
@@ -491,7 +533,31 @@ void af_tx_init(void) {
         pe_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
         pe_a2 = (int32_t)lroundf(((1.0f - al / A) / a0) * 32768.0f);  
         pe_x1 = pe_x2 = pe_y1 = pe_y2 = 0;  
-    }  
+    }
+
+    // Этап 4: LR2-кроссовер на AF_TX_SPLIT_HZ — RBJ lowpass + highpass,    
+    // Q = 0.7071 (Баттерворт-пара: сумма all-pass, -6 дБ на кроссовере).    
+    {    
+        const float w  = 2.0f * PI * (float)AF_TX_SPLIT_HZ / AF_FS_OUT_HZ;    
+        const float cw = cosf(w), sw = sinf(w);    
+        const float al = sw / (2.0f * 0.7071f);    
+        const float a0 = 1.0f + al;    
+        // LP    
+        xo_lp_b0 = (int32_t)lroundf(((1.0f - cw) * 0.5f / a0) * 32768.0f);    
+        xo_lp_b1 = (int32_t)lroundf(((1.0f - cw) / a0) * 32768.0f);    
+        xo_lp_b2 = xo_lp_b0;    
+        xo_lp_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);    
+        xo_lp_a2 = (int32_t)lroundf(((1.0f - al) / a0) * 32768.0f);    
+        // HP    
+        xo_hp_b0 = (int32_t)lroundf(((1.0f + cw) * 0.5f / a0) * 32768.0f);    
+        xo_hp_b1 = (int32_t)lroundf((-(1.0f + cw) / a0) * 32768.0f);    
+        xo_hp_b2 = xo_hp_b0;    
+        xo_hp_a1 = xo_lp_a1;    
+        xo_hp_a2 = xo_lp_a2;    
+        xo_lp_x1 = xo_lp_x2 = xo_lp_y1 = xo_lp_y2 = 0;    
+        xo_hp_x1 = xo_hp_x2 = xo_hp_y1 = xo_hp_y2 = 0;    
+    }    
+
     env_hi_pre_q16 = (int64_t)256 << 16;    
     pres_nf_q16    = (int64_t)256 << 16;    
     k_dyn_q15      = 0;    
@@ -547,6 +613,9 @@ bool af_tx_softclip(void)         { return tx_softclip != 0; }
 
 void af_tx_set_2band(bool on)     { tx_2band_on = on ? 1 : 0; }  
 bool af_tx_2band(void)            { return tx_2band_on != 0; }  
+
+void af_tx_set_lr2(bool on)       { tx_lr2_on = on ? 1 : 0; }    
+bool af_tx_lr2(void)              { return tx_lr2_on != 0; }    
 
 void af_tx_set_gfloor(uint32_t q16) {    
     if (q16 > 65536u) q16 = 65536u;    
