@@ -166,11 +166,22 @@ static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,
                                                         int64_t* env_q16,  
                                                         int32_t* gain_q15,  
                                                         int32_t thr) {  
-    int64_t ax  = (x < 0) ? -x : x;  
-    int64_t tgt = ax << 16;  
-    int64_t da  = tgt - *env_q16;  
-    *env_q16 += (da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24  
-                              : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;  
+    int64_t ax  = (x < 0) ? -x : x;    
+    int64_t tgt = ax << 16;    
+    int64_t da  = tgt - *env_q16;    
+    // Этап 3: program-dependent release. Спад после громкой фразы    
+    // (env > txgate) — быстрый: gain возвращается к 1 до того, как    
+    // гейт закроется, шум паузы не «подтягивается». На тихой речи    
+    // (env <= txgate) — медленный, без «дыхания».    
+    int64_t c;    
+    if (da > 0) {    
+        c = (int64_t)AF_TX_ENV_ATT_Q24;    
+    } else {    
+        c = (*env_q16 > ((int64_t)tx_gate_thr << 16))    
+                ? (int64_t)AF_TX_ENV_DEC_FAST_Q24    
+                : (int64_t)AF_TX_ENV_DEC_Q24;    
+    }    
+    *env_q16 += (da * c) >> 24;    
     if (*env_q16 < ((int64_t)1 << 16)) *env_q16 = (int64_t)1 << 16;  
   
     if (++comp_blk_cnt >= 64) {             // свой счётчик; в 2-полосном режиме    
