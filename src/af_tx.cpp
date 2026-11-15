@@ -23,60 +23,70 @@
 // Два экземпляра полосового FIR (пред- и постфильтр), структура как в    
 // af_dsp.cpp: sinc + Блэкман-Харрис, Q15, симметричная свёртка.    
 // ---------------------------------------------------------------------------    
-#define TX_FIR_N 127    
+#define TX_FIR_N       127    // пред-фильтр: крутая речевая полоса    
+#define TX_POST_FIR_N  63     // постфильтр: срез гармоник клиппинга    
     
 static volatile uint32_t tx_lo_hz = AF_TX_LO_HZ_DEFAULT;    
 static volatile uint32_t tx_hi_hz = AF_TX_HI_HZ_DEFAULT;    
     
-static int16_t tx_fir_taps[TX_FIR_N];    
-    
-typedef struct {    
-    int32_t buf[TX_FIR_N];    
-    int     idx;    
-} tx_fir_t;    
+static int16_t tx_fir_taps[TX_FIR_N];      
+static int16_t tx_post_taps[TX_POST_FIR_N];      
+
+static void tx_fir_design_n(int16_t* taps, int n) {      
+    const int   M     = (n - 1) / 2;      
+    const float fc_hi = (float)tx_hi_hz / AF_FS_OUT_HZ;      
+    const float fc_lo = (float)tx_lo_hz / AF_FS_OUT_HZ;      
+    float h[TX_FIR_N];      
+    float sum = 0.0f;      
+    for (int k = 0; k < n; k++) {      
+        const int m = k - M;      
+        float s_hi = (m == 0) ? (2.0f * fc_hi)      
+                              : sinf(2.0f * PI * fc_hi * m) / (PI * m);      
+        float s_lo = (m == 0) ? (2.0f * fc_lo)      
+                              : sinf(2.0f * PI * fc_lo * m) / (PI * m);      
+        const float a = 2.0f * PI * k / (n - 1);      
+        float w = 0.35875f - 0.48829f * cosf(a)      
+                         + 0.14128f * cosf(2.0f * a)      
+                         - 0.01168f * cosf(3.0f * a);      
+        h[k] = (s_hi - s_lo) * w;      
+        sum += fabsf(h[k]);      
+    }      
+    const float norm = (sum > 0.0f) ? (2.0f / sum) : 1.0f;      
+    for (int k = 0; k < n; k++)      
+        taps[k] = (int16_t)lroundf(h[k] * norm * 32768.0f);      
+}      
+
+typedef struct {      
+    int32_t buf[TX_FIR_N];      
+    int     idx;      
+    const int16_t* taps;      
+    int     n;      
+} tx_fir_t;      
     
 static tx_fir_t tx_pre, tx_post;    
     
-static void tx_fir_design(void) {    
-    const int   M     = (TX_FIR_N - 1) / 2;    
-    const float fc_hi = (float)tx_hi_hz / AF_FS_OUT_HZ;    
-    const float fc_lo = (float)tx_lo_hz / AF_FS_OUT_HZ;    
-    float h[TX_FIR_N];    
-    float sum = 0.0f;    
-    for (int n = 0; n < TX_FIR_N; n++) {    
-        const int m = n - M;    
-        float s_hi = (m == 0) ? (2.0f * fc_hi)    
-                              : sinf(2.0f * PI * fc_hi * m) / (PI * m);    
-        float s_lo = (m == 0) ? (2.0f * fc_lo)    
-                              : sinf(2.0f * PI * fc_lo * m) / (PI * m);    
-        const float a = 2.0f * PI * n / (TX_FIR_N - 1);    
-        float w = 0.35875f - 0.48829f * cosf(a)    
-                         + 0.14128f * cosf(2.0f * a)    
-                         - 0.01168f * cosf(3.0f * a);    
-        h[n] = (s_hi - s_lo) * w;    
-        sum += fabsf(h[n]);    
-    }    
-    const float norm = (sum > 0.0f) ? (2.0f / sum) : 1.0f;    
-    for (int n = 0; n < TX_FIR_N; n++)    
-        tx_fir_taps[n] = (int16_t)lroundf(h[n] * norm * 32768.0f);    
-}    
+static void tx_fir_design(void) {      
+    tx_fir_design_n(tx_fir_taps,  TX_FIR_N);       // пред-фильтр, 127    
+    tx_fir_design_n(tx_post_taps, TX_POST_FIR_N);  // постфильтр, 63    
+}      
     
-static inline int32_t __not_in_flash_func(tx_fir_push)(tx_fir_t* f, int32_t x) {    
-    f->buf[f->idx] = x;    
-    if (++f->idx >= TX_FIR_N) f->idx = 0;    
-    
-    int64_t acc = 0;    
-    int lo = f->idx;    
-    int hi = f->idx + TX_FIR_N - 1;    
-    if (hi >= TX_FIR_N) hi -= TX_FIR_N;    
-    for (int k = 0; k < TX_FIR_N / 2; k++) {    
-        acc += (int32_t)tx_fir_taps[k] * (f->buf[lo] + f->buf[hi]);    
-        if (++lo >= TX_FIR_N) lo = 0;    
-        if (--hi < 0)         hi = TX_FIR_N - 1;    
-    }    
-    acc += (int32_t)tx_fir_taps[TX_FIR_N / 2] * f->buf[lo];    
-    return (int32_t)((acc + (1 << 14)) >> 15);    
-}    
+static inline int32_t __not_in_flash_func(tx_fir_push)(tx_fir_t* f, int32_t x) {      
+    const int n = f->n;      
+    f->buf[f->idx] = x;      
+    if (++f->idx >= n) f->idx = 0;      
+      
+    int64_t acc = 0;      
+    int lo = f->idx;      
+    int hi = f->idx + n - 1;      
+    if (hi >= n) hi -= n;      
+    for (int k = 0; k < n / 2; k++) {      
+        acc += (int32_t)f->taps[k] * (f->buf[lo] + f->buf[hi]);      
+        if (++lo >= n) lo = 0;      
+        if (--hi < 0)  hi = n - 1;      
+    }      
+    acc += (int32_t)f->taps[n / 2] * f->buf[lo];      
+    return (int32_t)((acc + (1 << 14)) >> 15);      
+}      
     
 // ---------------------------------------------------------------------------    
 // Компрессор: EMA-огибающая |x| (атака/спад), gain по степенному закону.    
@@ -207,12 +217,16 @@ static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,
 
 // Биквад Direct Form I, коэффициенты Q15 — для LR2-кроссовера.    
 // int64-аккумулятор: a1 ~1.9*Q15, сумма 5 произведений > int32.    
-static inline int32_t __not_in_flash_func(tx_biquad)(int32_t x,    
-        int32_t b0, int32_t b1, int32_t b2, int32_t a1, int32_t a2,    
-        int32_t* x1, int32_t* x2, int32_t* y1, int32_t* y2) {    
-    int64_t acc = (int64_t)b0 * x + (int64_t)b1 * *x1 + (int64_t)b2 * *x2    
-                - (int64_t)a1 * *y1 - (int64_t)a2 * *y2;    
-    int32_t y = (int32_t)(acc >> 15);    
+static inline int32_t __not_in_flash_func(tx_biquad)(int32_t x,      
+        int32_t b0, int32_t b1, int32_t b2, int32_t a1, int32_t a2,      
+        int32_t* x1, int32_t* x2, int32_t* y1, int32_t* y2) {      
+    // Каждое произведение — int32 (1 такт на M0+): |coef| < 2 и      
+    // |x|,|y| <= 32767 -> |произведение| < 2.1e9, в int32 влезает      
+    // впритык. Сумма 5 членов может превысить int32 -> накопление      
+    // в int64 (сложение 64-бит ~2 такта, дёшево).      
+    int64_t acc = (int32_t)(b0 * x) + (int32_t)(b1 * *x1) + (int32_t)(b2 * *x2)      
+                - (int32_t)(a1 * *y1) - (int32_t)(a2 * *y2);      
+    int32_t y = (int32_t)(acc >> 15);      
     *x2 = *x1; *x1 = x;    
     *y2 = *y1; *y1 = y;    
     return y;    
@@ -484,9 +498,11 @@ void af_tx_init(void) {
     pres_blk_cnt   = 0;    
     pres_decim     = 0;    
     tx_gate_hold = 0;
-    tx_fir_design();    
-    memset(&tx_pre,  0, sizeof(tx_pre));    
-    memset(&tx_post, 0, sizeof(tx_post));    
+    tx_fir_design();  
+    memset(&tx_pre,  0, sizeof(tx_pre));      
+    memset(&tx_post, 0, sizeof(tx_post));      
+    tx_pre.taps  = tx_fir_taps;  tx_pre.n  = TX_FIR_N;        
+    tx_post.taps = tx_post_taps; tx_post.n = TX_POST_FIR_N;         
     tx_env_q16    = (int64_t)256 << 16;  
     tx_env_lo_q16 = (int64_t)256 << 16;  
     tx_env_hi_q16 = (int64_t)256 << 16;  
