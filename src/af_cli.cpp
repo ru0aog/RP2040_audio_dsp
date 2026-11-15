@@ -83,6 +83,7 @@ static void cli_help(void) {
     Serial.println("#   txintel on|off    — k_intelligibility: автобаланс НЧ/ВЧ по env_hi/env_lo");    
     Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");      
     Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");
+    Serial.println("#   txprof <1..7|имя> — TX-профиль: 1 natural, 2 dx, 3 bass, 4 whisper, 5 loud, 6 flat, 7 work");  
     Serial.println("#   txshelf <дБx10>   — статический подъём ВЧ @1.8к (0=off, 40=+4дБ)");  
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
@@ -164,7 +165,55 @@ static void cli_stats(void) {
                   (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));  
     
 }  
+
+// TX-профили: 7 штук, нумерация совпадает с будущими банками flash.  
+// Каждый профиль — полный набор параметров тракта (как af_store_load для RX).  
+static void tx_apply_profile(uint8_t idx) {  
+    // общий базис: рабочая точка, от которой профили отличаются деталями  
+    af_tx_set_band(300, 2700);  
+    af_tx_set_ratio(40);  af_tx_set_clip(26000);  af_tx_set_agc(18000);  
+    af_tx_set_gate(AF_TX_GATE_THR);  af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);  
+    af_tx_set_ap(true);  af_tx_set_softclip(true);  af_tx_set_2band(true);  
+    af_tx_set_pres(true);  af_tx_set_presmax(15);  
+    af_tx_set_lr2(true);  
+    af_tx_set_duck(true);  af_tx_set_duckmax(30);  
+    af_tx_set_exc(true);   af_tx_set_excmix(3277);  
+    af_tx_set_intel(true); af_tx_set_shelf(0);  
+    af_tx_set_notch(true);  
   
+    switch (idx) {  
+    case 1: // natural — мягкий повседневный  
+        af_tx_set_ratio(30);  af_tx_set_clip(20000);  
+        af_tx_set_exc(false);  
+        break;  
+    case 2: // dx — пробив на слабом сигнале  
+        af_tx_set_ratio(60);  af_tx_set_clip(12000);  
+        af_tx_set_presmax(30);  af_tx_set_shelf(20);  
+        break;  
+    case 3: // bass — низкий голос  
+        af_tx_set_band(200, 2700);  
+        af_tx_set_presmax(20);  af_tx_set_duck(false);  af_tx_set_shelf(10);  
+        break;  
+    case 4: // whisper — тихая речь  
+        af_tx_set_agc(22000);  af_tx_set_gate(150);  
+        af_tx_set_ratio(50);   af_tx_set_excmix(1638);  
+        break;  
+    case 5: // loud — громкий голос  
+        af_tx_set_agc(14000);  af_tx_set_gate(350);  
+        af_tx_set_ratio(50);   af_tx_set_clip(16000);  
+        break;  
+    case 6: // flat — линейный тракт  
+        af_tx_set_ratio(10);  af_tx_set_clip(32767);  af_tx_set_gate(0);  
+        af_tx_set_ap(false);  af_tx_set_2band(false);  
+        af_tx_set_pres(false); af_tx_set_lr2(false);  af_tx_set_duck(false);  
+        af_tx_set_exc(false);  af_tx_set_intel(false); af_tx_set_notch(false);  
+        break;  
+    case 7: // work — рабочая точка (базис уже её и есть)  
+    default:  
+        break;  
+    }  
+}  
+
 // ---------------------------------------------------------------------------  
 // Разбор одной строки  
 // ---------------------------------------------------------------------------  
@@ -580,6 +629,25 @@ static void cli_exec(char* line) {
                       af_tx_softclip() ? "soft" : "hard",    
                       af_tx_2band() ? "on" : "off");    
     }    
+
+    else if (strncmp(cmd, "txprof", 6) == 0) {  
+        char* v = strtok(NULL, " \t");  
+        if (v == NULL) { Serial.println("# ERR: txprof <1..7|natural|dx|bass|whisper|loud|flat|work>"); return; }  
+        uint8_t idx = 0;  
+        if      (strcmp(v, "natural") == 0) idx = 1;  
+        else if (strcmp(v, "dx")      == 0) idx = 2;  
+        else if (strcmp(v, "bass")    == 0) idx = 3;  
+        else if (strcmp(v, "whisper") == 0) idx = 4;  
+        else if (strcmp(v, "loud")    == 0) idx = 5;  
+        else if (strcmp(v, "flat")    == 0) idx = 6;  
+        else if (strcmp(v, "work")    == 0) idx = 7;  
+        else {  
+            idx = (uint8_t)strtoul(v, NULL, 10);  
+            if (idx < 1 || idx > 7) { Serial.println("# ERR: txprof <1..7>"); return; }  
+        }  
+        tx_apply_profile(idx);  
+        Serial.printf("# OK txprof=%u\n", idx);  
+    }  
 
     else if (strncmp(cmd, "txnotch", 7) == 0) {  
         char* v = strtok(NULL, " \t");  
