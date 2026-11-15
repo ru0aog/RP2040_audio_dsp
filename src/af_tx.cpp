@@ -176,11 +176,16 @@ static volatile int32_t  tx_exc_mix  = AF_TX_EXC_MIX_Q15;      // подмес, 
 static int64_t exc_env_q16 = (int64_t)256 << 16;               // EMA |hi|, Q16          
 static uint8_t exc_decim   = 0;                                // дециматор EMA ÷2             
   
-// --- Этап 7: k_intelligibility (автобаланс НЧ/ВЧ) ---  
-static volatile uint8_t tx_intel_on = AF_TX_INTEL_ON_DEFAULT;  
-static int32_t g_intel_q15    = 32768;   // сглаженный gain ВЧ-полосы, Q15  
-static int32_t g_intel_tgt_q15 = 32768;  // цель gain (per-block)  
-static uint8_t intel_blk_cnt  = 0;       // счётчик пересчёта       
+// --- Этап 7: k_intelligibility (автобаланс НЧ/ВЧ) ---    
+static volatile uint8_t tx_intel_on = AF_TX_INTEL_ON_DEFAULT;    
+static int32_t g_intel_q15    = 32768;   // сглаженный gain ВЧ-полосы, Q15    
+static int32_t g_intel_tgt_q15 = 32768;  // цель gain (per-block)    
+static uint8_t intel_blk_cnt  = 0;       // счётчик пересчёта         
+  
+// --- High-shelf полка (вариант A): статический подъём ВЧ ---  
+static uint32_t tx_shelf_db_x10 = AF_TX_SHELF_DB_X10_DEFAULT;  // 0 = off  
+static int32_t sh_x1 = 0, sh_x2 = 0, sh_y1 = 0, sh_y2 = 0;  
+static int32_t sh_b0 = 0, sh_b1 = 0, sh_b2 = 0, sh_a1 = 0, sh_a2 = 0;     
 
 // Порог компрессора — фиксированный, ~25% шкалы.    
 #define TX_COMP_THR   8192    
@@ -491,6 +496,24 @@ static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {
     return x + (((wet - x) * k_dyn_q15) >> 15);     
 } 
 
+// High-shelf биквад (вариант A): статический подъём ВЧ выше  
+// AF_TX_SHELF_FREQ_HZ. Компенсирует «Hi-Fi» плоскость тракта —  
+// для разборчивости SSB-речи нужен подъём +3..+6 дБ на согласных.  
+// Коэффициенты RBJ high-shelf, пересчёт в af_tx_set_shelf.  
+// При shelf=0 — байпас, ноль нагрузки.  
+static inline int32_t __not_in_flash_func(tx_shelf)(int32_t x) {  
+    if (tx_shelf_db_x10 == 0) return x;  
+    int64_t acc = (int64_t)sh_b0 * x + (int64_t)sh_b1 * sh_x1  
+                + (int64_t)sh_b2 * sh_x2  
+                - (int64_t)sh_a1 * sh_y1 - (int64_t)sh_a2 * sh_y2;  
+    int32_t y = (int32_t)(acc >> 15);  
+    if (y >  32767) y =  32767;  
+    if (y < -32768) y = -32768;  
+    sh_x2 = sh_x1; sh_x1 = x;  
+    sh_y2 = sh_y1; sh_y1 = y;  
+    return y;  
+}  
+
 // Этап 6: ВЧ-эксайтер. Берёт ВЧ-полосу (hi из кроссовера — уже      
 // посчитана в tx_compress, передаём сюда), выпрямляет |hi| ->      
 // EMA-огибающая -> подмес env*|hi|*sign(hi)*mix = env*hi*mix.      
@@ -586,8 +609,9 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
     y = tx_gate(y);                   // шумовой гейт: паузы -> тишина      
     int32_t hi_band = 0;      
     y = tx_compress(y, &hi_band);     // компрессия + отвод ВЧ-полосы      
-    y = tx_presence(y);               // dyn-presence EQ (этап 2)    
-    y = tx_exciter(y, hi_band);       // ВЧ-эксайтер (этап 6)    
+    y = tx_presence(y);               // dyn-presence EQ (этап 2)      
+    y = tx_shelf(y);                  // статическая ВЧ-полка (вариант A)  
+    y = tx_exciter(y, hi_band);       // ВЧ-эксайтер (этап 6)      
     y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)      
                     : tx_clip(y);     // жёсткий клиппер    
     y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга  
@@ -697,7 +721,10 @@ void af_tx_init(void) {
     env_hi_pre_q16 = (int64_t)256 << 16;    
     pres_nf_q16    = (int64_t)256 << 16;    
     k_dyn_q15      = 0;    
-    k_dyn_tgt_q15  = 0;    
+    k_dyn_tgt_q15  = 0;
+    // High-shelf: коэффициенты и состояния  
+    af_tx_set_shelf(tx_shelf_db_x10);  
+    sh_x1 = sh_x2 = sh_y1 = sh_y2 = 0;  
 }      
     
 void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {    
@@ -822,3 +849,23 @@ uint32_t af_tx_excmix(void) { return (uint32_t)tx_exc_mix; }
 void af_tx_set_intel(bool on) { tx_intel_on = on ? 1 : 0; }  
 bool af_tx_intel(void)        { return tx_intel_on != 0; }  
 uint32_t af_tx_g_intel(void)  { return (uint32_t)g_intel_q15; }   // debug, Q15  
+
+// --- High-shelf полка (вариант A) ---  
+void af_tx_set_shelf(uint32_t db_x10) {   // подъём ВЧ, дБ x10 (0 = off)  
+    if (db_x10 > 120) db_x10 = 120;       // max +12 дБ  
+    tx_shelf_db_x10 = db_x10;  
+    if (db_x10 == 0) return;              // байпас, коэффициенты не нужны  
+    // RBJ high-shelf: A = 10^(dB/40), w = 2*pi*f0/Fs, alpha = sin(w)/(2Q)  
+    const float A  = powf(10.0f, (float)db_x10 / 400.0f);  
+    const float w  = 2.0f * PI * (float)AF_TX_SHELF_FREQ_HZ / AF_FS_OUT_HZ;  
+    const float cw = cosf(w), sw = sinf(w);  
+    const float al = sw / (2.0f * AF_TX_SHELF_Q_X100 / 100.0f);  
+    const float sq = 2.0f * sqrtf(A) * al;  
+    const float a0 = (A + 1.0f) - (A - 1.0f) * cw + sq;  
+    sh_b0 = (int32_t)lroundf((A * ((A + 1.0f) + (A - 1.0f) * cw + sq) / a0) * 32768.0f);  
+    sh_b1 = (int32_t)lroundf((-2.0f * A * ((A - 1.0f) + (A + 1.0f) * cw) / a0) * 32768.0f);  
+    sh_b2 = (int32_t)lroundf((A * ((A + 1.0f) + (A - 1.0f) * cw - sq) / a0) * 32768.0f);  
+    sh_a1 = (int32_t)lroundf((2.0f * ((A - 1.0f) - (A + 1.0f) * cw) / a0) * 32768.0f);  
+    sh_a2 = (int32_t)lroundf(((A + 1.0f) - (A - 1.0f) * cw - sq) / a0 * 32768.0f);  
+}  
+uint32_t af_tx_shelf(void) { return tx_shelf_db_x10; }   // дБ x10  

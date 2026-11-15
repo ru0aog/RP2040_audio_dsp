@@ -79,3 +79,6 @@ uint32_t af_tx_excmix(void);
 void     af_tx_set_intel(bool on);  
 bool     af_tx_intel(void);  
 uint32_t af_tx_g_intel(void);  
+
+void     af_tx_set_shelf(uint32_t db_x10);   // подъём ВЧ, дБ x10 (0 = off)  
+uint32_t af_tx_shelf(void);  

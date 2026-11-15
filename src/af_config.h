@@ -179,6 +179,17 @@
 // Сглаживание g_hi EMA, Q24: ~30 мс — медленнее duck, без «плавания»  
 #define AF_TX_INTEL_SMOOTH_Q24   30000u  
 
+// High-shelf полка (вариант A): статический подъём ВЧ выше ~1.8 кГц.  
+// Компенсирует «Hi-Fi» плоскость тракта: для разборчивости SSB-речи  
+// нужен подъём +3..+6 дБ на согласных. RBJ high-shelf биквад,  
+// коэффициенты пересчитываются в af_tx_set_shelf (не в горячем пути).  
+// 0 = полка off (прозрачный байпас).  
+#define AF_TX_SHELF_FREQ_HZ     1800u   // частота полки  
+#define AF_TX_SHELF_DB_X10_DEFAULT 40      // +4 дБ старт; 0 = off  
+#define AF_TX_SHELF_Q_X100      71u     // Q = 0.71 (плавный склон)  
+#define AF_TX_SHELF_DB_X10_DEF  40u     // дефолт +4 дБ  
+#define AF_TX_SHELF_DB_X10_MAX  120u    // потолок +12 дБ  
+
 #define AF_TX_PRES_MAX_DB_X10   15    // потолок presence-подъёма, дБx10    
 #define AF_TX_DUCK_MAX_DB_X10   30    // потолок ducking, дБx10 (-3 дБ)    
 

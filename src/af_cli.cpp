@@ -82,7 +82,8 @@ static void cli_help(void) {
     Serial.println("#   txexcmix <q15>    — подмес эксайтера (3277 = -20 дБ)");
     Serial.println("#   txintel on|off    — k_intelligibility: автобаланс НЧ/ВЧ по env_hi/env_lo");    
     Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");      
-    Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");    
+    Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");
+    Serial.println("#   txshelf <дБx10>   — статический подъём ВЧ @1.8к (0=off, 40=+4дБ)");  
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
 }  
   
@@ -117,7 +118,7 @@ static void cli_stats(void) {
                   af_tx_softclip() ? "soft" : "hard",    
                   af_tx_2band() ? "on" : "off",  
                   af_tx_notch() ? "on" : "off");
-    Serial.printf("  pres=%s pmax=%lu lr2=%s duck=%s dmax=%lu exc=%s emix=%lu intel=%s\n",          
+    Serial.printf("  pres=%s pmax=%lu lr2=%s duck=%s dmax=%lu exc=%s emix=%lu intel=%s shelf=%lu\n",          
                   af_tx_pres() ? "on" : "off",          
                   (unsigned long)af_tx_presmax(),        
                   af_tx_lr2() ? "on" : "off",      
@@ -125,7 +126,8 @@ static void cli_stats(void) {
                   (unsigned long)af_tx_duckmax(),    
                   af_tx_exc() ? "on" : "off",    
                   (unsigned long)af_tx_excmix(),  
-                  af_tx_intel() ? "on" : "off");        
+                  af_tx_intel() ? "on" : "off",
+                  (unsigned long)af_tx_shelf());
     Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
                   (unsigned long)af_tx_agc_env(),  
                   (unsigned long)af_tx_agc_gain(),  
@@ -639,6 +641,13 @@ static void cli_exec(char* line) {
         Serial.printf("# OK txintel=%s\n", af_tx_intel() ? "on" : "off");    
     }    
   
+    else if (strncmp(cmd, "txshelf", 7) == 0) {  
+        const char* v = strtok(NULL, " ");  
+        if (!v) { Serial.println("# ERR: txshelf <дБx10>"); return; }  
+        af_tx_set_shelf((uint32_t)atoi(v));  
+        Serial.printf("# OK txshelf=%lu\n", (unsigned long)af_tx_shelf());  
+    }  
+
 
     // вставлять сюда  
   
