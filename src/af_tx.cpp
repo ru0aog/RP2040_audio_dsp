@@ -170,8 +170,12 @@ static int32_t k_duck_q15     = 0;      // сглаженный k_duck, Q15
 static int32_t k_duck_tgt_q15 = 0;      // цель k_duck (per-block)    
 static uint8_t duck_blk_cnt   = 0;      // счётчик пересчёта    
   
-// --- Этап 6: ВЧ-эксайтер ---      
-static volatile uint8_t  tx_exc_on   = AF_TX_EXC_ON_DEFAULT;   // дефолт off        
+// --- Этап 6: ВЧ-эксайтер (динамический усилитель ВЧ-полосы) ---        
+// Подмес env(|hi|)*hi*mix — AM по огибающей, НЕ гармонический        
+// эксайтер: новых частотных компонент в установившемся режиме нет.        
+// Субъективно подчёркивает согласные; для настоящих гармоник нужна        
+// нелинейность (hi*|hi| и т.п.) — пока не вводим.        
+static volatile uint8_t  tx_exc_on   = AF_TX_EXC_ON_DEFAULT;   // дефолт on          
 static volatile int32_t  tx_exc_mix  = AF_TX_EXC_MIX_Q15;      // подмес, Q15        
 static int64_t exc_env_q16 = (int64_t)256 << 16;               // EMA |hi|, Q16          
 static uint8_t exc_decim   = 0;                                // дециматор EMA ÷2             
@@ -464,10 +468,13 @@ static inline void __not_in_flash_func(tx_pres_sidechain)(int32_t x_agc) {
     }  
     if (pres_nf_q16 < ((int64_t)1 << 16)) pres_nf_q16 = (int64_t)1 << 16;  
   
-    // k_dyn = clamp((env_hi_pre - 2*nf) / (4*nf), 0..1), Q15.    
-    // Деление — раз в 64 отсчёта (~4 мс): огибающая медленная,    
-    // per-sample пересчёт не нужен и стоил +17% L1 (int64-div).    
-    if (++pres_blk_cnt >= 64) {    
+    // k_dyn = clamp((env_hi_pre - 2*nf) / (4*nf), 0..1), Q15.      
+    // Деление — раз в 128 отсчётов (~8.3 мс): функция децимирована      
+    // ÷2 (pres_decim), 64 вызова = 128 входных отсчётов. Огибающая      
+    // медленная, per-sample пересчёт не нужен и стоил +17% L1.      
+    // ВНИМАНИЕ: EMA-константы ATT/DEC и K_ATT/K_REL применяются на      
+    // 7.7 ksps — фактические постоянные времени вдвое больше номинала.      
+    if (++pres_blk_cnt >= 64) {      
         pres_blk_cnt = 0;    
         int64_t nf  = pres_nf_q16 >> 16;    
         int64_t env = env_hi_pre_q16 >> 16;    
@@ -616,6 +623,18 @@ static int32_t tx_gate(int32_t x) {
     return (int32_t)(((int64_t)x * (int32_t)gate_gain) >> 16);  
 }  
 
+// DC-блокер: однополюсный ФВЧ ~20 Гц между клиппером и пост-FIR.  
+// y[n] = x[n] - x[n-1] + R*y[n-1], R = exp(-2*pi*20/15464) ~ 0.9919  
+// Q15: R = 32510. Страховка от DC после клиппера/эксайтера.  
+static int32_t dc_x1 = 0, dc_y1 = 0;  
+  
+static inline int32_t __not_in_flash_func(tx_dc_block)(int32_t x) {  
+    const int32_t y = x - dc_x1 + (int32_t)(((int64_t)32510 * dc_y1) >> 15);  
+    dc_x1 = x;  
+    dc_y1 = y;  
+    return y;  
+}  
+
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {      
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
     if (tx_ap_on) y = tx_allpass(y);  // симметризатор пиков речи  
@@ -627,9 +646,10 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
     y = tx_presence(y);               // dyn-presence EQ (этап 2)      
     y = tx_shelf(y);                  // статическая ВЧ-полка (вариант A)  
     y = tx_exciter(y, hi_band);       // ВЧ-эксайтер (этап 6)      
-    y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)      
-                    : tx_clip(y);     // жёсткий клиппер    
-    y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга  
+    y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)        
+                    : tx_clip(y);     // жёсткий клиппер      
+    y = tx_dc_block(y);               // ФВЧ ~20 Гц: страховка от DC    
+    y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга    
     if (tx_notch_on) {                // узкие нотчи против тонов-наводок  
         y = tx_notch(y, n1_b1, n1_a1, n1_a2, &n1_x1, &n1_x2, &n1_y1, &n1_y2);  
         y = tx_notch(y, n2_b1, n2_a1, n2_a2, &n2_x1, &n2_x2, &n2_y1, &n2_y2);  
@@ -737,10 +757,12 @@ void af_tx_init(void) {
     pres_nf_q16    = (int64_t)256 << 16;    
     k_dyn_q15      = 0;    
     k_dyn_tgt_q15  = 0;
-    // High-shelf: коэффициенты и состояния  
-    af_tx_set_shelf(tx_shelf_db_x10);  
-    sh_x1 = sh_x2 = sh_y1 = sh_y2 = 0;  
-}      
+    // High-shelf: коэффициенты и состояния    
+    af_tx_set_shelf(tx_shelf_db_x10);    
+    sh_x1 = sh_x2 = sh_y1 = sh_y2 = 0;    
+    dc_x1 = 0;    
+    dc_y1 = 0;    
+}        
     
 void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {    
     const uint32_t FS2 = AF_FS_OUT_HZ / 2;    
