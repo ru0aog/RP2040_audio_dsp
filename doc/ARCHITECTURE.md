@@ -521,3 +521,8 @@ af_gpio_ctl.cpp/.h — дебаунс GP2/GP3/GP4
 - Пост-FIR 63 тапа; кеш inv_t2 в soft clip; EMA эксайтера децимирована ÷2.  
 - Суммарная цена всех блоков ~8.5% L1 (flat 75% -> aggro 83%).  
 - Кандидат на разгрузку при нехватке: txnotch off (-2-3% L1).  
+
+- Профили: txprof 1..7 (natural/dx/bass/whisper/loud/flat/work),  
+  старт = work; см. AGENTS.md «TX-профили».  
+
+  

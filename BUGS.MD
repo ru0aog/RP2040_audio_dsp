@@ -602,3 +602,18 @@ agc_env улетал к UINT32_MAX и залипал. env = agc_env>>8 чита�
 8. Дуть в микрофон -> спектр гладкий, провала ~1 кГц нет (кроссовер)  
 9. «па-та-ка» с паузами -> нет «дыхания» внутри фразы (release)  
 
+### TX-профили (добавлено после аудита)  
+- txprof 1..7: natural/dx/bass/whisper/loud/flat/work; старт = work  
+  (дефолты af_config.h), явного применения профиля при boot нет.  
+- Правки по аудиту профилей: bass band 200->350 (срез «бочки»),  
+  bass duck off->on dmax=40, loud clip 16000->24000, natural duck off,  
+  flat gfloor=65536.  
+- Значения стартовые — требуют прослушивания; особенно dx (суммарный  
+  ВЧ-подъём) и whisper (gate=150 vs шум микрофона).  
+  
+### Регрессия TX — дополнение  
+10. txprof 2 -> stats: comp=60 clip=12000 pmax=30 shelf=20  
+11. txprof 2 -> txprof 6 -> stats: shelf=0, все блоки off  
+    (проверка, что базис сбрасывает оверрайды)  
+12. txprof 3 -> stats: band=350..2700 duck=on dmax=40  
+
