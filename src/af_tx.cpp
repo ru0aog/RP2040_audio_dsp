@@ -173,8 +173,14 @@ static uint8_t duck_blk_cnt   = 0;      // счётчик пересчёта
 // --- Этап 6: ВЧ-эксайтер ---      
 static volatile uint8_t  tx_exc_on   = AF_TX_EXC_ON_DEFAULT;   // дефолт off        
 static volatile int32_t  tx_exc_mix  = AF_TX_EXC_MIX_Q15;      // подмес, Q15        
-static int64_t exc_env_q16 = (int64_t)256 << 16;               // EMA |hi|, Q16        
-static uint8_t exc_decim   = 0;                                // дециматор EMA ÷2           
+static int64_t exc_env_q16 = (int64_t)256 << 16;               // EMA |hi|, Q16          
+static uint8_t exc_decim   = 0;                                // дециматор EMA ÷2             
+  
+// --- Этап 7: k_intelligibility (автобаланс НЧ/ВЧ) ---  
+static volatile uint8_t tx_intel_on = AF_TX_INTEL_ON_DEFAULT;  
+static int32_t g_intel_q15    = 32768;   // сглаженный gain ВЧ-полосы, Q15  
+static int32_t g_intel_tgt_q15 = 32768;  // цель gain (per-block)  
+static uint8_t intel_blk_cnt  = 0;       // счётчик пересчёта       
 
 // Порог компрессора — фиксированный, ~25% шкалы.    
 #define TX_COMP_THR   8192    
@@ -301,12 +307,42 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x, int32_t* hi_ou
         // lo *= (1 - k_duck*duck_max): gain_duck = 32768 - k_duck*duck_max>>15    
         int32_t g_duck = 32768 - ((k_duck_q15 * tx_duckmax_q15) >> 15);    
         lo = (int32_t)(((int64_t)lo * g_duck) >> 15);    
-    } else {    
-        k_duck_q15 = 0;    
-        k_duck_tgt_q15 = 0;    
-    }    
-      
-    if (tx_lr2_on) {      
+    } else {      
+        k_duck_q15 = 0;      
+        k_duck_tgt_q15 = 0;      
+    }      
+  
+    // Этап 7: k_intelligibility — автобаланс ВЧ-полосы.  
+    // ratio = env_hi/env_lo; цель AF_TX_INTEL_TGT_Q15 (~0.47).  
+    // ratio < tgt -> g_hi > 1 (подъём согласных), ratio > tgt -> g_hi < 1.  
+    // g = clamp(tgt/ratio, 1-cut, 1+boost). Деление per-block.  
+    // Только при живой речи (env_lo > gate) — на шуме g=1.  
+    if (tx_intel_on) {  
+        if (++intel_blk_cnt >= 64) {  
+            intel_blk_cnt = 0;  
+            int64_t e_lo = tx_env_lo_q16 >> 16;  
+            int64_t e_hi = tx_env_hi_q16 >> 16;  
+            int32_t g = 32768;  
+            if (e_lo > (int64_t)tx_gate_thr && e_hi > 0) {  
+                // g = tgt * e_lo / e_hi  (ratio = e_hi/e_lo -> g = tgt/ratio)  
+                int64_t gg = ((int64_t)AF_TX_INTEL_TGT_Q15 * e_lo) / e_hi;  
+                int64_t gmin = 32768 - AF_TX_INTEL_CUT_Q15;    // 0.5  
+                int64_t gmax = 32768 + AF_TX_INTEL_BOOST_Q15;  // 2.0  
+                if (gg < gmin) gg = gmin;  
+                if (gg > gmax) gg = gmax;  
+                g = (int32_t)gg;  
+            }  
+            g_intel_tgt_q15 = g;  
+        }  
+        g_intel_q15 += (int32_t)(((int64_t)(g_intel_tgt_q15 - g_intel_q15)  
+                                 * AF_TX_INTEL_SMOOTH_Q24) >> 24);  
+        hi = (int32_t)(((int64_t)hi * g_intel_q15) >> 15);  
+    } else {  
+        g_intel_q15 = 32768;  
+        g_intel_tgt_q15 = 32768;  
+    }  
+        
+    if (tx_lr2_on) {        
         // Раздельный клиппинг полос до суммирования: НЧ-пики гласных    
         // не модулируют согласные. Порог общий tx_clip_thr, без makeup —    
         // makeup применяется в основном клиппере дальше по цепочке.    
@@ -577,8 +613,11 @@ void af_tx_init(void) {
     k_duck_q15     = 0;      
     k_duck_tgt_q15 = 0;      
     duck_blk_cnt   = 0;      
-    exc_env_q16    = (int64_t)256 << 16;        
-    exc_decim      = 0;        
+    exc_env_q16    = (int64_t)256 << 16;          
+    exc_decim      = 0;          
+    g_intel_q15     = 32768;  
+    g_intel_tgt_q15 = 32768;  
+    intel_blk_cnt   = 0;  
     tx_fir_design();  
     memset(&tx_pre,  0, sizeof(tx_pre));      
     memset(&tx_post, 0, sizeof(tx_post));      
@@ -778,3 +817,8 @@ void af_tx_set_excmix(uint32_t q15) {   // подмес, Q15 (3277 ~ -20 дБ)
     tx_exc_mix = (int32_t)q15;      
 }      
 uint32_t af_tx_excmix(void) { return (uint32_t)tx_exc_mix; }      
+
+// --- Этап 7: k_intelligibility ---  
+void af_tx_set_intel(bool on) { tx_intel_on = on ? 1 : 0; }  
+bool af_tx_intel(void)        { return tx_intel_on != 0; }  
+uint32_t af_tx_g_intel(void)  { return (uint32_t)g_intel_q15; }   // debug, Q15  

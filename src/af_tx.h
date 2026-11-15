@@ -75,3 +75,7 @@ void     af_tx_set_exc(bool on);
 bool     af_tx_exc(void);      
 void     af_tx_set_excmix(uint32_t q15);      
 uint32_t af_tx_excmix(void);      
+
+void     af_tx_set_intel(bool on);  
+bool     af_tx_intel(void);  
+uint32_t af_tx_g_intel(void);  

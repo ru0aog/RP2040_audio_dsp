@@ -22,7 +22,8 @@
 //   txduck on|off      — HF ducking: НЧ приглушается при доминировании ВЧ      
 //   txduckmax <дБx10>  — потолок ослабления НЧ (30 = -3 дБ)      
 //   txexc on|off       — ВЧ-эксайтер: синтез гармоник 2-3 кГц (дефолт off)      
-//   txexcmix <q15>     — подмес эксайтера (3277 = -20 дБ)      
+//   txexcmix <q15>     — подмес эксайтера (3277 = -20 дБ)
+//   txintel on|off     — автобаланс НЧ/ВЧ-полос (этап 7)    
 //   help               — справка    
 // ============================================================================  
 #include <Arduino.h>  
@@ -78,7 +79,8 @@ static void cli_help(void) {
     Serial.println("#   txduck on|off     — HF ducking: НЧ приглушается при доминировании ВЧ");      
     Serial.println("#   txduckmax <дБx10> — потолок ослабления НЧ (30 = -3 дБ)");      
     Serial.println("#   txexc on|off      — ВЧ-эксайтер: гармоники 2-3 кГц (дефолт off)");      
-    Serial.println("#   txexcmix <q15>    — подмес эксайтера (3277 = -20 дБ)");      
+    Serial.println("#   txexcmix <q15>    — подмес эксайтера (3277 = -20 дБ)");
+    Serial.println("#   txintel on|off    — k_intelligibility: автобаланс НЧ/ВЧ по env_hi/env_lo");    
     Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");      
     Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");    
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
@@ -115,24 +117,26 @@ static void cli_stats(void) {
                   af_tx_softclip() ? "soft" : "hard",    
                   af_tx_2band() ? "on" : "off",  
                   af_tx_notch() ? "on" : "off");
-    Serial.printf("  pres=%s pmax=%lu lr2=%s duck=%s dmax=%lu exc=%s emix=%lu\n",        
-                  af_tx_pres() ? "on" : "off",        
-                  (unsigned long)af_tx_presmax(),      
-                  af_tx_lr2() ? "on" : "off",    
-                  af_tx_duck() ? "on" : "off",    
-                  (unsigned long)af_tx_duckmax(),  
-                  af_tx_exc() ? "on" : "off",  
-                  (unsigned long)af_tx_excmix());      
+    Serial.printf("  pres=%s pmax=%lu lr2=%s duck=%s dmax=%lu exc=%s emix=%lu intel=%s\n",          
+                  af_tx_pres() ? "on" : "off",          
+                  (unsigned long)af_tx_presmax(),        
+                  af_tx_lr2() ? "on" : "off",      
+                  af_tx_duck() ? "on" : "off",      
+                  (unsigned long)af_tx_duckmax(),    
+                  af_tx_exc() ? "on" : "off",    
+                  (unsigned long)af_tx_excmix(),  
+                  af_tx_intel() ? "on" : "off");        
     Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
                   (unsigned long)af_tx_agc_env(),  
                   (unsigned long)af_tx_agc_gain(),  
                   (unsigned long)af_tx_env_lo(),  
                   (unsigned long)af_tx_env_hi());
-    Serial.printf("  hi_pre=%lu nf=%lu k=%lu kd=%lu\n",    
-                  (unsigned long)af_tx_env_hi_pre(),    
-                  (unsigned long)af_tx_pres_nf(),    
-                  (unsigned long)af_tx_k_dyn(),  
-                  (unsigned long)af_tx_k_duck());    
+    Serial.printf("  hi_pre=%lu nf=%lu k=%lu kd=%lu gi=%lu\n",      
+                  (unsigned long)af_tx_env_hi_pre(),      
+                  (unsigned long)af_tx_pres_nf(),      
+                  (unsigned long)af_tx_k_dyn(),    
+                  (unsigned long)af_tx_k_duck(),  
+                  (unsigned long)af_tx_g_intel());      
     Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
                   (unsigned long)(af_dsp_load_permille() / 10u),  
                   (unsigned long)(af_dsp_load_permille() % 10u),  
@@ -604,6 +608,13 @@ static void cli_exec(char* line) {
         af_tx_set_exc(strncmp(v, "on", 2) == 0);      
         Serial.printf("# OK txexc=%s\n", af_tx_exc() ? "on" : "off");      
     }      
+
+    else if (strncmp(cmd, "txintel", 7) == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txintel on|off"); return; }    
+        af_tx_set_intel(strncmp(v, "on", 2) == 0);    
+        Serial.printf("# OK txintel=%s\n", af_tx_intel() ? "on" : "off");    
+    }    
   
 
     // вставлять сюда  
