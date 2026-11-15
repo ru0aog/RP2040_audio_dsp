@@ -10,8 +10,8 @@
 // Цель — «плотный» речевой сигнал: компрессия поднимает среднюю    
 // мощность, клиппер добавляет ещё ~4-6 дБ, постфильтр убирает    
 // гармоники клиппинга выше tx_hi — эфир не грязнится.    
-// Весь горячий путь — целочисленный, int64-деление только в    
-// компрессоре (~0.6% Core 1).    
+// Весь горячий путь — целочисленный. int64-деления — только      
+// per-block (раз в 64 отсчёта): gain АРУ, компрессора, k_dyn.      
 // ============================================================================    
 #include <Arduino.h>    
 #include <math.h>    
@@ -92,15 +92,23 @@ static volatile uint32_t tx_ratio_x10 = AF_TX_RATIO_X10_DEFAULT;  // x10
 static volatile int32_t  tx_depth_q15 =                           // 1-1/r, Q15  
     32768 - (32768 * 10) / (int32_t)AF_TX_RATIO_X10_DEFAULT;  
 static volatile uint32_t tx_clip_thr  = AF_TX_CLIP_DEFAULT;       // 0..32767
-static volatile int32_t  tx_makeup_q15 =                          // 32767/t, Q15  
-    (int32_t)(((int64_t)32767 << 15) / AF_TX_CLIP_DEFAULT);  
+static volatile int32_t  tx_makeup_q15 =                          // 32767/t, Q15    
+    (int32_t)(((int64_t)32767 << 15) / AF_TX_CLIP_DEFAULT);    
+static volatile int32_t  tx_inv_3t2_q31 =                         // 1/(3t^2), Q31    
+    (int32_t)(((int64_t)1 << 31) / (3LL * AF_TX_CLIP_DEFAULT * AF_TX_CLIP_DEFAULT));    
 static uint32_t tx_agc_target = AF_TX_AGC_TARGET;  // целевой уровень АРУ  
 static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)    
 static volatile int32_t tx_gate_floor = AF_TX_GATE_FLOOR_Q16; // нижняя ступень, Q16  
 static uint32_t agc_env       = 0;                 // EMA огибающей АРУ, Q16
 static int32_t  tx_agc_gain_q15 = 32768;           // последний gain АРУ (debug)  
 static uint32_t gate_gain     = 0;                 // gain гейта, Q16 (0..65536)  
-static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16
+static int64_t tx_env_q16 = (int64_t)256 << 16;   // EMA огибающей, Q16  
+static int32_t tx_gain_1band_q15 = 32768;         // кеш gain 1-полосного, Q15  
+static int32_t tx_gain_lo_q15    = 32768;         // кеш gain НЧ-полосы, Q15  
+static int32_t tx_gain_hi_q15    = 32768;         // кеш gain ВЧ-полосы, Q15  
+static int32_t tx_agc_gain_blk   = 32768;         // кеш gain АРУ, Q15 (per-block)    
+static uint8_t agc_blk_cnt       = 0;             // счётчик пересчёта gain АРУ    
+static uint8_t comp_blk_cnt      = 0;             // счётчик пересчёта gain компрессора    
 static volatile uint8_t  tx_ap_on    = AF_TX_AP_ON_DEFAULT;  
 static volatile uint8_t  tx_softclip = AF_TX_SOFTCLIP_ON_DEFAULT;  
 static int32_t ap_x1 = 0, ap_y1 = 0;   // состояние all-pass  
@@ -151,9 +159,12 @@ static inline int32_t tx_allpass(int32_t x) {
 }  
 
 // Компрессия одной полосы: своя EMA-огибающая, свой порог.  
-// gain = 1 - (1 - thr/env) * (1 - 1/ratio), всё в Q15.  
+// gain пересчитывается раз в 64 отсчёта (per-block): огибающая  
+// медленная (EMA ~10/300 мс), per-sample деление thr/env не нужно.  
+// Кеш gain хранится снаружи — у каждой полосы свой.  
 static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,  
                                                         int64_t* env_q16,  
+                                                        int32_t* gain_q15,  
                                                         int32_t thr) {  
     int64_t ax  = (x < 0) ? -x : x;  
     int64_t tgt = ax << 16;  
@@ -162,12 +173,18 @@ static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,
                               : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;  
     if (*env_q16 < ((int64_t)1 << 16)) *env_q16 = (int64_t)1 << 16;  
   
-    int32_t env = (int32_t)(*env_q16 >> 16);  
-    if (env <= thr) return x;                  // ниже порога — без компрессии  
-  
-    int32_t inv    = (int32_t)(((int64_t)thr << 15) / env);         // thr/env Q15    
-    int32_t gain   = 32768 - (((32768 - inv) * tx_depth_q15) >> 15); // Q15    
-    return (int32_t)(((int64_t)x * gain) >> 15);  
+    if (++comp_blk_cnt >= 64) {             // свой счётчик; в 2-полосном режиме    
+        comp_blk_cnt = 0;                   // срабатывает поочерёдно для lo/hi —    
+                                            // каждая полоса ~раз в 64 отсчёта    
+        int32_t env = (int32_t)(*env_q16 >> 16);  
+        if (env > thr) {  
+            int32_t inv  = (int32_t)(((int64_t)thr << 15) / env);   // thr/env Q15  
+            *gain_q15    = 32768 - (((32768 - inv) * tx_depth_q15) >> 15);  
+        } else {  
+            *gain_q15 = 32768;              // ниже порога — без компрессии  
+        }  
+    }  
+    return (int32_t)(((int64_t)x * *gain_q15) >> 15);  
 }  
   
 // 2-полосная компрессия: комплементарный split на ~900 Гц.  
@@ -175,15 +192,15 @@ static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,
 // НЧ (гласные) и ВЧ (согласные) сжимаются раздельно -> нет pumping.  
 static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {  
     if (!tx_2band_on)  
-        return tx_comp_band(x, &tx_env_q16, TX_COMP_THR);   // старый 1-полосный  
+        return tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);  
   
     // Кроссовер: ФНЧ 1-го порядка, k = AF_TX_SPLIT_K_Q15  
     split_lp += (int32_t)(((int64_t)(x - split_lp) * AF_TX_SPLIT_K_Q15) >> 15);  
     int32_t lo = split_lp;  
     int32_t hi = x - lo;  
   
-    lo = tx_comp_band(lo, &tx_env_lo_q16, AF_TX_COMP_THR_LO);  
-    hi = tx_comp_band(hi, &tx_env_hi_q16, AF_TX_COMP_THR_HI);  
+    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);  
+    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);  
     return lo + hi;  
 }  
     
@@ -200,16 +217,17 @@ static inline int32_t __not_in_flash_func(tx_clip)(int32_t x) {
 // Кубический клиппер: y = x - x^3/(3*t^2), нормирован к t на выходе.  
 // Мягче hard clip — меньше гармоник на входе пост-FIR.  
 // При |x| >= t выход = ±(2/3)*t*1.5 = ±t — непрерывно.  
-static inline int32_t __not_in_flash_func(tx_soft_clip)(int32_t x) {  
-    int32_t t = (int32_t)tx_clip_thr;  
-    if (x >  t) x =  t;  
-    if (x < -t) x = -t;  
-    // x^3/(3*t^2): x*x может переполнить int32 при x~32767 -> int64  
-    int64_t x3 = ((int64_t)x * x * x) / ((int64_t)t * t);   // ~x^3/t^2    
-    int32_t y = x - (int32_t)(x3 / 3);    
-    // нормировка *3/2 + makeup к 32767 — кешировано в tx_makeup_q15    
-    return (int32_t)((((int64_t)y * 3) >> 1) * tx_makeup_q15 >> 15);    
-}  
+static inline int32_t __not_in_flash_func(tx_soft_clip)(int32_t x) {    
+    int32_t t = (int32_t)tx_clip_thr;    
+    if (x >  t) x =  t;    
+    if (x < -t) x = -t;    
+    // y = x - x^3/(3t^2): деление заменено умножением на кешированный    
+    // inv_3t2 (Q31) — int64-mul вместо int64-div, ~35 тактов -> ~5.    
+    int64_t x3 = (int64_t)x * x * x;                        // <= 2^45    
+    int32_t y = x - (int32_t)((x3 * tx_inv_3t2_q31) >> 31);    
+    // нормировка *3/2 + makeup к 32767 — кешировано в tx_makeup_q15      
+    return (int32_t)((((int64_t)y * 3) >> 1) * tx_makeup_q15 >> 15);      
+}    
 
 // Биквад-нотч (Direct Form I), коэффициенты Q15.  
 // b0=1, b1=-2cos(w), b2=1; a1=-2r*cos(w), a2=r^2.  
@@ -225,13 +243,15 @@ static inline int32_t __not_in_flash_func(tx_notch)(int32_t x,
 }  
 
 // HP-биквад (Direct Form I), коэффициенты Q15 — отвод для env_hi_pre.  
-// int32-умножения: коэффициенты Q15, сигнал int16 — произведение    
-// <= 2^30, сумма 5 членов <= 2^32. Переполнения нет (HP-выход    
-// ограничен |x|, а |x| <= 32767). Каждое умножение 1 такт вместо ~35.    
-static inline int32_t __not_in_flash_func(tx_hp_push)(int32_t x) {    
-    int32_t acc = (hp_b0 * x + hp_b1 * hp_x1 + hp_b2 * hp_x2    
-                 - hp_a1 * hp_y1 - hp_a2 * hp_y2) >> 15;    
-    int32_t y = acc;    
+// int64-аккумулятор: сумма 5 произведений Q15*int16 может кратковременно      
+// превысить int32 на пиках (b0~0.8*Q15, но a1~1.9*Q15 для HP 1.5к/15.4к)      
+// -> wrap дал бы выброс в env_hi_pre и ложный скачок k_dyn.      
+// Вызывается на 7.7 ksps (децимация /2) — цена ~0.5% L1.      
+static inline int32_t __not_in_flash_func(tx_hp_push)(int32_t x) {      
+    int64_t acc = (int64_t)hp_b0 * x + (int64_t)hp_b1 * hp_x1      
+                + (int64_t)hp_b2 * hp_x2      
+                - (int64_t)hp_a1 * hp_y1 - (int64_t)hp_a2 * hp_y2;      
+    int32_t y = (int32_t)(acc >> 15);      
     hp_x2 = hp_x1; hp_x1 = x;    
     hp_y2 = hp_y1; hp_y1 = y;    
     return y;    
@@ -252,7 +272,7 @@ static inline void __not_in_flash_func(tx_pres_sidechain)(int32_t x_agc) {
     // но da*c в int64 один раз дешевле, чем весь блок в int64.    
     // Компромисс: da в int32, умножение через int64 один раз.    
     int32_t tgt = ax << 16;    
-    int32_t da  = tgt - (int32_t)(env_hi_pre_q16 >> 0);  // env_hi_pre_q16 int64    
+    int32_t da  = tgt - (int32_t)env_hi_pre_q16;   // env < 2^31, усечение безопасно  
     env_hi_pre_q16 += ((int64_t)da * (da > 0 ? (int64_t)AF_TX_ENV_ATT_Q24    
                                             : (int64_t)AF_TX_ENV_DEC_Q24)) >> 24;    
     if (env_hi_pre_q16 < ((int64_t)1 << 16)) env_hi_pre_q16 = (int64_t)1 << 16;    
@@ -302,15 +322,14 @@ static inline int32_t __not_in_flash_func(tx_presence)(int32_t x) {
     // Биквад работает всегда — иначе при возврате k_dyn>0 состояния    
     // pe_x1/pe_y1 устарели и дают щелчок. При k_dyn=0 выход = x    
     // (dry-подмес), цена — один биквад ~0.3% L1.    
-    // int32-умножения: peaking-биквад с подъёмом <= +12 дБ —    
-    // внутренний wet <= ~4*|x|, произведения <= 2^32, сумма    
-    // может кратковременно превысить int32 на пиках — но    
-    // коэффициенты peaking с A<=4 дают запас; при переполнении    
-    // int32 wrap даст выброс на 1 отсчёт — слышимо как треск.    
-    // Страховка: сатурация wet в int16-диапазон после сдвига.    
-    int32_t acc = (pe_b0 * x + pe_b1 * pe_x1 + pe_b2 * pe_x2    
-                 - pe_a1 * pe_y1 - pe_a2 * pe_y2) >> 15;    
-    int32_t wet = acc;    
+    // int64-аккумулятор: при presmax=+12 дБ b0~1.4*Q15, произведение      
+    // ~1.4*2^30, сумма 5 членов может превысить int32 -> wrap = треск.      
+    // 5 int64-mul ~175 тактов/отсчёт ~+1% L1 — цена за отсутствие      
+    // выбросов на пиках. Сатурация wet остаётся как страховка.      
+    int64_t acc = (int64_t)pe_b0 * x + (int64_t)pe_b1 * pe_x1      
+                + (int64_t)pe_b2 * pe_x2      
+                - (int64_t)pe_a1 * pe_y1 - (int64_t)pe_a2 * pe_y2;      
+    int32_t wet = (int32_t)(acc >> 15);      
     if (wet >  32767) wet =  32767;    
     if (wet < -32768) wet = -32768;    
     pe_x2 = pe_x1; pe_x1 = x;    
@@ -334,18 +353,22 @@ static int32_t tx_agc(int32_t x) {
     // (гейт permanently открыт, АРУ застревает на gain=1).    
     agc_env += (uint32_t)(((int64_t)((int64_t)(a << 8) - (int64_t)agc_env) * c) >> 24);      
   
-    uint32_t env = agc_env >> 8;  
-    if (env < 64) env = 64;                          // защита от деления на ~0  
-    int64_t g = ((int64_t)tx_agc_target << 15) / (int64_t)env;   // Q15    
-    int64_t gmax = (int64_t)AF_TX_AGC_MAX_X10 * 3277;            // x10 -> Q15    
-    if (g > gmax) g = gmax;    
-    if (g < 32768) g = 32768;                        // АРУ только усиливает/держит    
-    // Гейт закрыт (env ниже порога) -> не разгонять фон: gain <= 1.    
-    // Иначе в паузе АРУ поднимает шум комнаты до target и гейт    
-    // пропускает его на floor-уровне — «сигнал проходит всегда».    
-    if (tx_gate_thr != 0 && env < tx_gate_thr && g > 32768) g = 32768;  
-    tx_agc_gain_q15 = (int32_t)g;                  // для stats (этап 0)  
-    return (int32_t)(((int64_t)x * g) >> 15);  
+    // gain АРУ — per-block: огибающая медленная, деление target/env  
+    // раз в 64 отсчёта (~4 мс) неотличимо от per-sample на слух.  
+    if (++agc_blk_cnt >= 64) {    
+        agc_blk_cnt = 0;    
+        uint32_t env = agc_env >> 8;  
+        if (env < 64) env = 64;                        // защита от деления на ~0  
+        int64_t g = ((int64_t)tx_agc_target << 15) / (int64_t)env; // Q15  
+        int64_t gmax = (int64_t)AF_TX_AGC_MAX_X10 * 3277;          // x10 -> Q15  
+        if (g > gmax) g = gmax;  
+        if (g < 32768) g = 32768;                      // АРУ только усиливает/держит  
+        // Гейт закрыт -> не разгонять фон: gain <= 1.  
+        if (tx_gate_thr != 0 && env < tx_gate_thr && g > 32768) g = 32768;  
+        tx_agc_gain_blk = (int32_t)g;  
+        tx_agc_gain_q15 = (int32_t)g;                  // для stats (этап 0)  
+    }  
+    return (int32_t)(((int64_t)x * tx_agc_gain_blk) >> 15);  
 }  
   
 // Шумовой гейт: env < thr -> gain -> AF_TX_GATE_FLOOR_Q16 (-24 дБ),  
@@ -404,6 +427,7 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
 void af_tx_init(void) {
     agc_env   = 0;  
     gate_gain = 0;
+    agc_blk_cnt = 0; comp_blk_cnt = 0;
     pres_blk_cnt   = 0;    
     pres_decim     = 0;    
     tx_gate_hold = 0;
@@ -461,7 +485,6 @@ void af_tx_init(void) {
     pres_nf_q16    = (int64_t)256 << 16;    
     k_dyn_q15      = 0;    
     k_dyn_tgt_q15  = 0;    
-    pres_blk_cnt   = 0;    
 }      
     
 void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {    
@@ -486,8 +509,9 @@ uint32_t af_tx_ratio(void) { return tx_ratio_x10; }
 void af_tx_set_clip(uint32_t thr) {      
     if (thr < 4096)  thr = 4096;      
     if (thr > 32767) thr = 32767;      
-    tx_clip_thr = thr;      
-    tx_makeup_q15 = (int32_t)(((int64_t)32767 << 15) / (int64_t)thr); // кеш  
+    tx_clip_thr = thr;        
+    tx_makeup_q15 = (int32_t)(((int64_t)32767 << 15) / (int64_t)thr); // кеш    
+    tx_inv_3t2_q31 = (int32_t)(((int64_t)1 << 31) / (3LL * (int64_t)thr * thr));    
 }      
 uint32_t af_tx_clip(void) { return tx_clip_thr; }
 
