@@ -41,19 +41,24 @@ static void apply_nr(bool grounded) {
                       ctl_nr.pin, grounded ? "GND" : "open",    
                       grounded ? "on" : "off");  
         if (grounded) af_voice_play(VOICE_NR_ON);   // "адаптивное шумоподавление включено"  
-    } else {  
-        Serial.printf("[GPIO] nr: rejected (NT on)\n");    
-    }  
+    } else {    
+        Serial.printf("[GPIO] nr: rejected (%s)\n",      
+                      af_dsp_cw_on() ? "CW on" : "NT on");      
+    }    
 }
   
-static void apply_nt(bool grounded) {    
-    int rc = af_dsp_set_notch(grounded);    
-    Serial.printf("[GPIO] GP%u %s -> nt=%s\n",    
-                  ctl_nt.pin, grounded ? "GND" : "open",    
-                  grounded ? "on" : "off");    
-    if (rc == 2) Serial.println("[GPIO] note: NR off (NT priority)");    
-    if (grounded) af_voice_play(VOICE_NT_ON);   // "автоматический режекторный фильтр включен"  
-}
+static void apply_nt(bool grounded) {      
+    int rc = af_dsp_set_notch(grounded);      
+    if (rc == 3) {      
+        Serial.printf("[GPIO] GP%u -> nt: rejected (CW on)\n", ctl_nt.pin);      
+        return;                                     // голос не играем — NT не включился    
+    }      
+    Serial.printf("[GPIO] GP%u %s -> nt=%s\n",      
+                  ctl_nt.pin, grounded ? "GND" : "open",      
+                  grounded ? "on" : "off");      
+    if (rc == 2) Serial.println("[GPIO] note: NR off (NT priority)");      
+    if (grounded) af_voice_play(VOICE_NT_ON);   // "автоматический режекторный фильтр включен"    
+}  
 
 static void apply_bypass(bool grounded) {    
     af_dsp_set_bypass(grounded);    

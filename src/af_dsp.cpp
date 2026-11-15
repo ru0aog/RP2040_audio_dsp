@@ -2,7 +2,7 @@
 // ============================================================================  
 // af_dsp.cpp — моно DSP-тракт НЧ (Core 1)  
 //  
-// Тракт: uint16-блоки ADC (250 ksps) -> DC-EMA -> CIC /2 -> HB /2 -> HB /2  
+// Тракт: uint16-блоки ADC (495 ksps) -> DC-EMA -> CIC /4 -> HB /2 -> HB /2  
 // -> HB /2 (15.625 ksps) -> полосовой FIR 127 (симметричный) -> CW-биквады ->  
 // автонотч NT (NLMS) -> шумоподавление NR (LMS ALE) -> АРУ+лимитер ->  
 // две SPSC-очереди int16-блоков (PWM и USB).  
@@ -127,16 +127,20 @@ static volatile uint32_t af_hi_hz = AF_FIR_HI_HZ_DEFAULT;
 static uint32_t af_saved_lo_hz = AF_BAND_NARROW_LO_HZ;  
 static uint32_t af_saved_hi_hz = AF_BAND_NARROW_HI_HZ;  
   
-static int16_t af_fir_taps[AF_FIR_N];  
-static int32_t af_fir_buf[AF_FIR_N] = {};  
-static int     af_fir_idx = 0;  
-  
-static void af_fir_init(void) {  
-    const int   M     = (AF_FIR_N - 1) / 2;  
-    const float fc_hi = (float)af_hi_hz / AF_FS_OUT_HZ;  
-    const float fc_lo = (float)af_lo_hz / AF_FS_OUT_HZ;  
-    float h[AF_FIR_N];  
-    float sum_dc = 0.0f;  
+// Два набора тапов: Core 0 пишет в неактивный, затем атомарно    
+// переключает указатель — Core 1 всегда читает целостный набор.    
+static int16_t af_fir_taps[2][AF_FIR_N];    
+static volatile const int16_t* af_fir_taps_cur = af_fir_taps[0];    
+static uint8_t af_fir_taps_w = 0;              // индекс записи (0/1)    
+static int32_t af_fir_buf[AF_FIR_N] = {};    
+static int     af_fir_idx = 0;    
+    
+static void af_fir_init(void) {    
+    const int   M     = (AF_FIR_N - 1) / 2;    
+    const float fc_hi = (float)af_hi_hz / AF_FS_OUT_HZ;    
+    const float fc_lo = (float)af_lo_hz / AF_FS_OUT_HZ;    
+    float h[AF_FIR_N];    
+    float sum_dc = 0.0f;    
     for (int n = 0; n < AF_FIR_N; n++) {  
         const int m = n - M;  
         float s_hi = (m == 0) ? (2.0f * fc_hi)  
@@ -152,10 +156,14 @@ static void af_fir_init(void) {
         h[n] = (s_hi - s_lo) * w;  
         sum_dc += fabsf(h[n]);  
     }  
-    const float norm = (sum_dc > 0.0f) ? (2.0f / sum_dc) : 1.0f;  
-    for (int n = 0; n < AF_FIR_N; n++)  
-        af_fir_taps[n] = (int16_t)lroundf(h[n] * norm * 32768.0f);  
-}  
+    const float norm = (sum_dc > 0.0f) ? (2.0f / sum_dc) : 1.0f;    
+    const uint8_t w = af_fir_taps_w ^ 1;        // пишем в неактивный    
+    for (int n = 0; n < AF_FIR_N; n++)    
+        af_fir_taps[w][n] = (int16_t)lroundf(h[n] * norm * 32768.0f);    
+    __dmb();                                     // тапы видны до указателя    
+    af_fir_taps_cur = af_fir_taps[w];            // атомарная публикация    
+    af_fir_taps_w   = w;    
+}    
   
 // Один отсчёт полосового FIR — симметричная свёртка (порт af_lp_push):  
 // AF_FIR_N/2 умножений вместо AF_FIR_N, ~40% экономии.  
@@ -163,16 +171,17 @@ static inline int32_t __not_in_flash_func(af_fir_push)(int32_t x) {
     af_fir_buf[af_fir_idx] = x;  
     if (++af_fir_idx >= AF_FIR_N) af_fir_idx = 0;  
   
-    int64_t acc = 0;  
-    int lo = af_fir_idx;  
-    int hi = af_fir_idx + AF_FIR_N - 1;  
-    if (hi >= AF_FIR_N) hi -= AF_FIR_N;  
-    for (int k = 0; k < AF_FIR_N / 2; k++) {  
-        acc += (int32_t)af_fir_taps[k] * (af_fir_buf[lo] + af_fir_buf[hi]);  
-        if (++lo >= AF_FIR_N) lo = 0;  
-        if (--hi < 0)        hi = AF_FIR_N - 1;  
-    }  
-    acc += (int32_t)af_fir_taps[AF_FIR_N / 2] * af_fir_buf[lo];  
+    const int16_t* taps = (const int16_t*)af_fir_taps_cur;   // снимок указателя на весь блок 
+    int64_t acc = 0;    
+    int lo = af_fir_idx;    
+    int hi = af_fir_idx + AF_FIR_N - 1;    
+    if (hi >= AF_FIR_N) hi -= AF_FIR_N;    
+    for (int k = 0; k < AF_FIR_N / 2; k++) {    
+        acc += (int32_t)taps[k] * (af_fir_buf[lo] + af_fir_buf[hi]);    
+        if (++lo >= AF_FIR_N) lo = 0;    
+        if (--hi < 0)        hi = AF_FIR_N - 1;    
+    }    
+    acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf[lo];    
     return (int32_t)((acc + (1 << 14)) >> 15);   // Q15 → масштаб, +0.5 LSB  
 }  
 
@@ -241,11 +250,14 @@ typedef struct {
     int32_t x1, x2, y1, y2; // состояние (Direct Form I), y — Q19  
 } cw_biquad_t;  
   
-static cw_biquad_t cw_sec[AF_CW_SECTIONS];  
+static cw_biquad_t cw_sec[AF_CW_SECTIONS];    
+static volatile uint8_t cw_updating = 0;   // 1 = коэффициенты пересчитываются  
   
 // Проектирование одной секции: Q = f0 / BW_sec, alpha = sin(w0)/(2Q).  
 // Вызывается из af_dsp_set_cw_* (Core 0, редкая операция, float допустим).  
-static void cw_design(void) {  
+static void cw_design(void) {    
+    cw_updating = 1;    
+    __dmb();  
     // Расширение полосы секции, чтобы каскад дал заданные -3 дБ.  
     const float shrink = sqrtf(powf(2.0f, 1.0f / AF_CW_SECTIONS) - 1.0f); // ~0.51 для N=3  
     const float bw_sec = (float)cw_bw / shrink;  
@@ -257,14 +269,15 @@ static void cw_design(void) {
     const float a1 = -2.0f * cosf(w0) / a0;  
     const float a2 = (1.0f - alpha) / a0;  
   
-    for (int s = 0; s < AF_CW_SECTIONS; s++) {  
+    for (int s = 0; s < AF_CW_SECTIONS; s++) {   
         cw_sec[s].b0 = (int16_t)lrintf(b0 * 32768.0f);  
         cw_sec[s].a1 = (int16_t)lrintf(a1 * 16384.0f);   // a-коэфф. в Q14 (|a1| до 2)  
         cw_sec[s].a2 = (int16_t)lrintf(a2 * 16384.0f);  
-        cw_sec[s].x1 = cw_sec[s].x2 = cw_sec[s].y1 = cw_sec[s].y2 = 0;  
-    }  
-    __dmb();  
-}  
+        cw_sec[s].x1 = cw_sec[s].x2 = cw_sec[s].y1 = cw_sec[s].y2 = 0;    
+    }    
+    __dmb();    
+    cw_updating = 0;    
+}    
 
 
 // Подтяжка FIR под центральную частоту CW: f0 ± 250 Гц.  
@@ -281,8 +294,9 @@ static void cw_band_follow(void) {
 // Состояния y1/y2 — Q19 (int32 с 4 битами дробной части): на узкой полосе  
 // (Q~15-17 при bw 80) квантование int16 давало предельные циклы.  
 // Между секциями передаётся Q19 без потери точности.  
-static inline int32_t __not_in_flash_func(cw_push)(int32_t x) {  
-    x <<= 4;                                          // Q0 -> Q19: единый формат всех секций  
+static inline int32_t __not_in_flash_func(cw_push)(int32_t x) {    
+    if (cw_updating) return x;   // Core 0 пересчитывает — пропускаем отсчёт    
+    x <<= 4;    
     for (int s = 0; s < AF_CW_SECTIONS; s++) {  
         cw_biquad_t* q = &cw_sec[s];  
         // y = b0*(x - x2) - a1*y1 - a2*y2, всё в Q19:  
@@ -636,13 +650,15 @@ bool af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz) {
 uint32_t af_dsp_af_lo_hz(void) { return af_lo_hz; }  
 uint32_t af_dsp_af_hi_hz(void) { return af_hi_hz; }  
   
-// Возврат: 0 = выключено, 1 = включено, 2 = включено и NR снят (приоритет NT).  
-int af_dsp_set_notch(bool on) {  
-    int rc = on ? 1 : 0;  
-    if (on && nr_on) {              // NT имеет приоритет — снимаем NR  
-        af_dsp_set_nr(false);  
-        rc = 2;  
-    }  
+// Возврат: 0 = выключено, 1 = включено, 2 = включено и NR снят (приоритет NT),  
+//          3 = отклонено (CW on — NT в узкой полосе бесполезен и перегружает Core 1).  
+int af_dsp_set_notch(bool on) {    
+    if (on && cw_on) return 3;      // запрет: CW + NT = перегрузка Core 1    
+    int rc = on ? 1 : 0;    
+    if (on && nr_on) {              // NT имеет приоритет — снимаем NR    
+        af_dsp_set_nr(false);    
+        rc = 2;    
+    }    
     if (on && !notch_on) {          // сброс состояния при включении — без щелчка  
         memset(notch_buf, 0, sizeof(notch_buf));  
         memset(notch_w,   0, sizeof(notch_w));  
@@ -665,9 +681,11 @@ void af_dsp_set_rxnotch(bool on) {
 }  
 bool af_dsp_rxnotch_on(void) { return rx_notch_on; }  
   
-// Возвращает false, если команда отклонена (NT on — приоритет NT).  
-bool af_dsp_set_nr(bool on) {    
-    if (on && notch_on) return false;   // NT и NR взаимоисключающие  
+// Возвращает false, если команда отклонена (NT on — приоритет NT;  
+// CW on — NR в узкой полосе бесполезен и перегружает Core 1).    
+bool af_dsp_set_nr(bool on) {      
+    if (on && notch_on) return false;   // NT и NR взаимоисключающие    
+    if (on && cw_on)    return false;   // запрет: CW + NR = перегрузка Core 1    
     if (on && !nr_on) {              // чистый старт → без щелчка    
         memset(nr_buf, 0, sizeof(nr_buf));    
         memset(nr_w,   0, sizeof(nr_w));    
@@ -678,10 +696,14 @@ bool af_dsp_set_nr(bool on) {
     return true;  
 }
   
-void af_dsp_set_cw(bool on) {  
-    if (on && !cw_on) {    
-        cw_design();
-        agc_avg_q16 = (int64_t)4096 << 16;  
+void af_dsp_set_cw(bool on) {    
+    if (on && !cw_on) {      
+        // CW + NT/NR перегружают Core 1 (max_block_us > окна блока) и  
+        // бесполезны в полосе f0±bw/2 — снимаем до включения фильтра.  
+        if (notch_on) af_dsp_set_notch(false);    
+        if (nr_on)    af_dsp_set_nr(false);    
+        cw_design();  
+        agc_avg_q16 = (int64_t)4096 << 16;    
         // Сохранить текущую полосу и подтянуть FIR под f0 ± 250 Гц.  
         af_saved_lo_hz = af_lo_hz;  
         af_saved_hi_hz = af_hi_hz;  

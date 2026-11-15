@@ -258,11 +258,15 @@ static void cli_exec(char* line) {
         char* s = strtok(NULL, " \t");  
         if (s == NULL) { Serial.println("# ERR: nt on|off"); return; }  
         bool on = (strcmp(s, "on") == 0);  
-        int rc = af_dsp_set_notch(on);
-        if (on) af_voice_play(VOICE_NT_ON);
-        Serial.printf("# OK nt=%s\n", on ? "on" : "off");    
-        if (rc == 2)    
-            Serial.println("# note: NR off (приоритет NT, совместная работа не поддерживается)");
+        int rc = af_dsp_set_notch(on);  
+        if (rc == 3) {    
+            Serial.println("# nt: rejected (CW on — выключите CW: cw off)");    
+            return;    
+        }    
+        if (on) af_voice_play(VOICE_NT_ON);  
+        Serial.printf("# OK nt=%s\n", on ? "on" : "off");      
+        if (rc == 2)      
+            Serial.println("# note: NR off (приоритет NT, совместная работа не поддерживается)");  
     }  
     else if (strcmp(cmd, "nr") == 0) {  
         char* s = strtok(NULL, " \t");  
@@ -271,9 +275,11 @@ static void cli_exec(char* line) {
         if (af_dsp_set_nr(on)) {      
             if (on) af_voice_play(VOICE_NR_ON);   // "адаптивное шумоподавление включено"  
             Serial.printf("# OK nr=%s\n", on ? "on" : "off");      
-        } else {      
-            Serial.println("# nr: rejected (NT on — приоритет NT)");      
-        }
+        } else {        
+            Serial.println(af_dsp_cw_on()    
+                ? "# nr: rejected (CW on — выключите CW: cw off)"    
+                : "# nr: rejected (NT on — приоритет NT)");        
+        }  
     }
     else if (strncmp(cmd, "rxnotch", 7) == 0) {  
         char* v = strtok(NULL, " \t");  
