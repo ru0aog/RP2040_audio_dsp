@@ -185,7 +185,7 @@
 // коэффициенты пересчитываются в af_tx_set_shelf (не в горячем пути).  
 // 0 = полка off (прозрачный байпас).  
 #define AF_TX_SHELF_FREQ_HZ     1800u   // частота полки  
-#define AF_TX_SHELF_DB_X10_DEFAULT 20      // +2 дБ старт; 0 = off  
+#define AF_TX_SHELF_DB_X10_DEFAULT 0    // off: статический наклон заменён динамическим presence  
 #define AF_TX_SHELF_Q_X100      71u     // Q = 0.71 (плавный склон)  
 #define AF_TX_SHELF_DB_X10_DEF  40u     // дефолт +4 дБ  
 #define AF_TX_SHELF_DB_X10_MAX  120u    // потолок +12 дБ  

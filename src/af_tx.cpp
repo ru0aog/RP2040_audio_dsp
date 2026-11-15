@@ -145,7 +145,8 @@ static int32_t k_dyn_q15      = 0;                           // сглаженн
 static int32_t k_dyn_tgt_q15  = 0;                           // цель k_dyn (per-block)    
 static uint8_t pres_blk_cnt   = 0;                           // счётчик до пересчёта k    
 static uint8_t pres_decim = 0;   // дециматор sidechain ÷2    
-static uint32_t tx_presmax_db_x10 = 30;                      // потолок, дБ x10 (для stats)    
+static uint32_t tx_presmax_db_x10 = AF_TX_PRES_MAX_DB_X10;   // из конфига, не 30  
+static uint32_t tx_duckmax_db_x10 = AF_TX_DUCK_MAX_DB_X10;  
   
 // Peaking-биквад 2–2.7 кГц (после компрессора, до клиппера)  
 static int32_t pe_x1 = 0, pe_x2 = 0, pe_y1 = 0, pe_y2 = 0;  
@@ -165,7 +166,6 @@ static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей В
 // --- Этап 5: HF ducking ---    
 static volatile uint8_t  tx_duck_on     = AF_TX_DUCK_ON_DEFAULT;    
 static volatile int32_t  tx_duckmax_q15 = AF_TX_DUCK_MAX_Q15;  // потолок, Q15    
-static uint32_t tx_duckmax_db_x10 = 30;                        // для stats, дБ x10    
 static int32_t k_duck_q15     = 0;      // сглаженный k_duck, Q15    
 static int32_t k_duck_tgt_q15 = 0;      // цель k_duck (per-block)    
 static uint8_t duck_blk_cnt   = 0;      // счётчик пересчёта    
@@ -644,7 +644,9 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
     int32_t hi_band = 0;      
     y = tx_compress(y, &hi_band);     // компрессия + отвод ВЧ-полосы      
     y = tx_presence(y);               // dyn-presence EQ (этап 2)      
-    y = tx_shelf(y);                  // статическая ВЧ-полка (вариант A)  
+    // вместо y = tx_shelf(y):  
+    const int32_t sh = tx_shelf(y);  
+    y += (int32_t)(((int64_t)(sh - y) * k_dyn_q15) >> 15);  // подмес полки по k_dyn  
     y = tx_exciter(y, hi_band);       // ВЧ-эксайтер (этап 6)      
     y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)        
                     : tx_clip(y);     // жёсткий клиппер      
@@ -744,9 +746,13 @@ void af_tx_init(void) {
         xo_lp_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);    
         xo_lp_a2 = (int32_t)lroundf(((1.0f - al) / a0) * 32768.0f);    
         // HP    
-        xo_hp_b0 = (int32_t)lroundf(((1.0f + cw) * 0.5f / a0) * 32768.0f);    
-        xo_hp_b1 = (int32_t)lroundf((-(1.0f + cw) / a0) * 32768.0f);    
-        xo_hp_b2 = xo_hp_b0;    
+        // HP — b-коэффициенты инвертированы: у RBJ-пары LP/HP выходы      
+        // на fc в противофазе (180°), сумма lo+hi дала бы провал на      
+        // кроссовере. С инверсией HP сумма = all-pass (настоящий LR2,      
+        // перекрытие -6 дБ).      
+        xo_hp_b0 = -(int32_t)lroundf(((1.0f + cw) * 0.5f / a0) * 32768.0f);      
+        xo_hp_b1 = -(int32_t)lroundf((-(1.0f + cw) / a0) * 32768.0f);      
+        xo_hp_b2 = xo_hp_b0;      
         xo_hp_a1 = xo_lp_a1;    
         xo_hp_a2 = xo_lp_a2;    
         xo_lp_x1 = xo_lp_x2 = xo_lp_y1 = xo_lp_y2 = 0;    
@@ -902,7 +908,7 @@ void af_tx_set_shelf(uint32_t db_x10) {   // подъём ВЧ, дБ x10 (0 = of
     sh_b0 = (int32_t)lroundf((A * ((A + 1.0f) + (A - 1.0f) * cw + sq) / a0) * 32768.0f);  
     sh_b1 = (int32_t)lroundf((-2.0f * A * ((A - 1.0f) + (A + 1.0f) * cw) / a0) * 32768.0f);  
     sh_b2 = (int32_t)lroundf((A * ((A + 1.0f) + (A - 1.0f) * cw - sq) / a0) * 32768.0f);  
-    sh_a1 = (int32_t)lroundf((2.0f * ((A - 1.0f) - (A + 1.0f) * cw) / a0) * 32768.0f);  
+    sh_a1 = (int32_t)lroundf((-2.0f * ((A - 1.0f) - (A + 1.0f) * cw) / a0) * 32768.0f);  
     sh_a2 = (int32_t)lroundf(((A + 1.0f) - (A - 1.0f) * cw - sq) / a0 * 32768.0f);  
 }  
 uint32_t af_tx_shelf(void) { return tx_shelf_db_x10; }   // дБ x10  
