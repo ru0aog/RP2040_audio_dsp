@@ -271,19 +271,21 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x) {
     // env_hi > env_lo/2 -> согласные сильнее половины гласных ->    
     // НЧ давится до duck_max. Деление per-block (~4 мс).    
     if (tx_duck_on) {    
-        if (++duck_blk_cnt >= 64) {    
-            duck_blk_cnt = 0;    
-            int64_t e_lo = tx_env_lo_q16 >> 16;    
-            int64_t e_hi = tx_env_hi_q16 >> 16;    
-            int64_t num  = e_hi - (e_lo >> 1);    
-            int32_t k = 0;    
-            if (num > 0) {    
-                int64_t den = e_lo + 64;              // eps от деления на ~0    
-                k = (int32_t)((num << 15) / den);    
-                if (k > 32768) k = 32768;    
-            }    
-            k_duck_tgt_q15 = k;    
-        }    
+        if (++duck_blk_cnt >= 64) {      
+            duck_blk_cnt = 0;      
+            int64_t e_lo = tx_env_lo_q16 >> 16;      
+            int64_t e_hi = tx_env_hi_q16 >> 16;      
+            int64_t num  = e_hi - (e_lo >> 1);      
+            int32_t k = 0;      
+            // duck только при живой речи: env_lo выше порога гейта.      
+            // Иначе на шуме (env~1) num>0 и kd залипает ~500.      
+            if (num > 0 && e_lo > (int64_t)tx_gate_thr) {      
+                int64_t den = e_lo + 64;              // eps от деления на ~0      
+                k = (int32_t)((num << 15) / den);      
+                if (k > 32768) k = 32768;      
+            }      
+            k_duck_tgt_q15 = k;      
+        }      
         // EMA-сглаживание: атака ~5 мс, спад ~80 мс — без щелчков    
         int32_t c = (k_duck_tgt_q15 > k_duck_q15) ? AF_TX_DUCK_ATT_Q24    
                                                 : AF_TX_DUCK_REL_Q24;    
