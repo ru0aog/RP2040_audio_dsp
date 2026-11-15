@@ -17,7 +17,8 @@
 //   stats              — диагностика: загрузка ядер, потери, клипы  
 //   banks clr          — перезаписать все банки заводскими пресетами (ребут)
 //   pwm on|off         — PWM-выход (off = несущая заглушена, пин в 0)
-//   ramp on|off        — пила-счётчик вместо DSP (тест целостности потока)  
+//   ramp on|off        — пила-счётчик вместо DSP (тест целостности потока)
+//   txlr2 on|off       — кроссовер LR2 + раздельный клиппинг полос  
 //   help               — справка  
 // ============================================================================  
 #include <Arduino.h>  
@@ -68,7 +69,8 @@ static void cli_help(void) {
     Serial.println("#   txgfloor <0..65536> — нижняя ступень гейта Q16 (4120=-24дБ, 0=тишина)");  
     Serial.println("#   txnotch on|off    — узкие нотчи 1/2 кГц против тонов-наводок");
     Serial.println("#   txpres on|off     — dynamic presence EQ (подъём 2-2.7 кГц по SNR)");  
-    Serial.println("#   txpresmax <дБx10> — потолок подъёма presence (30=+3дБ, 60=+6дБ)");  
+    Serial.println("#   txpresmax <дБx10> — потолок подъёма presence (30=+3дБ, 60=+6дБ)");    
+    Serial.println("#   txlr2 on|off      — кроссовер LR2 900 Гц + раздельный клиппинг полос");    
     Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");  
     Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");    
     Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
@@ -105,9 +107,10 @@ static void cli_stats(void) {
                   af_tx_softclip() ? "soft" : "hard",    
                   af_tx_2band() ? "on" : "off",  
                   af_tx_notch() ? "on" : "off");
-    Serial.printf("  pres=%s pmax=%lu\n",  
-                  af_tx_pres() ? "on" : "off",  
-                  (unsigned long)af_tx_presmax());
+    Serial.printf("  pres=%s pmax=%lu lr2=%s\n",    
+                  af_tx_pres() ? "on" : "off",    
+                  (unsigned long)af_tx_presmax(),  
+                  af_tx_lr2() ? "on" : "off");  
     Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
                   (unsigned long)af_tx_agc_env(),  
                   (unsigned long)af_tx_agc_gain(),  
