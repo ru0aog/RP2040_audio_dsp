@@ -91,11 +91,13 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
 // Запись сектора во flash. Выполняется внутри flash_safe_execute —  
 // Core 1 припаркован, код исполняется из RAM, flash недоступен для чтения.  
 // ---------------------------------------------------------------------------  
-static void do_flash_write(void* param) {  
-    (void)param;  
-    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
-    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
-}  
+// Вся функция в RAM: во время erase/program XIP недоступен,    
+// вызов из flash-кода = зависание Core 0.    
+static void __not_in_flash_func(do_flash_write)(void* param) {    
+    (void)param;    
+    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);    
+    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);    
+}    
   
 // ---------------------------------------------------------------------------  
 // API  
@@ -117,10 +119,9 @@ void af_store_init(void) {
             return;   // не форматируем — чтение покажет мусор, но плата жива  
         }  
         noInterrupts();    
-        flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);    
-        flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);    
-        interrupts();  
-        g_park_req = false;   // отпустить Core 1
+        do_flash_write(NULL);   // RAM: erase+program, XIP off    
+        interrupts();    
+        g_park_req = false;   // отпустить Core 1  
   
         // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
         for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
@@ -165,12 +166,11 @@ bool af_store_save(uint8_t idx) {
         Serial.println("# save: core1 park timeout");  
         return false;  
     }  
-    noInterrupts();  
-    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
-    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
-  
-    // Сюда доходим только если запись завершилась.  
-    watchdog_reboot(0, 0, 0);  
+    noInterrupts();    
+    do_flash_write(NULL);   // RAM: erase+program, XIP off    
+    
+    // Сюда доходим только если запись завершилась.    
+    watchdog_reboot(0, 0, 0);    
     while (true) { tight_loop_contents(); }   // на случай задержки ребута
 }  
   
@@ -212,10 +212,9 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         Serial.println("# bank clr: core1 park timeout");  
         return;  
     }  
-    noInterrupts();  
-    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
-    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
-    interrupts();  
+    noInterrupts();    
+    do_flash_write(NULL);   // RAM: erase+program, XIP off    
+    interrupts();    
   
     Serial.flush();  
     watchdog_reboot(0, 0, 0);   // не возвращается  
