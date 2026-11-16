@@ -145,10 +145,12 @@ void setup()
     af_usb_init();
 
     Serial.begin(115200);
-    
-    // Ждём подключения COM-порта (USB CDC), максимум 5 с.  
+    af_led_init();             // heartbeat (WS2812 на GP16 у Zero)
+    af_led_set(10, 0, 0);
+
+    // Ждём подключения COM-порта (USB CDC), максимум 3 с.  
     // Как в радиомодеме: без USB-хоста ожидание не блокирует запуск.  
-    while (!Serial && millis() < 5000) delay(1);  
+    while (!Serial && millis() < 3000) delay(1);  
 
     watchdog_enable(3000, true);  // сторожевой 3 с
     
@@ -160,17 +162,13 @@ void setup()
     af_dsp_init();  
     af_cli_init();  
     af_store_init();  
-
-    af_led_init();             // heartbeat (WS2812 на GP16 у Zero)
-
+    af_led_set(0, 0, 10);
     af_gpio_ctl_init();
     af_capture_start();
     af_pwm_init();
-
     af_voice_init();  
     af_voice_play(VOICE_READY);   // приветствие после инициализации  
-  
-
+    af_led_set(0, 10, 0);
 
     __dmb();  
     core0_ready = true;  
