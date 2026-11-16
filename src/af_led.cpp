@@ -78,7 +78,8 @@ void af_led_init(void) {
     gpio_init(PIN_ZERO); gpio_set_dir(PIN_ZERO, GPIO_OUT);  
     gpio_init(PIN_YD);   gpio_set_dir(PIN_YD,   GPIO_OUT);  
     gpio_init(PIN_PICO); gpio_set_dir(PIN_PICO, GPIO_OUT);  
-    sio_hw->gpio_clr = ALL_PINS_MASK;  
+    sio_hw->gpio_clr = ALL_PINS_MASK;
+    af_led_set(0, 0, 10);
 }  
   
 // ----------------------------------------------------------------------------  
