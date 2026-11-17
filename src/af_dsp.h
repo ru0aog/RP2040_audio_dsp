@@ -25,17 +25,17 @@ uint32_t af_dsp_band_lo_hz(void);
 uint32_t af_dsp_band_hi_hz(void);  
   
 // Автонотч NT. При включении снимает NR (приоритет NT).  
-int      af_dsp_set_notch(bool on);  
+int      af_dsp_set_notch(bool on);  // rc: 0=off, 1=on, 2=on+NR снят, 3=отклонено (CW on).
 bool     af_dsp_notch_on(void);  
   
-// Шумоподавление NR. Возвращает false, если отклонено (NT on).  
+// Шумоподавление NR. Возвращает false, если отклонено (NT on или CW on)  
 bool     af_dsp_set_nr(bool on);  
 bool     af_dsp_nr_on(void);  
   
 // Телеграфный фильтр (3 биквада BPF + шум, после FIR).  
 // При включении подтягивает полосу FIR к f0±250 Гц, при выключении —  
 // восстанавливает сохранённую.  
-void     af_dsp_set_cw(bool on);  
+void     af_dsp_set_cw(bool on);  // При включении снимает NT и NR (приоритет CW).
 bool     af_dsp_cw_on(void);  
 void     af_dsp_set_cw_freq(uint32_t hz);  
 uint32_t af_dsp_cw_freq(void);  
