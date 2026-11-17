@@ -340,17 +340,19 @@ static inline int32_t __not_in_flash_func(notch_lms_push)(int32_t x) {
     notch_buf[notch_idx] = x;  
   
     // предсказание y по задержанным отсчётам; энергия — скользящим окном    
-    int64_t acc = 0;    
-    int p = notch_idx - NOTCH_DELAY;    
-    if (p < 0) p += NOTCH_N + NOTCH_DELAY;    
-    int32_t taps[NOTCH_N];    
-    for (int k = 0; k < NOTCH_N; k++) {    
-        int32_t v = notch_buf[p];    
-        taps[k] = v;    
-        acc += (int64_t)notch_w[k] * v;           // y в Q15    
-        if (--p < 0) p += NOTCH_N + NOTCH_DELAY;    
-    }    
-    int32_t y = (int32_t)(acc >> 15);    
+    int64_t acc = 0;      
+    int p = notch_idx - NOTCH_DELAY;      
+    if (p < 0) p += NOTCH_N + NOTCH_DELAY;      
+    int32_t taps[NOTCH_N];      
+    for (int k = 0; k < NOTCH_N; k++) {      
+        int32_t v = notch_buf[p];      
+        taps[k] = v;      
+        // 32-битный mul (1 такт) вместо __muldi3: w и v <= 2^15,      
+        // произведение <= 2^30 — влезает в int32, сумма — в int64.      
+        acc += (int32_t)(notch_w[k] * v);         // y в Q15      
+        if (--p < 0) p += NOTCH_N + NOTCH_DELAY;      
+    }      
+    int32_t y = (int32_t)(acc >> 15);      
     
     // Скользящая энергия: вычесть ушедший отсчёт, добавить новый.    
     // Опорный вектор — отсчёты с задержкой NOTCH_DELAY, т.е. v = taps[0]    
@@ -360,7 +362,8 @@ static inline int32_t __not_in_flash_func(notch_lms_push)(int32_t x) {
         int32_t v_old = notch_v[notch_vidx];    
         notch_v[notch_vidx] = v_new;    
         notch_vidx = (notch_vidx + 1) % NOTCH_N;    
-        notch_energy += (int64_t)v_new * v_new - (int64_t)v_old * v_old;    
+        // квадраты <= 2^30 — 32-битные mul, разность накапливаем в int64    
+        notch_energy += (int64_t)(v_new * v_new - v_old * v_old);      
         if (notch_energy < 0) notch_energy = 0;   // защита от дрейфа    
     }    
     int64_t energy = notch_energy;
@@ -379,13 +382,16 @@ static inline int32_t __not_in_flash_func(notch_lms_push)(int32_t x) {
     if (g >  NOTCH_G_MAX) g =  NOTCH_G_MAX;  
     if (g < -NOTCH_G_MAX) g = -NOTCH_G_MAX; 
   
-    for (int k = 0; k < NOTCH_N; k++) {  
-        int32_t upd = (int32_t)(((int64_t)g * taps[k]) >> 15);  
-        int32_t w   = (int32_t)notch_w[k] + upd - ((int32_t)notch_w[k] >> NOTCH_LEAK_SHIFT);  
-        if (w >  32767) w =  32767;  
-        if (w < -32768) w = -32768;  
-        notch_w[k] = (int16_t)w;  
-    }  
+    // g <= 2^20 (NOTCH_G_MAX): сдвигаем до int32 — g5 <= 2^15,      
+    // g5*tap <= 2^30 влезает в int32, итоговый сдвиг 15-5=10.      
+    int32_t g5 = (int32_t)(g >> 5);    
+    for (int k = 0; k < NOTCH_N; k++) {    
+        int32_t upd = (g5 * taps[k]) >> 10;    
+        int32_t w   = (int32_t)notch_w[k] + upd - ((int32_t)notch_w[k] >> NOTCH_LEAK_SHIFT);    
+        if (w >  32767) w =  32767;    
+        if (w < -32768) w = -32768;    
+        notch_w[k] = (int16_t)w;    
+    }    
   
     if (++notch_idx >= NOTCH_N + NOTCH_DELAY) notch_idx = 0;  
     return e;  
@@ -411,16 +417,17 @@ static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {
     nr_buf[nr_idx] = x;  
   
     // предсказание + энергия окна одним проходом  
-    int64_t acc = 0, energy = 0;  
-    int p = nr_idx - NR_DELAY; if (p < 0) p += NR_N + NR_DELAY;  
-    int taps[NR_N];  
-    for (int k = 0; k < NR_N; k++) {  
-        taps[k] = p;  
-        int32_t xk = nr_buf[p];  
-        acc    += (int64_t)nr_w[k] * xk;  
-        energy += (int64_t)xk * xk;  
-        if (--p < 0) p += NR_N + NR_DELAY;  
-    }  
+    int64_t acc = 0, energy = 0;    
+    int p = nr_idx - NR_DELAY; if (p < 0) p += NR_N + NR_DELAY;    
+    int taps[NR_N];    
+    for (int k = 0; k < NR_N; k++) {    
+        taps[k] = p;    
+        int32_t xk = nr_buf[p];    
+        // 32-битные mul вместо __muldi3: произведения <= 2^30    
+        acc    += (int32_t)(nr_w[k] * xk);    
+        energy += (int32_t)(xk * xk);    
+        if (--p < 0) p += NR_N + NR_DELAY;    
+    }    
     int32_t y = (int32_t)(acc >> 15);  
     int32_t e = x - y;                         // ошибка = шум  
   
@@ -432,14 +439,16 @@ static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {
     if (g >  NR_G_MAX) g =  NR_G_MAX;  
     if (g < -NR_G_MAX) g = -NR_G_MAX;  
   
-    for (int k = 0; k < NR_N; k++) {  
-        int64_t upd = (g * nr_buf[taps[k]]) >> 15;  
-        int32_t w   = (int32_t)nr_w[k];  
-        w += (int32_t)upd - (w >> NR_LEAK_SHIFT);  
-        if (w >  32767) w =  32767;  
-        if (w < -32768) w = -32768;  
-        nr_w[k] = (int16_t)w;  
-    }  
+    // g <= 2^20 (NR_G_MAX): g5 <= 2^15, произведение <= 2^30 — int32    
+    int32_t g5 = (int32_t)(g >> 5);    
+    for (int k = 0; k < NR_N; k++) {    
+        int32_t upd = (g5 * nr_buf[taps[k]]) >> 10;    
+        int32_t w   = (int32_t)nr_w[k];    
+        w += upd - (w >> NR_LEAK_SHIFT);    
+        if (w >  32767) w =  32767;    
+        if (w < -32768) w = -32768;    
+        nr_w[k] = (int16_t)w;    
+    }    
   
     // dry/wet с настраиваемой глубиной: out = x − nr_depth_q15·e    
     int32_t out = x - (int32_t)(((int64_t)e * nr_depth_q15) >> 15);    
