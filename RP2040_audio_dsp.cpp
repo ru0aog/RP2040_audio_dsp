@@ -25,10 +25,13 @@
 #include "src/af_led.h"
 #include "src/af_voice.h"     // подмес голосовых клипов в выход
   
-volatile bool core0_ready = false;  
-static uint32_t core0_busy_us = 0;  
-static uint32_t core0_win_ms = 0;  
-static uint32_t core0_load_permille = 0;
+volatile bool core0_ready = false;    
+static uint32_t core0_busy_us = 0;    
+static uint32_t core0_win_ms = 0;    
+static uint32_t core0_load_permille = 0;  
+  
+// Загрузка Core 0, ‰ (busy-время loop за 1 с). Читается из cli_stats.  
+uint32_t af_core0_load_permille(void) { return core0_load_permille; }  
 
 // ============================================================================  
 // Конфигурация PLL (из vfo_hardware.cpp маяка)  
@@ -197,68 +200,7 @@ void loop()
         core0_busy_us = 0;  
         core0_win_ms = millis();  
     }  
-
-    // Раз в 10 сек — сводка загрузки и диагностика разрывов.  
-    // Дельты за период (d*) важнее кумулятивных: видно темп потерь.  
-    static uint32_t t_min = 0;  
-    static uint32_t p_pub = 0, p_dU = 0, p_dP = 0, p_urU = 0, p_urP = 0;    
-    static uint32_t p_usb_ur = 0, p_pwm_ur = 0, p_cap = 0, p_isr = 0;    
-    if (millis() - t_min >= 10000) {    
-        t_min = millis();    
-    
-        const uint32_t pub   = af_dsp_out_published_usb();    
-        const uint32_t dU    = af_dsp_out_dropped_usb();    
-        const uint32_t dP    = af_dsp_out_dropped_pwm();    
-        const uint32_t urU   = af_dsp_out_underruns_usb();    
-        const uint32_t urP   = af_dsp_out_underruns_pwm();    
-        const uint32_t uur   = af_usb_underruns();    
-        const uint32_t pur   = af_pwm_underruns();    
-        const uint32_t cap   = af_capture_dropped();    
-        const uint32_t isr   = af_cap_isr_count;   // реальные блоки от DMA    
-  
-        Serial.printf(    
-            "# L0=%u.%u%% L1=%u.%u%% blk=%lu max=%luus |"    
-            " cap: isr=%lu d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"      
-            " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"    
-            " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu gap=%luus ff=%lu ws=%lu av=%lu |"        
-            " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",        
-            core0_load_permille / 10, core0_load_permille % 10,        
-            af_dsp_load_permille() / 10, af_dsp_load_permille() % 10,        
-            (unsigned long)(pub - p_pub),        
-            (unsigned long)af_dsp_max_block_us(),        
-            (unsigned long)(isr - p_isr), (unsigned long)(cap - p_cap),          
-            (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,          
-            (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,        
-            (unsigned long)af_irq_both_pending, (unsigned long)af_q_fill_max,        
-            (unsigned long)(dU - p_dU), (unsigned long)(dP - p_dP),        
-            (unsigned long)(urU - p_urU), (unsigned long)(urP - p_urP),        
-            (unsigned)af_dsp_out_fill_max_usb(), (unsigned)af_dsp_out_fill_max_pwm(),        
-            (unsigned long)(uur - p_usb_ur), (unsigned long)af_usb_frames_short(),        
-            (long)af_usb_rs_adj_mhz(), (unsigned long)af_usb_reprimes(),        
-            (unsigned long)af_usb_poll_gap_max(), (unsigned long)af_usb_fifo_full(),      
-            (unsigned long)af_usb_write_short(), (unsigned long)af_usb_avail_max(),      
-            (unsigned long)(pur - p_pwm_ur), (unsigned long)af_pwm_restarts(),        
-            (unsigned)af_pwm_duty_fill_max(),        
-            (unsigned long)af_dsp_clip_count());        
-  
-        // Метки последних underrun — интервалы показывают периодичность разрывов.  
-        uint32_t ut[8]; uint16_t un[8];  
-        af_usb_ur_log(ut, un);  
-        Serial.printf("# usb_ur_t:");  
-        for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)ut[i]);  
-        Serial.printf(" | n:");  
-        for (int i = 0; i < 8; i++) Serial.printf(" %u", (unsigned)un[i]);  
-        Serial.println();  
-  
-        uint32_t pt[8];  
-        af_pwm_ur_log(pt);  
-        Serial.printf("# pwm_ur_t:");  
-        for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)pt[i]);  
-        Serial.println();  
-  
-        p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;    
-        p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap; p_isr = isr;    
-    }  
+    // Периодическая сводка убрана — диагностика по команде 'stats'.  
 }
   
 void setup1()  

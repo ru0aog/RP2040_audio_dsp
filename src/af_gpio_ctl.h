@@ -12,5 +12,8 @@
 // Вызывать из setup() (Core 0) ПОСЛЕ af_dsp_init().  
 void af_gpio_ctl_init(void);  
   
-// Неблокирующий опрос пинов с дебаунсом. Вызывать из loop() (Core 0).  
-void af_gpio_ctl_poll(void);
+// Неблокирующий опрос пинов с дебаунсом. Вызывать из loop() (Core 0).    
+void af_gpio_ctl_poll(void);  
+  
+// Текущий код банка с GP2..GP4 (0 = ручной режим).    
+uint8_t af_gpio_bank_code(void);  

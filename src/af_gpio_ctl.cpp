@@ -34,6 +34,9 @@ static gpio_ctl_t ctl_ptt;       // GP8 — LOW -> TX
 static uint32_t t_next_poll = 0;  
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7  
   
+// Текущий код банка с GP2..GP4 (0 = ручной режим). Для cli_stats.  
+uint8_t af_gpio_bank_code(void) { return bank_code; }  
+
 // ---------------------------------------------------------------------------  
 static void apply_nr(bool grounded) {    
     if (af_dsp_set_nr(grounded)) {  

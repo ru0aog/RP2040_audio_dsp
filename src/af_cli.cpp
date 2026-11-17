@@ -25,6 +25,10 @@
 #include "af_led.h"
 #include "af_voice.h"     // подмес голосовых клипов в выход
 #include "af_tx.h"        // TX-тракт: полоса/компрессия/клиппер  
+#include "af_gpio_ctl.h"  // af_gpio_bank_code — текущий банк с пинов  
+  
+// Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
+extern uint32_t af_core0_load_permille(void);  
 
 // ---------------------------------------------------------------------------  
 // Справка  
@@ -105,100 +109,125 @@ static void cli_help(void) {
 // ---------------------------------------------------------------------------  
 // Диагностика  
 // ---------------------------------------------------------------------------  
-static void cli_stats(void) {  
-    uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);  
-        Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu.%02lu  bypass=%s  tx=%s\n",  
-                  (unsigned long)af_dsp_band_lo_hz(),    
-                  (unsigned long)af_dsp_band_hi_hz(),  
-                  af_dsp_notch_on() ? "on" : "off",    
-                  af_dsp_nr_on()    ? "on" : "off",    
-                  af_dsp_cw_on()    ? "on" : "off",    
-                  (unsigned long)af_dsp_cw_freq(),    
-                  (unsigned long)af_dsp_cw_bw(),    
-                  (unsigned long)af_dsp_cw_noise(),  
-                  af_dsp_agc_on() ? "on" : "off",    
-                  (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),  
-                  af_dsp_bypass_on() ? "on" : "off",  
-                  af_dsp_tx_on() ? "on" : "off");  
-    Serial.printf("# rx: agcref=%ld agcmax=%ld agcmin=%ld limceil=%ld nrdepth=%ld nrmakeup=%ld ntmu=%ld nrmu=%ld\n",  
-                  (long)af_dsp_agcref(),  
-                  (long)(af_dsp_agcmax() * 100.0f + 0.5f),  
-                  (long)(af_dsp_agcmin() * 100.0f + 0.5f),  
-                  (long)af_dsp_limceil(),  
-                  (long)af_dsp_nrdepth(),  
-                  (long)af_dsp_nrmakeup(),  
-                  (long)af_dsp_ntmu(),  
-                  (long)af_dsp_nrmu());  
-    Serial.printf("# ramp=%s\n", af_dsp_ramp_on() ? "on" : "off");    
-    Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu  agc=%lu  gate=%lu  gfloor=%lu  ap=%s  mode=%s  2band=%s  notch=%s\n",      
-                  (unsigned long)af_tx_lo_hz(),          
-                  (unsigned long)af_tx_hi_hz(),          
-                  (unsigned long)af_tx_ratio(),          
-                  (unsigned long)af_tx_clip(),        
-                  (unsigned long)af_tx_agc(),        
+static void cli_stats(void) {      
+    uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);      
+    bool tx = af_dsp_tx_on();      
+    
+    // ---- RX: параметры приёмного тракта (при tx=on неактивен) ----      
+    Serial.printf("# === RX (%s) ===\n", tx ? "inactive" : "active");      
+    Serial.printf("#   band    = %lu..%lu Hz\n",      
+                  (unsigned long)af_dsp_band_lo_hz(),      
+                  (unsigned long)af_dsp_band_hi_hz());      
+    Serial.printf("#   nt      = %s   nr      = %s   bypass  = %s   ramp    = %s\n",      
+                  af_dsp_notch_on()  ? "on" : "off",      
+                  af_dsp_nr_on()     ? "on" : "off",      
+                  af_dsp_bypass_on() ? "on" : "off",      
+                  af_dsp_ramp_on()   ? "on" : "off");      
+    Serial.printf("#   cw      = %s   f0=%lu bw=%lu noise=%lu\n",      
+                  af_dsp_cw_on() ? "on" : "off",      
+                  (unsigned long)af_dsp_cw_freq(),      
+                  (unsigned long)af_dsp_cw_bw(),      
+                  (unsigned long)af_dsp_cw_noise());      
+    Serial.printf("#   agc     = %s   gain=%lu.%02lu\n",      
+                  af_dsp_agc_on() ? "on" : "off",      
+                  (unsigned long)(g100 / 100), (unsigned long)(g100 % 100));      
+    Serial.printf("#   agcref  = %ld   agcmax=%ld agcmin=%ld   limceil=%ld\n",      
+                  (long)af_dsp_agcref(),      
+                  (long)(af_dsp_agcmax() * 100.0f + 0.5f),      
+                  (long)(af_dsp_agcmin() * 100.0f + 0.5f),      
+                  (long)af_dsp_limceil());      
+    Serial.printf("#   nrdepth = %ld   nrmakeup=%ld   ntmu=%ld nrmu=%ld\n",      
+                  (long)af_dsp_nrdepth(),      
+                  (long)af_dsp_nrmakeup(),      
+                  (long)af_dsp_ntmu(),      
+                  (long)af_dsp_nrmu());      
+    
+    // ---- TX: параметры передающего тракта (при tx=off неактивен) ----      
+    Serial.printf("# === TX (%s) ===\n", tx ? "active" : "inactive");      
+    Serial.printf("#   band    = %lu..%lu Hz   mode=%s\n",      
+                  (unsigned long)af_tx_lo_hz(),      
+                  (unsigned long)af_tx_hi_hz(),      
+                  af_tx_softclip() ? "soft" : "hard");      
+    Serial.printf("#   comp    = %lu:1(x10)   clip=%lu   agc=%lu agcmax=%lu\n",      
+                  (unsigned long)af_tx_ratio(),      
+                  (unsigned long)af_tx_clip(),      
+                  (unsigned long)af_tx_agc(),      
+                  (unsigned long)af_tx_agcmax());      
+    Serial.printf("#   gate    = %lu   hold=%lu hyst=%lu   gfloor=%lu\n",      
                   (unsigned long)af_tx_gate(),      
-                  (unsigned long)af_tx_gfloor(),    
-                  af_tx_ap() ? "on" : "off",      
-                  af_tx_softclip() ? "soft" : "hard",    
-                  af_tx_2band() ? "on" : "off",  
-                  af_tx_notch() ? "on" : "off");
-    Serial.printf("  pres=%s pmax=%lu lr2=%s duck=%s dmax=%lu exc=%s emix=%lu intel=%s shelf=%lu\n",            
-                  af_tx_pres() ? "on" : "off",            
-                  (unsigned long)af_tx_presmax(),          
-                  af_tx_lr2() ? "on" : "off",        
-                  af_tx_duck() ? "on" : "off",        
+                  (unsigned long)af_tx_gatehold(),      
+                  (unsigned long)af_tx_gatehyst(),      
+                  (unsigned long)af_tx_gfloor());      
+    Serial.printf("#   ap      = %s   2band=%s split=%lu lr2=%s   compthr=%ld/%ld/%ld\n",      
+                  af_tx_ap()    ? "on" : "off",      
+                  af_tx_2band() ? "on" : "off",      
+                  (unsigned long)af_tx_split(),      
+                  af_tx_lr2()   ? "on" : "off",      
+                  (long)af_tx_compthr(), (long)af_tx_compthrlo(), (long)af_tx_compthrhi());      
+    Serial.printf("#   pres    = %s pmax=%lu f=%lu q=%lu   shelf=%lu f=%lu q=%lu\n",      
+                  af_tx_pres() ? "on" : "off",      
+                  (unsigned long)af_tx_presmax(),      
+                  (unsigned long)af_tx_presfreq(),      
+                  (unsigned long)af_tx_presq(),      
+                  (unsigned long)af_tx_shelf(),      
+                  (unsigned long)af_tx_shelffreq(),      
+                  (unsigned long)af_tx_shelfq());      
+    Serial.printf("#   duck    = %s dmax=%lu   exc=%s emix=%lu   intel=%s %ld/%ld/%ld\n",      
+                  af_tx_duck() ? "on" : "off",      
                   (unsigned long)af_tx_duckmax(),      
-                  af_tx_exc() ? "on" : "off",      
-                  (unsigned long)af_tx_excmix(),    
-                  af_tx_intel() ? "on" : "off",  
-                  (unsigned long)af_tx_shelf());  
-    Serial.printf("  split=%lu compthr=%ld/%ld/%ld agcmax=%lu gatehold=%lu gatehyst=%lu notchf=%lu/%lu\n",  
-                  (unsigned long)af_tx_split(),  
-                  (long)af_tx_compthr(), (long)af_tx_compthrlo(), (long)af_tx_compthrhi(),  
-                  (unsigned long)af_tx_agcmax(),  
-                  (unsigned long)af_tx_gatehold(),  
-                  (unsigned long)af_tx_gatehyst(),  
-                  (unsigned long)af_tx_notch1(),  
-                  (unsigned long)af_tx_notch2());  
-    Serial.printf("  intel: tgt=%ld cut=%ld boost=%ld  pres: f=%lu q=%lu  shelf: f=%lu q=%lu\n",  
-                  (long)af_tx_inteltgt(), (long)af_tx_intelcut(), (long)af_tx_intelboost(),  
-                  (unsigned long)af_tx_presfreq(), (unsigned long)af_tx_presq(),  
-                  (unsigned long)af_tx_shelffreq(), (unsigned long)af_tx_shelfq());  
-    Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
-                  (unsigned long)af_tx_agc_env(),  
-                  (unsigned long)af_tx_agc_gain(),  
-                  (unsigned long)af_tx_env_lo(),  
-                  (unsigned long)af_tx_env_hi());
-    Serial.printf("  hi_pre=%lu nf=%lu k=%lu kd=%lu gi=%lu\n",      
+                  af_tx_exc()  ? "on" : "off",      
+                  (unsigned long)af_tx_excmix(),      
+                  af_tx_intel() ? "on" : "off",      
+                  (long)af_tx_inteltgt(), (long)af_tx_intelcut(), (long)af_tx_intelboost());      
+    Serial.printf("#   notch   = %s   f=%lu/%lu Hz\n",      
+                  af_tx_notch() ? "on" : "off",      
+                  (unsigned long)af_tx_notch1(),      
+                  (unsigned long)af_tx_notch2());      
+    Serial.printf("#   txenv   : agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",      
+                  (unsigned long)af_tx_agc_env(),      
+                  (unsigned long)af_tx_agc_gain(),      
+                  (unsigned long)af_tx_env_lo(),      
+                  (unsigned long)af_tx_env_hi());      
+    Serial.printf("#             hi_pre=%lu nf=%lu k=%lu kd=%lu gi=%lu\n",      
                   (unsigned long)af_tx_env_hi_pre(),      
                   (unsigned long)af_tx_pres_nf(),      
-                  (unsigned long)af_tx_k_dyn(),    
-                  (unsigned long)af_tx_k_duck(),  
+                  (unsigned long)af_tx_k_dyn(),      
+                  (unsigned long)af_tx_k_duck(),      
                   (unsigned long)af_tx_g_intel());      
-    Serial.printf("# core1_load=%lu.%lu%%  cap_dropped=%lu  out_dropped=%lu  clip=%lu\n",  
-                  (unsigned long)(af_dsp_load_permille() / 10u),  
-                  (unsigned long)(af_dsp_load_permille() % 10u),  
-                  (unsigned long)af_capture_dropped(),  
-                  (unsigned long)af_dsp_out_dropped(),  
-                  (unsigned long)af_dsp_clip_count());  
-    Serial.printf("# cap: isr=%lu fcs_over=%lu q_full=%lu scratch=%lu busy=%lu\n",  
-                  (unsigned long)af_cap_isr_count,  
-                  (unsigned long)af_adc_fcs_over,  
-                  (unsigned long)af_drop_queue_full,  
-                  (unsigned long)af_drop_scratch,  
-                  (unsigned long)af_drop_busy);  
-    Serial.printf("# pwm: %s underruns=%lu fill=%u\n",  
-              af_pwm_is_enabled() ? "on" : "OFF",  
-              (unsigned long)af_pwm_underruns(), af_dsp_out_fill_pwm());
-    Serial.printf("# usb: mounted=%d dropped=%lu\n",  
-                  (int)af_usb_mounted(),  
-                  (unsigned long)af_usb_dropped());
-    Serial.printf("# core1: max_block_us=%lu\n", (unsigned long)af_dsp_max_block_us());
-    Serial.printf("# fs: out=%lu adc=%lu div=%lu\n",  
-                  (unsigned long)AF_FS_OUT_HZ,  
-                  (unsigned long)AF_FS_ADC_HZ,  
-                  (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));  
     
+    // ---- SYS: общее состояние, работает в обоих режимах ----      
+    Serial.println("# === SYS ===");      
+    Serial.printf("#   mode    = %s   bank=%u   voice=%u%%   pwm=%s   usb=%s\n",      
+                  tx ? "tx" : "rx",      
+                  (unsigned)af_gpio_bank_code(),      
+                  (unsigned)af_voice_volume(),      
+                  af_pwm_is_enabled() ? "on" : "OFF",      
+                  af_usb_mounted() ? "mounted" : "no");      
+    Serial.printf("#   core0   : load=%lu.%lu%%\n",      
+                  (unsigned long)(af_core0_load_permille() / 10u),      
+                  (unsigned long)(af_core0_load_permille() % 10u));      
+    Serial.printf("#   core1   : load=%lu.%lu%% max_block_us=%lu\n",      
+                  (unsigned long)(af_dsp_load_permille() / 10u),      
+                  (unsigned long)(af_dsp_load_permille() % 10u),      
+                  (unsigned long)af_dsp_max_block_us());      
+    Serial.printf("#   cap     : isr=%lu fcs_over=%lu q_full=%lu scratch=%lu busy=%lu dropped=%lu\n",      
+                  (unsigned long)af_cap_isr_count,      
+                  (unsigned long)af_adc_fcs_over,      
+                  (unsigned long)af_drop_queue_full,      
+                  (unsigned long)af_drop_scratch,      
+                  (unsigned long)af_drop_busy,      
+                  (unsigned long)af_capture_dropped());      
+    Serial.printf("#   out     : dropped=%lu clip=%lu   usb: ur=%lu fill_max=%u   pwm: ur=%lu fill_max=%u\n",      
+                  (unsigned long)af_dsp_out_dropped(),      
+                  (unsigned long)af_dsp_clip_count(),      
+                  (unsigned long)af_dsp_out_underruns_usb(),      
+                  (unsigned)af_dsp_out_fill_max_usb(),      
+                  (unsigned long)af_dsp_out_underruns_pwm(),      
+                  (unsigned)af_dsp_out_fill_max_pwm());      
+    Serial.printf("#   fs      : out=%lu adc=%lu div=%lu\n",      
+                  (unsigned long)AF_FS_OUT_HZ,      
+                  (unsigned long)AF_FS_ADC_HZ,      
+                  (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));  
 }  
 
 // TX-профили по таблице пресетов: 1=FLAT .. 7=MAX (от прозрачного к плотному).  
