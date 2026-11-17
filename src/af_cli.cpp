@@ -9,7 +9,7 @@
 //        tx2band txsplit txlr2 txcomp txcompthr txcompthrlo txcompthrhi  
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
 //        txpres txpresmax txpresfreq txpresq txshelf txshelffreq txshelfq  
-//        txexc txexcmix txmode txclip txnotch txnotchf txpreset txprof  
+//        txexc txexcmix txmode txclip txnotch txnotchf txsetdef txprof    
 //   SYS: stats save load banks pwm voice ramp help  
 // ============================================================================  
 #include <Arduino.h>  
@@ -86,8 +86,8 @@ static void cli_help(void) {
     Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");      
     Serial.println("#   txnotch on|off    — узкие нотчи против тонов-наводок");  
     Serial.println("#   txnotchf <f1> <f2> — частоты TX-нотчей, Гц (200..7000)");    
-    Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора");  
     Serial.println("#   txprof <1..7|имя> — профиль передачи: 1 flat, 2 natural, 3 dx, 4 bass, 5 whisper, 6 loud, 7 max");  
+    Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам"); 
     Serial.println("# === СИСТЕМА ===");    
     Serial.println("#   stats             — диагностика");    
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
@@ -731,104 +731,48 @@ static void cli_exec(char* line) {
         Serial.printf("# OK txgfloor=%lu\n", (unsigned long)af_tx_gfloor());  
     }  
 
-    else if (strncmp(cmd, "txpreset", 8) == 0) {    
-        char* v = strtok(NULL, " \t");    
-        if (v == NULL) { Serial.println("# ERR: txpreset <aggro|max|flat|def>"); return; }    
-    
-        if (strcmp(v, "aggro") == 0) {          // агрессивный «кирпич»    
-            af_tx_set_band(300, 2700);    
-            af_tx_set_ratio(80);                // 8:1    
-            af_tx_set_clip(8192);               // 0.25 FS    
-            af_tx_set_agc(18000);    
-            af_tx_set_gate(AF_TX_GATE_THR);  
-            af_tx_set_gfloor(4120);             // -24 дБ    
-            af_tx_set_ap(true);      
-            af_tx_set_softclip(true);      
-            af_tx_set_2band(true);      
-            af_tx_set_pres(true);   af_tx_set_presmax(15);    // подтверждённая точка    
-            af_tx_set_lr2(true);    af_tx_set_shelf(0);       // статический наклон off — presence покрывает динамически
-            af_tx_set_duck(true);   af_tx_set_duckmax(30);    
-            af_tx_set_exc(true);    af_tx_set_excmix(3277);    
-            af_tx_set_intel(true);    
-        }  
-        else if (strcmp(v, "max") == 0) {           // максимум плотности без пережатия  
-            af_tx_set_band(300, 2400);              // чуть уже SSB, но сибилянты живы  
-            af_tx_set_ratio(80);                    // 8:1 — как aggro  
-            af_tx_set_clip(6144);                   // ниже aggro, но не в «мясо»  
-            af_tx_set_agc(18000);  af_tx_set_shelf(40);         // +4 дБ @1.8к — максимальная разборчивость
-            af_tx_set_gate(AF_TX_GATE_THR);  
-            af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);  
-            af_tx_set_ap(true);    
-            af_tx_set_softclip(true);    
-            af_tx_set_2band(true);    
-            af_tx_set_pres(true);   af_tx_set_presmax(15);    
-            af_tx_set_lr2(true);    
-            af_tx_set_duck(true);   af_tx_set_duckmax(30);    
-            af_tx_set_exc(true);    af_tx_set_excmix(3277);    
-            af_tx_set_intel(true);    
-        }  
-        else if (strcmp(v, "flat") == 0) {      // линейный тракт (только FIR+АРУ)    
-            af_tx_set_band(300, 2700);    
-            af_tx_set_ratio(10);                // 1:1 — компрессия off    
-            af_tx_set_clip(32767);              // клиппер off    
-            af_tx_set_agc(18000);    
-            af_tx_set_gate(0);                  // гейт off    
-            af_tx_set_gfloor(4120);    
-            af_tx_set_ap(false);      
-            af_tx_set_softclip(true);      af_tx_set_shelf(0);       // статический наклон off — presence покрывает динамически
-            af_tx_set_2band(false);      
-            af_tx_set_pres(false);    
-            af_tx_set_lr2(false);    
-            af_tx_set_duck(false);    
-            af_tx_set_exc(false);    
-            af_tx_set_intel(false);    
-        }    
-        else if (strcmp(v, "def") == 0) {       // заводские дефолты из af_config.h    
-            af_tx_set_band(AF_TX_LO_HZ_DEFAULT, AF_TX_HI_HZ_DEFAULT);    
-            af_tx_set_ratio(AF_TX_RATIO_X10_DEFAULT);    
-            af_tx_set_clip(AF_TX_CLIP_DEFAULT);    
-            af_tx_set_agc(AF_TX_AGC_TARGET);    
-            af_tx_set_gate(AF_TX_GATE_THR);    
-            af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);    
-            af_tx_set_ap(AF_TX_AP_ON_DEFAULT != 0);      
-            af_tx_set_softclip(AF_TX_SOFTCLIP_ON_DEFAULT != 0);      
-            af_tx_set_2band(AF_TX_2BAND_ON_DEFAULT != 0);      
-            af_tx_set_pres(AF_TX_PRES_ON_DEFAULT != 0);    
-            af_tx_set_presmax(AF_TX_PRES_MAX_DB_X10);    
-            af_tx_set_lr2(AF_TX_LR2_ON_DEFAULT != 0);    
-            af_tx_set_duck(AF_TX_DUCK_ON_DEFAULT != 0);    
-            af_tx_set_duckmax(AF_TX_DUCK_MAX_DB_X10);    
-            af_tx_set_exc(AF_TX_EXC_ON_DEFAULT != 0);    
-            af_tx_set_excmix(AF_TX_EXC_MIX_Q15);    
-            af_tx_set_intel(AF_TX_INTEL_ON_DEFAULT != 0);  
-            af_tx_set_shelf(AF_TX_SHELF_DB_X10_DEFAULT);  
-            af_tx_set_compthr(8192);    
-            af_tx_set_compthrlo(AF_TX_COMP_THR_LO);  af_tx_set_compthrhi(AF_TX_COMP_THR_HI);    
-            af_tx_set_split(AF_TX_SPLIT_HZ);    
-            af_tx_set_gatehold(AF_TX_GATE_HOLD_MS);  af_tx_set_gatehyst(AF_TX_GATE_HYST_X10);    
-            af_tx_set_agcmax(AF_TX_AGC_MAX_X10);    
-            af_tx_set_inteltgt(AF_TX_INTEL_TGT_Q15);    
-            af_tx_set_intelcut(AF_TX_INTEL_CUT_Q15);    
-            af_tx_set_intelboost(AF_TX_INTEL_BOOST_Q15);    
-            af_tx_set_presfreq(AF_TX_PRES_FREQ_HZ);  af_tx_set_presq(AF_TX_PRES_Q_X100);    
-            af_tx_set_shelffreq(AF_TX_SHELF_FREQ_HZ); af_tx_set_shelfq(AF_TX_SHELF_Q_X100);    
-            af_tx_set_notchf(AF_TX_NOTCH1_HZ, AF_TX_NOTCH2_HZ);    
-        }      
-        else { Serial.println("# ERR: txpreset <aggro|max|flat|def>"); return; }    
-    
-        Serial.printf("# OK txpreset=%s  band=%lu..%lu comp=%lu clip=%lu agc=%lu gate=%lu gfloor=%lu ap=%s mode=%s 2band=%s\n",    
-                      v,    
-                      (unsigned long)af_tx_lo_hz(),    
-                      (unsigned long)af_tx_hi_hz(),    
-                      (unsigned long)af_tx_ratio(),    
-                      (unsigned long)af_tx_clip(),    
-                      (unsigned long)af_tx_agc(),    
-                      (unsigned long)af_tx_gate(),    
-                      (unsigned long)af_tx_gfloor(),    
-                      af_tx_ap() ? "on" : "off",    
-                      af_tx_softclip() ? "soft" : "hard",    
-                      af_tx_2band() ? "on" : "off");    
-    }    
+    else if (strcmp(cmd, "txsetdef") == 0) {      // сброс TX к дефолтам af_config.h    
+        af_tx_set_band(AF_TX_LO_HZ_DEFAULT, AF_TX_HI_HZ_DEFAULT);      
+        af_tx_set_ratio(AF_TX_RATIO_X10_DEFAULT);      
+        af_tx_set_clip(AF_TX_CLIP_DEFAULT);      
+        af_tx_set_agc(AF_TX_AGC_TARGET);      
+        af_tx_set_gate(AF_TX_GATE_THR);      
+        af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);      
+        af_tx_set_ap(AF_TX_AP_ON_DEFAULT != 0);        
+        af_tx_set_softclip(AF_TX_SOFTCLIP_ON_DEFAULT != 0);        
+        af_tx_set_2band(AF_TX_2BAND_ON_DEFAULT != 0);        
+        af_tx_set_pres(AF_TX_PRES_ON_DEFAULT != 0);      
+        af_tx_set_presmax(AF_TX_PRES_MAX_DB_X10);      
+        af_tx_set_lr2(AF_TX_LR2_ON_DEFAULT != 0);      
+        af_tx_set_duck(AF_TX_DUCK_ON_DEFAULT != 0);      
+        af_tx_set_duckmax(AF_TX_DUCK_MAX_DB_X10);      
+        af_tx_set_exc(AF_TX_EXC_ON_DEFAULT != 0);      
+        af_tx_set_excmix(AF_TX_EXC_MIX_Q15);      
+        af_tx_set_intel(AF_TX_INTEL_ON_DEFAULT != 0);    
+        af_tx_set_shelf(AF_TX_SHELF_DB_X10_DEFAULT);    
+        af_tx_set_compthr(8192);      
+        af_tx_set_compthrlo(AF_TX_COMP_THR_LO);  af_tx_set_compthrhi(AF_TX_COMP_THR_HI);      
+        af_tx_set_split(AF_TX_SPLIT_HZ);      
+        af_tx_set_gatehold(AF_TX_GATE_HOLD_MS);  af_tx_set_gatehyst(AF_TX_GATE_HYST_X10);      
+        af_tx_set_agcmax(AF_TX_AGC_MAX_X10);      
+        af_tx_set_inteltgt(AF_TX_INTEL_TGT_Q15);      
+        af_tx_set_intelcut(AF_TX_INTEL_CUT_Q15);      
+        af_tx_set_intelboost(AF_TX_INTEL_BOOST_Q15);      
+        af_tx_set_presfreq(AF_TX_PRES_FREQ_HZ);  af_tx_set_presq(AF_TX_PRES_Q_X100);      
+        af_tx_set_shelffreq(AF_TX_SHELF_FREQ_HZ); af_tx_set_shelfq(AF_TX_SHELF_Q_X100);      
+        af_tx_set_notchf(AF_TX_NOTCH1_HZ, AF_TX_NOTCH2_HZ);      
+        Serial.printf("# OK txsetdef  band=%lu..%lu comp=%lu clip=%lu agc=%lu gate=%lu gfloor=%lu ap=%s mode=%s 2band=%s\n",      
+                      (unsigned long)af_tx_lo_hz(),      
+                      (unsigned long)af_tx_hi_hz(),      
+                      (unsigned long)af_tx_ratio(),      
+                      (unsigned long)af_tx_clip(),      
+                      (unsigned long)af_tx_agc(),      
+                      (unsigned long)af_tx_gate(),      
+                      (unsigned long)af_tx_gfloor(),      
+                      af_tx_ap() ? "on" : "off",      
+                      af_tx_softclip() ? "soft" : "hard",      
+                      af_tx_2band() ? "on" : "off");      
+    }      
 
     else if (strncmp(cmd, "txprof", 6) == 0) {    
         char* v = strtok(NULL, " \t");    
@@ -841,7 +785,7 @@ static void cli_exec(char* line) {
         else if (strcmp(v, "whisper") == 0) idx = 5;    
         else if (strcmp(v, "loud")    == 0) idx = 6;    
         else if (strcmp(v, "max")     == 0) idx = 7;    
-        else if (strcmp(v, "work")    == 0) { Serial.println("# work -> txpreset def"); return; }    
+        else if (strcmp(v, "work")    == 0) { Serial.println("# work -> txsetdef"); return; }      
         else {    
             idx = (uint8_t)strtoul(v, NULL, 10);    
             if (idx < 1 || idx > 7) { Serial.println("# ERR: txprof <1..7>"); return; }    
