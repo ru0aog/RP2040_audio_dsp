@@ -10,7 +10,7 @@
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
 //        txpres txpresmax txpresfreq txpresq txshelf txshelffreq txshelfq  
 //        txexc txexcmix txmode txclip txnotch txnotchf txsetdef txprof    
-//   SYS: stats save load banks pwm voice ramp help  
+//   SYS: stats dump save load banks pwm voice ramp help    
 // ============================================================================  
 #include <Arduino.h>  
 #include <string.h>  
@@ -93,7 +93,8 @@ static void cli_help(void) {
     Serial.println("#   txprof <1..7|имя> — профиль передачи: 1 flat, 2 natural, 3 dx, 4 bass, 5 whisper, 6 loud, 7 max");  
     Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам"); 
     Serial.println("# === СИСТЕМА ===");    
-    Serial.println("#   stats             — диагностика");    
+    Serial.println("#   stats             — таблица параметров RX/TX/SYS");  
+    Serial.println("#   dump              — инженерный дамп (дельты счётчиков, ur-логи)");  
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");    
     Serial.println("#   banks             — показать все ячейки");  
@@ -228,6 +229,67 @@ static void cli_stats(void) {
                   (unsigned long)AF_FS_OUT_HZ,      
                   (unsigned long)AF_FS_ADC_HZ,      
                   (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));  
+}  
+
+// Инженерный дамп: дельты счётчиков с прошлого вызова + ur-логи.  
+// Бывшая периодическая сводка из loop() — теперь по запросу.  
+static void cli_dump(void) {  
+    static uint32_t p_pub = 0, p_dU = 0, p_dP = 0, p_urU = 0, p_urP = 0;  
+    static uint32_t p_usb_ur = 0, p_pwm_ur = 0, p_cap = 0, p_isr = 0;  
+  
+    const uint32_t pub   = af_dsp_out_published_usb();  
+    const uint32_t dU    = af_dsp_out_dropped_usb();  
+    const uint32_t dP    = af_dsp_out_dropped_pwm();  
+    const uint32_t urU   = af_dsp_out_underruns_usb();  
+    const uint32_t urP   = af_dsp_out_underruns_pwm();  
+    const uint32_t uur   = af_usb_underruns();  
+    const uint32_t pur   = af_pwm_underruns();  
+    const uint32_t cap   = af_capture_dropped();  
+    const uint32_t isr   = af_cap_isr_count;  
+  
+    Serial.printf(  
+        "# L0=%lu.%lu%% L1=%lu.%lu%% blk=%lu max=%luus |"  
+        " cap: isr=%lu d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"  
+        " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"  
+        " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu gap=%luus ff=%lu ws=%lu av=%lu |"  
+        " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",  
+        (unsigned long)(af_core0_load_permille() / 10u),  
+        (unsigned long)(af_core0_load_permille() % 10u),  
+        (unsigned long)(af_dsp_load_permille() / 10u),  
+        (unsigned long)(af_dsp_load_permille() % 10u),  
+        (unsigned long)(pub - p_pub),  
+        (unsigned long)af_dsp_max_block_us(),  
+        (unsigned long)(isr - p_isr), (unsigned long)(cap - p_cap),  
+        (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,  
+        (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,  
+        (unsigned long)af_irq_both_pending, (unsigned long)af_q_fill_max,  
+        (unsigned long)(dU - p_dU), (unsigned long)(dP - p_dP),  
+        (unsigned long)(urU - p_urU), (unsigned long)(urP - p_urP),  
+        (unsigned)af_dsp_out_fill_max_usb(), (unsigned)af_dsp_out_fill_max_pwm(),  
+        (unsigned long)(uur - p_usb_ur), (unsigned long)af_usb_frames_short(),  
+        (long)af_usb_rs_adj_mhz(), (unsigned long)af_usb_reprimes(),  
+        (unsigned long)af_usb_poll_gap_max(), (unsigned long)af_usb_fifo_full(),  
+        (unsigned long)af_usb_write_short(), (unsigned long)af_usb_avail_max(),  
+        (unsigned long)(pur - p_pwm_ur), (unsigned long)af_pwm_restarts(),  
+        (unsigned)af_pwm_duty_fill_max(),  
+        (unsigned long)af_dsp_clip_count());  
+  
+    uint32_t ut[8]; uint16_t un[8];  
+    af_usb_ur_log(ut, un);  
+    Serial.printf("# usb_ur_t:");  
+    for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)ut[i]);  
+    Serial.printf(" | n:");  
+    for (int i = 0; i < 8; i++) Serial.printf(" %u", (unsigned)un[i]);  
+    Serial.println();  
+  
+    uint32_t pt[8];  
+    af_pwm_ur_log(pt);  
+    Serial.printf("# pwm_ur_t:");  
+    for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)pt[i]);  
+    Serial.println();  
+  
+    p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;  
+    p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap; p_isr = isr;  
 }  
 
 // TX-профили по таблице пресетов: 1=FLAT .. 7=MAX (от прозрачного к плотному).  
@@ -408,7 +470,10 @@ static void cli_exec(char* line) {
     }
     else if (strcmp(cmd, "stats") == 0) {  
         cli_stats();  
-    }  
+    }
+    else if (strcmp(cmd, "dump") == 0) {  
+        cli_dump();  
+    }
     else if (strcmp(cmd, "band") == 0) {  
         char* s_lo = strtok(NULL, " \t");  
         char* s_hi = strtok(NULL, " \t");  
