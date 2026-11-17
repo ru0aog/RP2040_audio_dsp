@@ -2,29 +2,15 @@
 // ============================================================================  
 // af_cli.cpp — Serial CLI (Core 0)  
 //  
-// Команды (по одной на строку, завершение \n):  
-//   band <lo> <hi>     — полоса ПФ в Гц, напр. "band 300 3000"  
-//   nt on|off          — автонотч (подавление тональников)  
-//   nr on|off          — шумоподавление  
-//   cw on|off          — телеграфный фильтр (АРУ -> медленный профиль)  
-//   cw freq <hz>       — центральная частота CW (300..3000)  
-//   cw bw <hz>         — полоса CW (80..500)  
-//   cw noise <0..2000> — примесь шума эфира в CW
-//   gain <0..1000>     — ручное усиление при agc off, множитель
-//   agc on|off         — АРУ (off -> ручное усиление, лимитер остаётся)  
-//   bypass on|off      — обход: выход = вход  
-//   voice [N|vol <0..400>] — голосовые сообщения
-//   stats              — диагностика: загрузка ядер, потери, клипы  
-//   banks clr          — перезаписать все банки заводскими пресетами (ребут)
-//   pwm on|off         — PWM-выход (off = несущая заглушена, пин в 0)
-//   ramp on|off        — пила-счётчик вместо DSP (тест целостности потока)
-//   txlr2 on|off       — кроссовер LR2 + раздельный клиппинг полос
-//   txduck on|off      — HF ducking: НЧ приглушается при доминировании ВЧ      
-//   txduckmax <дБx10>  — потолок ослабления НЧ (30 = -3 дБ)      
-//   txexc on|off       — ВЧ-эксайтер: синтез гармоник 2-3 кГц (дефолт on)        
-//   txexcmix <q15>     — подмес эксайтера (3277 = -20 дБ)
-//   txintel on|off     — автобаланс НЧ/ВЧ-полос (этап 7)    
-//   help               — справка    
+// Команды (по одной на строку, завершение \n). Полный список — help.  
+//   RX:  band nt nr rxnotch cw agc gain bypass  
+//        agcref agcmax agcmin limceil nrdepth nrmakeup ntmu nrmu  
+//   TX:  tx txband txap txagc txagcmax txgate txgatehold txgatehyst txgfloor  
+//        tx2band txsplit txlr2 txcomp txcompthr txcompthrlo txcompthrhi  
+//        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
+//        txpres txpresmax txpresfreq txpresq txshelf txshelffreq txshelfq  
+//        txexc txexcmix txmode txclip txnotch txnotchf txpreset txprof  
+//   SYS: stats save load banks pwm voice ramp help  
 // ============================================================================  
 #include <Arduino.h>  
 #include <string.h>  
@@ -43,69 +29,106 @@
 // ---------------------------------------------------------------------------  
 // Справка  
 // ---------------------------------------------------------------------------  
-static void cli_help(void) {  
-    Serial.println("# Команды:");  
-    Serial.println("#   band <lo> <hi>    — полоса ПФ, Гц (напр. band 300 3000)");  
-    Serial.println("#   nt on|off         — автонотч NT");  
-    Serial.println("#   nr on|off         — шумоподавление NR");  
-    Serial.println("#   cw on|off         — телеграфный фильтр");  
-    Serial.println("#   cw freq <hz>      — центральная частота CW (300..3000)");  
-    Serial.println("#   cw bw <hz>        — полоса CW (80..500)");  
-    Serial.println("#   cw noise <0..2000> — примесь шума эфира в CW");
-    Serial.println("#   stats             — диагностика");  
-    Serial.println("#   help / h / ?      — эта справка");  
-    Serial.println("#   save <1..7>       — сохранить настройки в ячейку");  
-    Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");  
-    Serial.println("#   banks             — показать все ячейки");
-    Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)");
-    Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");
-    Serial.println("#   gain <0..8>       — ручное усиление при agc off, множитель (1.0 = единичное)");
-    Serial.println("#   bypass on|off     — обход: выход = вход");  
-    Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест целостности потока)");
-    Serial.println("#   tx on|off         — передающий тракт (PTT: GP8 LOW=TX)");    
-    Serial.println("#   txband <lo> <hi>  — речевая полоса TX, Гц (напр. 300 2700)");  
-    Serial.println("#   txcomp <x10>      — компрессия x10: 10=1:1, 20=2:1, 40=4:1");  
-    Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");    
-    Serial.println("#   txagc <0..32767>  — целевой уровень TX-АРУ (0 = АРУ off)");  
-    Serial.println("#   txgate <0..32767> — порог шумового гейта TX (0 = гейт off)");
-    Serial.println("#   txap on|off       — all-pass симметризатор пиков TX");  
-    Serial.println("#   txmode soft|hard  — тип клиппера TX");
-    Serial.println("#   tx2band on|off    — 2-полосная компрессия TX (split ~900 Гц)");  
-    Serial.println("#   txgfloor <0..65536> — нижняя ступень гейта Q16 (4120=-24дБ, 0=тишина)");  
-    Serial.println("#   txnotch on|off    — узкие нотчи 1/2 кГц против тонов-наводок");
-    Serial.println("#   txpres on|off     — dynamic presence EQ (подъём 2-2.7 кГц по SNR)");  
-    Serial.println("#   txpresmax <дБx10> — потолок подъёма presence (30=+3дБ, 60=+6дБ)");    
-    Serial.println("#   txlr2 on|off      — кроссовер LR2 900 Гц + раздельный клиппинг полос");      
-    Serial.println("#   txduck on|off     — HF ducking: НЧ приглушается при доминировании ВЧ");      
-    Serial.println("#   txduckmax <дБx10> — потолок ослабления НЧ (30 = -3 дБ)");      
-    Serial.println("#   txexc on|off      — ВЧ-эксайтер: гармоники 2-3 кГц (дефолт off)");      
-    Serial.println("#   txexcmix <q15>    — подмес эксайтера (3277 = -20 дБ)");
-    Serial.println("#   txintel on|off    — k_intelligibility: автобаланс НЧ/ВЧ по env_hi/env_lo");    
-    Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");      
-    Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора одной командой");
-    Serial.println("#   txprof <1..7|имя> — TX-профиль: 1 natural, 2 dx, 3 bass, 4 whisper, 5 loud, 6 flat, 7 work");  
-    Serial.println("#   txshelf <дБx10>   — статический подъём ВЧ @1.8к (0=off, 40=+4дБ)");  
-    Serial.println("# GPIO: GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");    
-}  
+static void cli_help(void) {    
+    Serial.println("# === ПРИЁМ (RX) ===");    
+    Serial.println("#   band <lo> <hi>    — полоса ПФ, Гц (напр. band 300 3000)");    
+    Serial.println("#   nt on|off         — автонотч NT");    
+    Serial.println("#   ntmu <0..32768>   — шаг NLMS нотча (эксперт)");    
+    Serial.println("#   nr on|off         — шумоподавление NR");    
+    Serial.println("#   nrmu <0..32768>   — шаг LMS NR (эксперт)");    
+    Serial.println("#   nrdepth <q15>     — глубина подавления NR (32768 = полная)");    
+    Serial.println("#   nrmakeup <q15>    — makeup-gain NR (65536 = x2)");    
+    Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");    
+    Serial.println("#   cw on|off         — телеграфный фильтр");    
+    Serial.println("#   cw freq <hz>      — центральная частота CW (300..3000)");    
+    Serial.println("#   cw bw <hz>        — полоса CW (80..500)");    
+    Serial.println("#   cw noise <0..2000> — примесь шума эфира в CW");  
+    Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
+    Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
+    Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
+    Serial.println("#   agcmin <0.01..1>  — нижний предел АРУ, множитель");    
+    Serial.println("#   limceil <1000..32767> — потолок лимитера");    
+    Serial.println("#   gain <0..8>       — ручное усиление при agc off, множитель (1.0 = единичное)");  
+    Serial.println("#   bypass on|off     — обход: выход = вход");    
+    Serial.println("# === ПЕРЕДАЧА (TX) ===");    
+    Serial.println("#   tx on|off         — передающий тракт (PTT: GP8 LOW=TX)");      
+    Serial.println("#   txband <lo> <hi>  — речевая полоса TX, Гц (напр. 300 2700)");    
+    Serial.println("#   txap on|off       — all-pass симметризатор пиков TX");    
+    Serial.println("#   txagc <0..32767>  — целевой уровень TX-АРУ (0 = АРУ off)");    
+    Serial.println("#   txagcmax <x10>    — потолок TX-АРУ (200 = 20x)");    
+    Serial.println("#   txgate <0..32767> — порог шумового гейта TX (0 = гейт off)");  
+    Serial.println("#   txgatehold <мс>   — hangover гейта (0..2000)");    
+    Serial.println("#   txgatehyst <x10>  — гистерезис гейта (7 = закрытие по thr*0.7)");    
+    Serial.println("#   txgfloor <0..65536> — нижняя ступень гейта Q16 (4120=-24дБ, 0=тишина)");    
+    Serial.println("#   tx2band on|off    — 2-полосная компрессия TX");    
+    Serial.println("#   txsplit <300..3000> — частота кроссовера, Гц");    
+    Serial.println("#   txlr2 on|off      — кроссовер LR2 + раздельный клиппинг полос");        
+    Serial.println("#   txcomp <x10>      — компрессия x10: 10=1:1, 20=2:1, 40=4:1");    
+    Serial.println("#   txcompthr <256..32767>   — порог компрессора 1-полосного");    
+    Serial.println("#   txcompthrlo <256..32767> — порог НЧ-полосы");    
+    Serial.println("#   txcompthrhi <256..32767> — порог ВЧ-полосы");    
+    Serial.println("#   txduck on|off     — HF ducking: НЧ приглушается при доминировании ВЧ");        
+    Serial.println("#   txduckmax <дБx10> — потолок ослабления НЧ (30 = -3 дБ)");        
+    Serial.println("#   txintel on|off    — k_intelligibility: автобаланс НЧ/ВЧ");      
+    Serial.println("#   txinteltgt <q15>  — цель ratio НЧ/ВЧ (32768 = 1.0)");    
+    Serial.println("#   txintelcut <q15>  — потолок ослабления ВЧ (16384 = -6дБ)");    
+    Serial.println("#   txintelboost <q15> — потолок подъёма ВЧ (32768 = +6дБ)");    
+    Serial.println("#   txpres on|off     — dynamic presence EQ (подъём по SNR)");    
+    Serial.println("#   txpresmax <дБx10> — потолок подъёма presence (30=+3дБ, 60=+6дБ)");      
+    Serial.println("#   txpresfreq <500..6000> — центр presence-пика, Гц");    
+    Serial.println("#   txpresq <10..500> — добротность presence x100 (100 = 1.00)");    
+    Serial.println("#   txshelf <дБx10>   — статический подъём ВЧ (0=off, 40=+4дБ)");    
+    Serial.println("#   txshelffreq <500..6000> — частота полки, Гц");    
+    Serial.println("#   txshelfq <10..500> — добротность полки x100");    
+    Serial.println("#   txexc on|off      — ВЧ-эксайтер: гармоники 2-3 кГц");        
+    Serial.println("#   txexcmix <q15>    — подмес эксайтера (3277 = -20 дБ)");  
+    Serial.println("#   txmode soft|hard  — тип клиппера TX");  
+    Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");      
+    Serial.println("#   txnotch on|off    — узкие нотчи против тонов-наводок");  
+    Serial.println("#   txnotchf <f1> <f2> — частоты TX-нотчей, Гц (200..7000)");    
+    Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора");  
+    Serial.println("#   txprof <1..7|имя> — TX-профиль: 1 natural, 2 dx, 3 bass, 4 whisper, 5 loud, 6 flat, 7 work");    
+    Serial.println("# === СИСТЕМА ===");    
+    Serial.println("#   stats             — диагностика");    
+    Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
+    Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");    
+    Serial.println("#   banks             — показать все ячейки");  
+    Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)");  
+    Serial.println("#   pwm on|off        — PWM-выход (off = несущая заглушена)");  
+    Serial.println("#   voice [N|vol <0..400>] — голосовые сообщения");  
+    Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест потока)");  
+    Serial.println("#   help / h / ?      — эта справка");    
+    Serial.println("# === GPIO ===");    
+    Serial.println("# GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");      
+}
   
 // ---------------------------------------------------------------------------  
 // Диагностика  
 // ---------------------------------------------------------------------------  
 static void cli_stats(void) {  
     uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);  
-        Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu.%02lu  bypass=%s  tx=%s\n",
-                  (unsigned long)af_dsp_band_lo_hz(),  
-                  (unsigned long)af_dsp_band_hi_hz(),
-                  af_dsp_notch_on() ? "on" : "off",  
-                  af_dsp_nr_on()    ? "on" : "off",  
-                  af_dsp_cw_on()    ? "on" : "off",  
-                  (unsigned long)af_dsp_cw_freq(),  
-                  (unsigned long)af_dsp_cw_bw(),  
-                  (unsigned long)af_dsp_cw_noise(),
-                  af_dsp_agc_on() ? "on" : "off",  
-                  (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),
-                  af_dsp_bypass_on() ? "on" : "off",
-                  af_dsp_tx_on() ? "on" : "off");
+        Serial.printf("# band=%lu..%lu Hz  nt=%s  nr=%s  cw=%s f0=%lu bw=%lu noise=%lu  agc=%s gain=%lu.%02lu  bypass=%s  tx=%s\n",  
+                  (unsigned long)af_dsp_band_lo_hz(),    
+                  (unsigned long)af_dsp_band_hi_hz(),  
+                  af_dsp_notch_on() ? "on" : "off",    
+                  af_dsp_nr_on()    ? "on" : "off",    
+                  af_dsp_cw_on()    ? "on" : "off",    
+                  (unsigned long)af_dsp_cw_freq(),    
+                  (unsigned long)af_dsp_cw_bw(),    
+                  (unsigned long)af_dsp_cw_noise(),  
+                  af_dsp_agc_on() ? "on" : "off",    
+                  (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),  
+                  af_dsp_bypass_on() ? "on" : "off",  
+                  af_dsp_tx_on() ? "on" : "off");  
+    Serial.printf("# rx: agcref=%ld agcmax=%ld agcmin=%ld limceil=%ld nrdepth=%ld nrmakeup=%ld ntmu=%ld nrmu=%ld\n",  
+                  (long)af_dsp_agcref(),  
+                  (long)(af_dsp_agcmax() * 100.0f + 0.5f),  
+                  (long)(af_dsp_agcmin() * 100.0f + 0.5f),  
+                  (long)af_dsp_limceil(),  
+                  (long)af_dsp_nrdepth(),  
+                  (long)af_dsp_nrmakeup(),  
+                  (long)af_dsp_ntmu(),  
+                  (long)af_dsp_nrmu());  
     Serial.printf("# ramp=%s\n", af_dsp_ramp_on() ? "on" : "off");    
     Serial.printf("# tx: band=%lu..%lu Hz  comp=%lu:1(x10)  clip=%lu  agc=%lu  gate=%lu  gfloor=%lu  ap=%s  mode=%s  2band=%s  notch=%s\n",      
                   (unsigned long)af_tx_lo_hz(),          
@@ -119,16 +142,28 @@ static void cli_stats(void) {
                   af_tx_softclip() ? "soft" : "hard",    
                   af_tx_2band() ? "on" : "off",  
                   af_tx_notch() ? "on" : "off");
-    Serial.printf("  pres=%s pmax=%lu lr2=%s duck=%s dmax=%lu exc=%s emix=%lu intel=%s shelf=%lu\n",          
-                  af_tx_pres() ? "on" : "off",          
-                  (unsigned long)af_tx_presmax(),        
-                  af_tx_lr2() ? "on" : "off",      
-                  af_tx_duck() ? "on" : "off",      
-                  (unsigned long)af_tx_duckmax(),    
-                  af_tx_exc() ? "on" : "off",    
-                  (unsigned long)af_tx_excmix(),  
-                  af_tx_intel() ? "on" : "off",
-                  (unsigned long)af_tx_shelf());
+    Serial.printf("  pres=%s pmax=%lu lr2=%s duck=%s dmax=%lu exc=%s emix=%lu intel=%s shelf=%lu\n",            
+                  af_tx_pres() ? "on" : "off",            
+                  (unsigned long)af_tx_presmax(),          
+                  af_tx_lr2() ? "on" : "off",        
+                  af_tx_duck() ? "on" : "off",        
+                  (unsigned long)af_tx_duckmax(),      
+                  af_tx_exc() ? "on" : "off",      
+                  (unsigned long)af_tx_excmix(),    
+                  af_tx_intel() ? "on" : "off",  
+                  (unsigned long)af_tx_shelf());  
+    Serial.printf("  split=%lu compthr=%ld/%ld/%ld agcmax=%lu gatehold=%lu gatehyst=%lu notchf=%lu/%lu\n",  
+                  (unsigned long)af_tx_split(),  
+                  (long)af_tx_compthr(), (long)af_tx_compthrlo(), (long)af_tx_compthrhi(),  
+                  (unsigned long)af_tx_agcmax(),  
+                  (unsigned long)af_tx_gatehold(),  
+                  (unsigned long)af_tx_gatehyst(),  
+                  (unsigned long)af_tx_notch1(),  
+                  (unsigned long)af_tx_notch2());  
+    Serial.printf("  intel: tgt=%ld cut=%ld boost=%ld  pres: f=%lu q=%lu  shelf: f=%lu q=%lu\n",  
+                  (long)af_tx_inteltgt(), (long)af_tx_intelcut(), (long)af_tx_intelboost(),  
+                  (unsigned long)af_tx_presfreq(), (unsigned long)af_tx_presq(),  
+                  (unsigned long)af_tx_shelffreq(), (unsigned long)af_tx_shelfq());  
     Serial.printf("# txenv: agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",  
                   (unsigned long)af_tx_agc_env(),  
                   (unsigned long)af_tx_agc_gain(),  
@@ -170,16 +205,28 @@ static void cli_stats(void) {
 // Каждый профиль — полный набор параметров тракта (как af_store_load для RX).  
 static void tx_apply_profile(uint8_t idx) {  
     // общий базис: рабочая точка, от которой профили отличаются деталями  
-    af_tx_set_band(300, 2700);  
-    af_tx_set_ratio(40);  af_tx_set_clip(26000);  af_tx_set_agc(18000);  
-    af_tx_set_gate(AF_TX_GATE_THR);  af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);  
-    af_tx_set_ap(true);  af_tx_set_softclip(true);  af_tx_set_2band(true);  
-    af_tx_set_pres(true);  af_tx_set_presmax(15);  
-    af_tx_set_lr2(true);  
-    af_tx_set_duck(true);  af_tx_set_duckmax(30);  
-    af_tx_set_exc(true);   af_tx_set_excmix(3277);  
-    af_tx_set_intel(true); af_tx_set_shelf(0);  
-    af_tx_set_notch(true);  
+    af_tx_set_band(300, 2700);    
+    af_tx_set_ratio(40);  af_tx_set_clip(26000);  af_tx_set_agc(18000);    
+    af_tx_set_gate(AF_TX_GATE_THR);  af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);    
+    af_tx_set_ap(true);  af_tx_set_softclip(true);  af_tx_set_2band(true);    
+    af_tx_set_pres(true);  af_tx_set_presmax(15);    
+    af_tx_set_lr2(true);    
+    af_tx_set_duck(true);  af_tx_set_duckmax(30);    
+    af_tx_set_exc(true);   af_tx_set_excmix(3277);    
+    af_tx_set_intel(true); af_tx_set_shelf(0);    
+    af_tx_set_notch(true);    
+    // Новые параметры — к дефолтам из af_config.h    
+    af_tx_set_compthr(8192);    
+    af_tx_set_compthrlo(AF_TX_COMP_THR_LO);  af_tx_set_compthrhi(AF_TX_COMP_THR_HI);    
+    af_tx_set_split(AF_TX_SPLIT_HZ);    
+    af_tx_set_gatehold(AF_TX_GATE_HOLD_MS);  af_tx_set_gatehyst(AF_TX_GATE_HYST_X10);    
+    af_tx_set_agcmax(AF_TX_AGC_MAX_X10);    
+    af_tx_set_inteltgt(AF_TX_INTEL_TGT_Q15);    
+    af_tx_set_intelcut(AF_TX_INTEL_CUT_Q15);    
+    af_tx_set_intelboost(AF_TX_INTEL_BOOST_Q15);    
+    af_tx_set_presfreq(AF_TX_PRES_FREQ_HZ);  af_tx_set_presq(AF_TX_PRES_Q_X100);    
+    af_tx_set_shelffreq(AF_TX_SHELF_FREQ_HZ); af_tx_set_shelfq(AF_TX_SHELF_Q_X100);    
+    af_tx_set_notchf(AF_TX_NOTCH1_HZ, AF_TX_NOTCH2_HZ);    
   
     switch (idx) {  
     case 1: // natural — мягкий повседневный  
@@ -618,9 +665,20 @@ static void cli_exec(char* line) {
             af_tx_set_duckmax(AF_TX_DUCK_MAX_DB_X10);    
             af_tx_set_exc(AF_TX_EXC_ON_DEFAULT != 0);    
             af_tx_set_excmix(AF_TX_EXC_MIX_Q15);    
-            af_tx_set_intel(AF_TX_INTEL_ON_DEFAULT != 0);
-            af_tx_set_shelf(AF_TX_SHELF_DB_X10_DEFAULT);
-        }    
+            af_tx_set_intel(AF_TX_INTEL_ON_DEFAULT != 0);  
+            af_tx_set_shelf(AF_TX_SHELF_DB_X10_DEFAULT);  
+            af_tx_set_compthr(8192);    
+            af_tx_set_compthrlo(AF_TX_COMP_THR_LO);  af_tx_set_compthrhi(AF_TX_COMP_THR_HI);    
+            af_tx_set_split(AF_TX_SPLIT_HZ);    
+            af_tx_set_gatehold(AF_TX_GATE_HOLD_MS);  af_tx_set_gatehyst(AF_TX_GATE_HYST_X10);    
+            af_tx_set_agcmax(AF_TX_AGC_MAX_X10);    
+            af_tx_set_inteltgt(AF_TX_INTEL_TGT_Q15);    
+            af_tx_set_intelcut(AF_TX_INTEL_CUT_Q15);    
+            af_tx_set_intelboost(AF_TX_INTEL_BOOST_Q15);    
+            af_tx_set_presfreq(AF_TX_PRES_FREQ_HZ);  af_tx_set_presq(AF_TX_PRES_Q_X100);    
+            af_tx_set_shelffreq(AF_TX_SHELF_FREQ_HZ); af_tx_set_shelfq(AF_TX_SHELF_Q_X100);    
+            af_tx_set_notchf(AF_TX_NOTCH1_HZ, AF_TX_NOTCH2_HZ);    
+        }      
         else { Serial.println("# ERR: txpreset <aggro|max|flat|def>"); return; }    
     
         Serial.printf("# OK txpreset=%s  band=%lu..%lu comp=%lu clip=%lu agc=%lu gate=%lu gfloor=%lu ap=%s mode=%s 2band=%s\n",    
@@ -655,6 +713,16 @@ static void cli_exec(char* line) {
         tx_apply_profile(idx);  
         Serial.printf("# OK txprof=%u\n", idx);  
     }  
+    
+    else if (strcmp(cmd, "txnotchf") == 0) {    
+        char* f1 = strtok(NULL, " \t");    
+        char* f2 = strtok(NULL, " \t");    
+        if (f1 == NULL || f2 == NULL) { Serial.println("# ERR: txnotchf <f1> <f2>"); return; }    
+        af_tx_set_notchf((uint32_t)strtoul(f1, NULL, 10),    
+                         (uint32_t)strtoul(f2, NULL, 10));    
+        Serial.printf("# OK txnotchf=%lu/%lu Hz\n",    
+                      (unsigned long)af_tx_notch1(), (unsigned long)af_tx_notch2());    
+    }
 
     else if (strncmp(cmd, "txnotch", 7) == 0) {  
         char* v = strtok(NULL, " \t");  
@@ -662,7 +730,18 @@ static void cli_exec(char* line) {
         else if (v && strcmp(v, "off") == 0) { af_tx_set_notch(false); Serial.println("# OK txnotch=off"); }  
         else Serial.println("# ERR: txnotch on|off");  
     }  
-
+    else if (strcmp(cmd, "txpresfreq") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txpresfreq <500..6000>"); return; }    
+        af_tx_set_presfreq((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txpresfreq=%lu Hz\n", (unsigned long)af_tx_presfreq());    
+    }    
+    else if (strcmp(cmd, "txpresq") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txpresq <10..500>"); return; }    
+        af_tx_set_presq((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txpresq=%lu\n", (unsigned long)af_tx_presq());    
+    }    
     else if (strncmp(cmd, "txpresmax", 9) == 0) {  
         char* v = strtok(NULL, " \t");  
         if (v == NULL) { Serial.println("# ERR: txpresmax <дБx10>"); return; }  
@@ -709,21 +788,141 @@ static void cli_exec(char* line) {
         af_tx_set_exc(strncmp(v, "on", 2) == 0);      
         Serial.printf("# OK txexc=%s\n", af_tx_exc() ? "on" : "off");      
     }      
-
+    else if (strcmp(cmd, "txinteltgt") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txinteltgt <q15>"); return; }    
+        af_tx_set_inteltgt((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK txinteltgt=%ld\n", (long)af_tx_inteltgt());    
+    }    
+    else if (strcmp(cmd, "txintelcut") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txintelcut <q15>"); return; }    
+        af_tx_set_intelcut((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK txintelcut=%ld\n", (long)af_tx_intelcut());    
+    }    
+    else if (strcmp(cmd, "txintelboost") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txintelboost <q15>"); return; }    
+        af_tx_set_intelboost((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK txintelboost=%ld\n", (long)af_tx_intelboost());    
+    }    
     else if (strncmp(cmd, "txintel", 7) == 0) {    
         char* v = strtok(NULL, " \t");    
         if (v == NULL) { Serial.println("# ERR: txintel on|off"); return; }    
         af_tx_set_intel(strncmp(v, "on", 2) == 0);    
         Serial.printf("# OK txintel=%s\n", af_tx_intel() ? "on" : "off");    
     }    
-  
+    else if (strcmp(cmd, "txshelffreq") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txshelffreq <500..6000>"); return; }    
+        af_tx_set_shelffreq((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txshelffreq=%lu Hz\n", (unsigned long)af_tx_shelffreq());    
+    }    
+    else if (strcmp(cmd, "txshelfq") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txshelfq <10..500>"); return; }    
+        af_tx_set_shelfq((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txshelfq=%lu\n", (unsigned long)af_tx_shelfq());    
+    }    
     else if (strncmp(cmd, "txshelf", 7) == 0) {  
         const char* v = strtok(NULL, " ");  
         if (!v) { Serial.println("# ERR: txshelf <дБx10>"); return; }  
         af_tx_set_shelf((uint32_t)atoi(v));  
         Serial.printf("# OK txshelf=%lu\n", (unsigned long)af_tx_shelf());  
     }  
-
+    // --- RX: АРУ/лимитер/NR (этап 1) ---    
+    else if (strcmp(cmd, "agcref") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: agcref <1000..32767>"); return; }    
+        af_dsp_set_agcref((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK agcref=%ld\n", (long)af_dsp_agcref());    
+    }    
+    else if (strcmp(cmd, "agcmax") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: agcmax <1..1000>"); return; }    
+        af_dsp_set_agcmax(strtof(v, NULL));    
+        Serial.printf("# OK agcmax=%ld\n", (long)(af_dsp_agcmax() * 100.0f + 0.5f));    
+    }    
+    else if (strcmp(cmd, "agcmin") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: agcmin <0.01..1>"); return; }    
+        af_dsp_set_agcmin(strtof(v, NULL));    
+        Serial.printf("# OK agcmin=%ld\n", (long)(af_dsp_agcmin() * 100.0f + 0.5f));    
+    }    
+    else if (strcmp(cmd, "limceil") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: limceil <1000..32767>"); return; }    
+        af_dsp_set_limceil((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK limceil=%ld\n", (long)af_dsp_limceil());    
+    }    
+    else if (strcmp(cmd, "nrdepth") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: nrdepth <0..65536>"); return; }    
+        af_dsp_set_nrdepth((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK nrdepth=%ld\n", (long)af_dsp_nrdepth());    
+    }    
+    else if (strcmp(cmd, "nrmakeup") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: nrmakeup <0..131072>"); return; }    
+        af_dsp_set_nrmakeup((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK nrmakeup=%ld\n", (long)af_dsp_nrmakeup());    
+    }    
+    else if (strcmp(cmd, "ntmu") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: ntmu <0..32768>"); return; }    
+        af_dsp_set_ntmu((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK ntmu=%ld\n", (long)af_dsp_ntmu());    
+    }    
+    else if (strcmp(cmd, "nrmu") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: nrmu <0..32768>"); return; }    
+        af_dsp_set_nrmu((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK nrmu=%ld\n", (long)af_dsp_nrmu());    
+    }    
+  
+    // --- TX: пороги/частоты/тайминги (этап 2) ---    
+    else if (strcmp(cmd, "txcompthr") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txcompthr <256..32767>"); return; }    
+        af_tx_set_compthr((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK txcompthr=%ld\n", (long)af_tx_compthr());    
+    }    
+    else if (strcmp(cmd, "txcompthrlo") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txcompthrlo <256..32767>"); return; }    
+        af_tx_set_compthrlo((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK txcompthrlo=%ld\n", (long)af_tx_compthrlo());    
+    }    
+    else if (strcmp(cmd, "txcompthrhi") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txcompthrhi <256..32767>"); return; }    
+        af_tx_set_compthrhi((int32_t)strtol(v, NULL, 10));    
+        Serial.printf("# OK txcompthrhi=%ld\n", (long)af_tx_compthrhi());    
+    }    
+    else if (strcmp(cmd, "txsplit") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txsplit <300..3000>"); return; }    
+        af_tx_set_split((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txsplit=%lu Hz\n", (unsigned long)af_tx_split());    
+    }    
+    else if (strcmp(cmd, "txgatehold") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txgatehold <0..2000>"); return; }    
+        af_tx_set_gatehold((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txgatehold=%lu ms\n", (unsigned long)af_tx_gatehold());    
+    }    
+    else if (strcmp(cmd, "txgatehyst") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txgatehyst <1..10>"); return; }    
+        af_tx_set_gatehyst((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txgatehyst=%lu\n", (unsigned long)af_tx_gatehyst());    
+    }    
+    else if (strcmp(cmd, "txagcmax") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txagcmax <10..1000>"); return; }    
+        af_tx_set_agcmax((uint32_t)strtoul(v, NULL, 10));    
+        Serial.printf("# OK txagcmax=%lu\n", (unsigned long)af_tx_agcmax());    
+    }    
 
     // вставлять сюда  
   
