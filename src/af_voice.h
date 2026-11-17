@@ -10,11 +10,14 @@ typedef enum {
     VOICE_NR_ON,          // 04: "адаптивное шумоподавление включено"  
     VOICE_BYPASS_ON,      // 05: "режим обхода включен"  
     VOICE_AGC_OFF,        // 06: "АРУ выключена"  
-    VOICE_BANK_1,         // заготовки — клипов пока нет  
-    VOICE_BANK_2,  
-    VOICE_BANK_4,  
-    VOICE_BYPASS_OFF,  
-    VOICE_COUNT  
+    VOICE_PROF_1,         // 07: "профиль один"    
+    VOICE_PROF_2,         // 08: "профиль два"    
+    VOICE_PROF_3,         // 09: "профиль три"    
+    VOICE_PROF_4,         // 10: "профиль четыре"    
+    VOICE_PROF_5,         // 11: "профиль пять"    
+    VOICE_PROF_6,         // 12: "профиль шесть"    
+    VOICE_PROF_7,         // 13: "профиль семь"    
+    VOICE_COUNT    
 } af_voice_id_t;
   
 void af_voice_init(void);  

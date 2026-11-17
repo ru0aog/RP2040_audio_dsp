@@ -20,7 +20,7 @@ for i in range(out_n):
     s = int(s * 0.6)          # громкость ~60%, чтобы не клипповать  
     out.append(max(-32768, min(32767, s)))  
   
-with open('clip_voice.inc', 'w') as f:  
+with open('voice_.inc', 'w') as f:  
     f.write('static const int16_t clip_voice[] = {\n')  
     for i in range(0, len(out), 12):  
         f.write('    ' + ','.join(str(x) for x in out[i:i+12]) + ',\n')  

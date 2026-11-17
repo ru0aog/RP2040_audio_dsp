@@ -90,9 +90,10 @@ static void apply_bank(uint8_t code) {
         Serial.println("[GPIO] bank pins released -> manual mode (settings kept)"); 
         return;    
     }
-    if (af_store_load(code)) {
-        af_led_set_bank(code);   // code = 0..7 с GP2..GP4
-        if (!af_dsp_agc_on()) af_voice_play(VOICE_AGC_OFF);
+    if (af_store_load(code)) {  
+        af_led_set_bank(code);   // code = 0..7 с GP2..GP4  
+        af_voice_play((af_voice_id_t)(VOICE_PROF_1 + code - 1));  // "профиль N"  
+        if (!af_dsp_agc_on()) af_voice_play(VOICE_AGC_OFF);  
         Serial.printf("[GPIO] bank=%u -> loaded band=%lu..%lu cw=%s f0=%lu bw=%lu\n",  
                       code,  
                       (unsigned long)af_dsp_band_lo_hz(),  
