@@ -715,12 +715,13 @@ static void cli_exec(char* line) {
             Serial.println("# ERR: load <0..7>");  
             return;  
         } 
-        if (af_store_load(idx)) {  
-            af_led_set_bank((uint8_t)idx);   // цвет вспышки = загруженный банк  
-            Serial.printf("# OK loaded bank %d\n", idx);
-        } else {  
-            Serial.printf("# bank %d: empty — ignored\n", idx);  
-        }  
+        if (af_store_load(idx)) {    
+            af_led_set_bank((uint8_t)idx);   // цвет вспышки = загруженный банк    
+            af_voice_play((af_voice_id_t)(VOICE_PROF_1 + idx - 1));  // "профиль N"  
+            Serial.printf("# OK loaded bank %d\n", idx);  
+        } else {    
+            Serial.printf("# bank %d: empty — ignored\n", idx);    
+        }    
     }  
     else if (strcmp(cmd, "banks") == 0) {  
         char* sub = strtok(NULL, " \t");  
