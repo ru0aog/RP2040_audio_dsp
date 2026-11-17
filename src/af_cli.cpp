@@ -332,16 +332,25 @@ static void cli_dump(void) {
             Serial.printf("# WARN out: дропы блоков usb=%lu pwm=%lu\n",    
                           (unsigned long)d_dU, (unsigned long)d_dP);    
         }    
-        if (af_usb_mounted() && d_urU != 0) {    
-            ok = false;    
-            Serial.printf("# WARN usb: underruns +%lu при подключённом хосте\n",    
-                          (unsigned long)d_urU);    
-        }    
-        if (af_pwm_is_enabled() && d_urP != 0) {    
-            ok = false;    
-            Serial.printf("# WARN pwm: underruns +%lu — выход голодает\n",    
-                          (unsigned long)d_urP);    
-        }    
+        // urU растёт и когда хост не читает поток (буфер полон, av=2048) —      
+        // это не голодание, а отсутствие потребителя. WARN только если      
+        // хост реально забирал данные (avail_max < полного буфера).      
+        if (af_usb_mounted() && d_urU != 0 && af_usb_avail_max() < 2048) {      
+            ok = false;      
+            Serial.printf("# WARN usb: underruns +%lu при читающем хосте\n",      
+                          (unsigned long)d_urU);      
+        }      
+        // urP — «запрос при пустой очереди»: PWM-ISR опрашивает очередь      
+        // чаще, чем Core 1 публикует блоки, счётчик растёт всегда.      
+        // Реальный критерий голодания — af_pwm_underruns (пропуск выхода).      
+        const uint32_t pwm_ur_now = af_pwm_underruns();      
+        static uint32_t p_pwm_ur2 = 0;      
+        if (af_pwm_is_enabled() && (pwm_ur_now - p_pwm_ur2) != 0) {      
+            ok = false;      
+            Serial.printf("# WARN pwm: underruns +%lu — выход голодает\n",      
+                          (unsigned long)(pwm_ur_now - p_pwm_ur2));      
+        }      
+        p_pwm_ur2 = pwm_ur_now;      
         if (af_dsp_clip_count() != 0) {    
             ok = false;    
             Serial.printf("# WARN clip: клиппинг выхода, count=%lu\n",    
