@@ -332,14 +332,31 @@ static void cli_dump(void) {
             Serial.printf("# WARN out: дропы блоков usb=%lu pwm=%lu\n",    
                           (unsigned long)d_dU, (unsigned long)d_dP);    
         }    
-        // urU растёт и когда хост не читает поток (буфер полон, av=2048) —      
-        // это не голодание, а отсутствие потребителя. WARN только если      
-        // хост реально забирал данные (avail_max < полного буфера).      
-        if (af_usb_mounted() && d_urU != 0 && af_usb_avail_max() < 2048) {      
-            ok = false;      
-            Serial.printf("# WARN usb: underruns +%lu при читающем хосте\n",      
-                          (unsigned long)d_urU);      
-        }      
+        // urU — паддинг кадров при пустой out_usb: хост (ОС) читает эндпоинт    
+        // всегда, дефицит источника ~1% — штатно и неслышно (af_usb.cpp).    
+        // WARN только при реальных потерях: дропы публикации (d_dU выше)    
+        // или перезаправки очереди (reprimes — дно + уход на заправку).    
+        // USB-здоровье оцениваем только когда хост реально читает поток.  
+        // Признак чтения — не blocks_rx (он растёт при записи в буфер  
+        // AudioTools всегда), а rs_adj: при нечитающем хосте ресемплер  
+        // стоит на -48000 mHz (буфер полон, av=2048). При чтении rs  
+        // колеблется около нуля.  
+        if (af_usb_mounted() && af_usb_rs_adj_mhz() > -40000) {  
+            if (d_urU != 0) {  
+                Serial.printf("# INFO usb: паддинг +%lu фреймов (штатно при читающем хосте)\n",  
+                              (unsigned long)d_urU);  
+            }  
+            const uint32_t rpr_now = af_usb_reprimes();  
+            static uint32_t p_rpr = 0;  
+            if (rpr_now - p_rpr != 0) {  
+                ok = false;  
+                Serial.printf("# WARN usb: reprimes +%lu — очередь уходила на дно\n",  
+                              (unsigned long)(rpr_now - p_rpr));  
+            }  
+            p_rpr = rpr_now;  
+        } else {  
+            Serial.println("# INFO usb: хост не читает поток (av=2048, rs=-48000mHz)");  
+        }  
         // urP — «запрос при пустой очереди»: PWM-ISR опрашивает очередь      
         // чаще, чем Core 1 публикует блоки, счётчик растёт всегда.      
         // Реальный критерий голодания — af_pwm_underruns (пропуск выхода).      
