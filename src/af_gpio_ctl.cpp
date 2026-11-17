@@ -40,11 +40,12 @@ uint8_t af_gpio_bank_code(void) { return bank_code; }
 // ---------------------------------------------------------------------------  
 static void apply_nr(bool grounded) {      
     const bool was_on = af_dsp_nr_on();             // состояние до вызова    
-    if (!af_dsp_set_nr(grounded)) {    
-        Serial.printf("[GPIO] nr: rejected (%s)\n",        
-                      af_dsp_cw_on() ? "CW on" : "NT on");        
-        return;                                     // голос не играем — NR не включился    
-    }    
+    if (!af_dsp_set_nr(grounded)) {      
+        Serial.printf("[GPIO] GP%u -> nr: rejected (%s)\n",          
+                      ctl_nr.pin,  
+                      af_dsp_cw_on() ? "CW on" : "NT on");          
+        return;                                     // голос не играем — NR не включился      
+    }      
     if (!grounded && !was_on) return;               // отпускание без включения — молчим    
     Serial.printf("[GPIO] GP%u %s -> nr=%s\n",      
                   ctl_nr.pin, grounded ? "GND" : "open",      
@@ -86,7 +87,7 @@ static void apply_bank(uint8_t code) {
     bank_code = code;  
     if (code == 0) {    
         af_led_set_bank(0);          // зелёный — ручной режим  
-        Serial.println("[GPIO] bank=0 -> manual mode (console)");    
+        Serial.println("[GPIO] bank pins released -> manual mode (settings kept)"); 
         return;    
     }
     if (af_store_load(code)) {
