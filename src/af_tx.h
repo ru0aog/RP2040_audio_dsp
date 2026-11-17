@@ -80,5 +80,52 @@ void     af_tx_set_intel(bool on);
 bool     af_tx_intel(void);  
 uint32_t af_tx_g_intel(void);  
 
-void     af_tx_set_shelf(uint32_t db_x10);   // подъём ВЧ, дБ x10 (0 = off)  
-uint32_t af_tx_shelf(void);  
+void     af_tx_set_shelf(uint32_t db_x10);   // подъём ВЧ, дБ x10 (0 = off)    
+uint32_t af_tx_shelf(void);    
+  
+// Пороги компрессора (1-полосный / НЧ / ВЧ), 256..32767    
+void     af_tx_set_compthr(int32_t v);    
+void     af_tx_set_compthrlo(int32_t v);    
+void     af_tx_set_compthrhi(int32_t v);    
+int32_t  af_tx_compthr(void);    
+int32_t  af_tx_compthrlo(void);    
+int32_t  af_tx_compthrhi(void);    
+  
+// Частота кроссовера 2-полосной компрессии, 300..3000 Гц    
+void     af_tx_set_split(uint32_t hz);    
+uint32_t af_tx_split(void);    
+  
+// Гейт: hangover 0..2000 мс, гистерезис x10 (7 = закрытие по thr*0.7)    
+void     af_tx_set_gatehold(uint32_t ms);    
+void     af_tx_set_gatehyst(uint32_t x10);    
+uint32_t af_tx_gatehold(void);    
+uint32_t af_tx_gatehyst(void);    
+  
+// Потолок АРУ, x10 (200 = 20x)    
+void     af_tx_set_agcmax(uint32_t x10);    
+uint32_t af_tx_agcmax(void);    
+  
+// k_intelligibility: цель ratio и потолки коррекции, Q15    
+void     af_tx_set_inteltgt(int32_t v);    
+void     af_tx_set_intelcut(int32_t v);    
+void     af_tx_set_intelboost(int32_t v);    
+int32_t  af_tx_inteltgt(void);    
+int32_t  af_tx_intelcut(void);    
+int32_t  af_tx_intelboost(void);    
+  
+// Presence EQ: центр пика 500..6000 Гц, добротность x100 (10..500)    
+void     af_tx_set_presfreq(uint32_t hz);    
+uint32_t af_tx_presfreq(void);    
+void     af_tx_set_presq(uint32_t q_x100);    
+uint32_t af_tx_presq(void);    
+  
+// High-shelf: частота 500..6000 Гц, добротность x100 (10..500)    
+void     af_tx_set_shelffreq(uint32_t hz);    
+uint32_t af_tx_shelffreq(void);    
+void     af_tx_set_shelfq(uint32_t q_x100);    
+uint32_t af_tx_shelfq(void);    
+  
+// Частоты TX-нотчей, 200..7000 Гц каждая    
+void     af_tx_set_notchf(uint32_t f1, uint32_t f2);    
+uint32_t af_tx_notch1(void);    
+uint32_t af_tx_notch2(void);    

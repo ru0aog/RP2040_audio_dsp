@@ -106,9 +106,12 @@ static volatile int32_t  tx_makeup_q15 =                          // 32767/t, Q1
     (int32_t)(((int64_t)32767 << 15) / AF_TX_CLIP_DEFAULT);    
 static volatile int32_t  tx_inv_3t2_q31 =                         // 1/(3t^2), Q31    
     (int32_t)(((int64_t)1 << 31) / (3LL * AF_TX_CLIP_DEFAULT * AF_TX_CLIP_DEFAULT));    
-static uint32_t tx_agc_target = AF_TX_AGC_TARGET;  // целевой уровень АРУ  
-static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)    
-static volatile int32_t tx_gate_floor = AF_TX_GATE_FLOOR_Q16; // нижняя ступень, Q16  
+static uint32_t tx_agc_target = AF_TX_AGC_TARGET;  // целевой уровень АРУ    
+static uint32_t tx_gate_thr   = AF_TX_GATE_THR;    // порог гейта (0 = off)      
+static volatile int32_t tx_gate_floor = AF_TX_GATE_FLOOR_Q16; // нижняя ступень, Q16    
+static volatile uint32_t tx_agc_max_x10   = AF_TX_AGC_MAX_X10;    // потолок АРУ, x10    
+static volatile uint32_t tx_gate_hold_ms  = AF_TX_GATE_HOLD_MS;   // hangover, мс    
+static volatile uint32_t tx_gate_hyst_x10 = AF_TX_GATE_HYST_X10;  // гистерезис, x10    
 static uint32_t agc_env       = 0;                 // EMA огибающей АРУ, Q16
 static int32_t  tx_agc_gain_q15 = 32768;           // последний gain АРУ (debug)  
 static uint32_t gate_gain     = 0;                 // gain гейта, Q16 (0..65536)  
@@ -122,18 +125,24 @@ static uint8_t comp_blk_cnt      = 0;             // счётчик пересч
 static volatile uint8_t  tx_ap_on    = AF_TX_AP_ON_DEFAULT;  
 static volatile uint8_t  tx_softclip = AF_TX_SOFTCLIP_ON_DEFAULT;  
 static int32_t ap_x1 = 0, ap_y1 = 0;   // состояние all-pass  
-static volatile uint8_t  tx_2band_on = AF_TX_2BAND_ON_DEFAULT;
-static volatile uint8_t  tx_notch_on = AF_TX_NOTCH_ON_DEFAULT;  
-// Коэффициенты нотчей Q15: b = {1, -2cos(w), 1}, a = {1, -2r cos(w), r^2}  
-static int32_t n1_b1 = 0, n1_a1 = 0, n1_a2 = 0;  
-static int32_t n2_b1 = 0, n2_a1 = 0, n2_a2 = 0;  
+static volatile uint8_t  tx_2band_on = AF_TX_2BAND_ON_DEFAULT;  
+static volatile uint8_t  tx_notch_on = AF_TX_NOTCH_ON_DEFAULT;    
+static volatile uint32_t tx_split_hz    = AF_TX_SPLIT_HZ;      // частота кроссовера    
+static volatile int32_t  tx_split_k_q15 = AF_TX_SPLIT_K_Q15;   // k старого split, Q15    
+static volatile uint32_t tx_notch1_hz   = AF_TX_NOTCH1_HZ;     // частота 1-го нотча    
+static volatile uint32_t tx_notch2_hz   = AF_TX_NOTCH2_HZ;     // частота 2-го нотча    
+// Коэффициенты нотчей Q15: b = {1, -2cos(w), 1}, a = {1, -2r cos(w), r^2}    
+static int32_t n1_b1 = 0, n1_a1 = 0, n1_a2 = 0;    
+static int32_t n2_b1 = 0, n2_a1 = 0, n2_a2 = 0;    
 static int32_t n1_x1 = 0, n1_x2 = 0, n1_y1 = 0, n1_y2 = 0;  
 static int32_t n2_x1 = 0, n2_x2 = 0, n2_y1 = 0, n2_y2 = 0;  
 static uint16_t tx_gate_hold = 0;   // счётчик hangover, в отсчётах @AF_FS_OUT_HZ
 
 // --- Этап 2: Dynamic Presence EQ (SNR-адаптивный) ---  
-static volatile uint8_t  tx_pres_on    = AF_TX_PRES_ON_DEFAULT;  
-static volatile int32_t  tx_presmax_q15 = AF_TX_PRES_MAX_Q15;  // потолок подъёма, Q15  
+static volatile uint8_t  tx_pres_on    = AF_TX_PRES_ON_DEFAULT;    
+static volatile int32_t  tx_presmax_q15 = AF_TX_PRES_MAX_Q15;  // потолок подъёма, Q15    
+static volatile uint32_t tx_pres_freq_hz = AF_TX_PRES_FREQ_HZ; // центр пика, Гц    
+static volatile uint32_t tx_pres_q_x100  = AF_TX_PRES_Q_X100;  // добротность x100    
   
 // Отвод env_hi_pre: HP ~1.5 кГц (биквад) + EMA — после АРУ, ДО гейта.  
 // Источник для k_dyn и noise floor (env_hi компрессора в паузах = 0).  
@@ -181,18 +190,25 @@ static int64_t exc_env_q16 = (int64_t)256 << 16;               // EMA |hi|, Q16
 static uint8_t exc_decim   = 0;                                // дециматор EMA ÷2             
   
 // --- Этап 7: k_intelligibility (автобаланс НЧ/ВЧ) ---    
-static volatile uint8_t tx_intel_on = AF_TX_INTEL_ON_DEFAULT;    
-static int32_t g_intel_q15    = 32768;   // сглаженный gain ВЧ-полосы, Q15    
-static int32_t g_intel_tgt_q15 = 32768;  // цель gain (per-block)    
-static uint8_t intel_blk_cnt  = 0;       // счётчик пересчёта         
+static volatile uint8_t tx_intel_on = AF_TX_INTEL_ON_DEFAULT;      
+static volatile int32_t tx_intel_tgt_q15   = AF_TX_INTEL_TGT_Q15;    // цель ratio, Q15    
+static volatile int32_t tx_intel_cut_q15   = AF_TX_INTEL_CUT_Q15;    // потолок ослабления    
+static volatile int32_t tx_intel_boost_q15 = AF_TX_INTEL_BOOST_Q15;  // потолок подъёма    
+static int32_t g_intel_q15    = 32768;   // сглаженный gain ВЧ-полосы, Q15      
+static int32_t g_intel_tgt_q15 = 32768;  // цель gain (per-block)      
+static uint8_t intel_blk_cnt  = 0;       // счётчик пересчёта           
   
 // --- High-shelf полка (вариант A): статический подъём ВЧ ---  
-static uint32_t tx_shelf_db_x10 = AF_TX_SHELF_DB_X10_DEFAULT;  // 0 = off  
-static int32_t sh_x1 = 0, sh_x2 = 0, sh_y1 = 0, sh_y2 = 0;  
-static int32_t sh_b0 = 0, sh_b1 = 0, sh_b2 = 0, sh_a1 = 0, sh_a2 = 0;     
-
-// Порог компрессора — фиксированный, ~25% шкалы.    
-#define TX_COMP_THR   8192    
+static uint32_t tx_shelf_db_x10 = AF_TX_SHELF_DB_X10_DEFAULT;  // 0 = off    
+static volatile uint32_t tx_shelf_freq_hz = AF_TX_SHELF_FREQ_HZ;  // частота полки    
+static volatile uint32_t tx_shelf_q_x100  = AF_TX_SHELF_Q_X100;   // добротность x100    
+static int32_t sh_x1 = 0, sh_x2 = 0, sh_y1 = 0, sh_y2 = 0;    
+static int32_t sh_b0 = 0, sh_b1 = 0, sh_b2 = 0, sh_a1 = 0, sh_a2 = 0;       
+  
+// Пороги компрессора — runtime (дефайны = значения по умолчанию).    
+static volatile int32_t tx_comp_thr    = 8192;               // 1-полосный, ~25% шкалы    
+static volatile int32_t tx_comp_thr_lo = AF_TX_COMP_THR_LO;  // НЧ-полоса    
+static volatile int32_t tx_comp_thr_hi = AF_TX_COMP_THR_HI;  // ВЧ-полоса    
 
 // All-pass 1-го порядка (phase rotator): y = a*(x - y1) + x1.  
 // Амплитуда не меняется, фаза крутится — пики речи симметрируются,  
@@ -272,10 +288,10 @@ static inline int32_t __not_in_flash_func(tx_biquad)(int32_t x,
 static inline int32_t __not_in_flash_func(tx_compress)(int32_t x, int32_t* hi_out) {      
     if (!tx_2band_on) {        
         *hi_out = 0;                    // 1-полосный режим: эксайтер молчит    
-        int32_t r = tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);    
-        if (++comp_blk_cnt >= 64) {     // тот же счётчик, раз в 64 отсчёта    
-            comp_blk_cnt = 0;    
-            tx_comp_gain_update(tx_env_q16, &tx_gain_1band_q15, TX_COMP_THR);    
+        int32_t r = tx_comp_band(x, &tx_env_q16, &tx_gain_1band_q15, tx_comp_thr);      
+        if (++comp_blk_cnt >= 64) {     // тот же счётчик, раз в 64 отсчёта      
+            comp_blk_cnt = 0;      
+            tx_comp_gain_update(tx_env_q16, &tx_gain_1band_q15, tx_comp_thr);      
         }    
         return r;    
     }        
@@ -291,19 +307,19 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x, int32_t* hi_ou
                        &xo_hp_x1, &xo_hp_x2, &xo_hp_y1, &xo_hp_y2);    
     } else {    
         // Старый комплементарный split: ФНЧ 1-го порядка, hi = x - lo    
-        split_lp += (int32_t)(((int64_t)(x - split_lp) * AF_TX_SPLIT_K_Q15) >> 15);    
+        split_lp += (int32_t)(((int64_t)(x - split_lp) * tx_split_k_q15) >> 15);      
         lo = split_lp;    
         hi = x - lo;    
     }    
     
-    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);        
-    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);        
-  
-    // Per-block пересчёт gain ОБЕИХ полос раз в 64 отсчёта (~4 мс).    
-    if (++comp_blk_cnt >= 64) {    
-        comp_blk_cnt = 0;    
-        tx_comp_gain_update(tx_env_lo_q16, &tx_gain_lo_q15, AF_TX_COMP_THR_LO);    
-        tx_comp_gain_update(tx_env_hi_q16, &tx_gain_hi_q15, AF_TX_COMP_THR_HI);    
+    lo = tx_comp_band(lo, &tx_env_lo_q16, &tx_gain_lo_q15, tx_comp_thr_lo);          
+    hi = tx_comp_band(hi, &tx_env_hi_q16, &tx_gain_hi_q15, tx_comp_thr_hi);          
+    
+    // Per-block пересчёт gain ОБЕИХ полос раз в 64 отсчёта (~4 мс).      
+    if (++comp_blk_cnt >= 64) {      
+        comp_blk_cnt = 0;      
+        tx_comp_gain_update(tx_env_lo_q16, &tx_gain_lo_q15, tx_comp_thr_lo);      
+        tx_comp_gain_update(tx_env_hi_q16, &tx_gain_hi_q15, tx_comp_thr_hi);      
     }       
       
     // Этап 5: HF ducking — НЧ приглушается, когда ВЧ доминирует.    
@@ -351,9 +367,9 @@ static inline int32_t __not_in_flash_func(tx_compress)(int32_t x, int32_t* hi_ou
             int32_t g = 32768;  
             if (e_lo > (int64_t)tx_gate_thr && e_hi > 0) {  
                 // g = tgt * e_lo / e_hi  (ratio = e_hi/e_lo -> g = tgt/ratio)  
-                int64_t gg = ((int64_t)AF_TX_INTEL_TGT_Q15 * e_lo) / e_hi;  
-                int64_t gmin = 32768 - AF_TX_INTEL_CUT_Q15;    // 0.5  
-                int64_t gmax = 32768 + AF_TX_INTEL_BOOST_Q15;  // 2.0  
+                int64_t gg = ((int64_t)tx_intel_tgt_q15 * e_lo) / e_hi;    
+                int64_t gmin = 32768 - tx_intel_cut_q15;    // 0.5    
+                int64_t gmax = 32768 + tx_intel_boost_q15;  // 2.0    
                 if (gg < gmin) gg = gmin;  
                 if (gg > gmax) gg = gmax;  
                 g = (int32_t)gg;  
@@ -582,7 +598,7 @@ static int32_t tx_agc(int32_t x) {
         uint32_t env = agc_env >> 8;  
         if (env < 64) env = 64;                        // защита от деления на ~0  
         int64_t g = ((int64_t)tx_agc_target << 15) / (int64_t)env; // Q15  
-        int64_t gmax = (int64_t)AF_TX_AGC_MAX_X10 * 3277;          // x10 -> Q15  
+        int64_t gmax = (int64_t)tx_agc_max_x10 * 3277;             // x10 -> Q15    
         if (g > gmax) g = gmax;  
         if (g < 32768) g = 32768;                      // АРУ только усиливает/держит  
         // Гейт закрыт -> не разгонять фон: gain <= 1.  
@@ -606,8 +622,8 @@ static int32_t tx_agc(int32_t x) {
 static int32_t tx_gate(int32_t x) {  
     if (tx_gate_thr == 0) return x;                  // гейт выключен  
     uint32_t env = agc_env >> 8;                     // та же огибающая  
-    const uint32_t thr_close = (tx_gate_thr * AF_TX_GATE_HYST_X10) / 10;  
-    const uint16_t hold_n = (uint16_t)((AF_TX_GATE_HOLD_MS * AF_FS_OUT_HZ) / 1000u);  
+    const uint32_t thr_close = (tx_gate_thr * tx_gate_hyst_x10) / 10;    
+    const uint16_t hold_n = (uint16_t)((tx_gate_hold_ms * AF_FS_OUT_HZ) / 1000u);    
   
     if (env > tx_gate_thr) {  
         tx_gate_hold = hold_n;                       // открытие мгновенное  
@@ -668,6 +684,72 @@ int16_t __not_in_flash_func(af_tx_process)(int32_t y) {
 // ---------------------------------------------------------------------------    
 // Управление (Core 0)    
 // ---------------------------------------------------------------------------    
+
+// Расчёт коэффициентов нотчей по tx_notch1/2_hz — вызывается из    
+// af_tx_init и af_tx_set_notchf. w = 2*pi*f0/Fs, b1 = -2cos(w),    
+// a1 = -2r*cos(w), a2 = r^2.    
+static void tx_notch_design(void) {    
+    const float r  = (float)AF_TX_NOTCH_R_Q15 / 32768.0f;    
+    const float w1 = 2.0f * PI * (float)tx_notch1_hz / AF_FS_OUT_HZ;    
+    const float w2 = 2.0f * PI * (float)tx_notch2_hz / AF_FS_OUT_HZ;    
+    n1_b1 = (int32_t)lroundf(-2.0f * cosf(w1) * 32768.0f);    
+    n1_a1 = (int32_t)lroundf(-2.0f * r * cosf(w1) * 32768.0f);    
+    n1_a2 = (int32_t)lroundf(r * r * 32768.0f);    
+    n2_b1 = (int32_t)lroundf(-2.0f * cosf(w2) * 32768.0f);    
+    n2_a1 = (int32_t)lroundf(-2.0f * r * cosf(w2) * 32768.0f);    
+    n2_a2 = n1_a2;    
+    n1_x1 = n1_x2 = n1_y1 = n1_y2 = 0;    
+    n2_x1 = n2_x2 = n2_y1 = n2_y2 = 0;    
+}
+
+// Расчёт peaking-биквада presence по tx_pres_freq_hz / tx_pres_q_x100 /    
+// tx_presmax_q15 (RBJ). Вызывается из af_tx_init, af_tx_set_presmax,    
+// af_tx_set_presfreq, af_tx_set_presq. Состояния pe_* не сбрасывает —    
+// сброс только в af_tx_init (в сеттерах сброс дал бы щелчок).    
+static void tx_pres_design(void) {    
+    const float A  = sqrtf((float)tx_presmax_q15 / 32768.0f); // лин. амплитуда    
+    const float w  = 2.0f * PI * (float)tx_pres_freq_hz / AF_FS_OUT_HZ;    
+    const float cw = cosf(w), sw = sinf(w);    
+    const float al = sw / (2.0f * tx_pres_q_x100 / 100.0f);    
+    const float a0 = 1.0f + al / A;    
+    pe_b0 = (int32_t)lroundf(((1.0f + al * A) / a0) * 32768.0f);    
+    pe_b1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);    
+    pe_b2 = (int32_t)lroundf(((1.0f - al * A) / a0) * 32768.0f);    
+    pe_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);    
+    pe_a2 = (int32_t)lroundf(((1.0f - al / A) / a0) * 32768.0f);    
+}
+
+// Расчёт кроссовера по tx_split_hz: RBJ LP+HP, Q=0.7071; HP инвертирован    
+// -> сумма all-pass, -3 дБ каждой ветви на разделе. Заодно пересчитывает    
+// tx_split_k_q15 — коэффициент старого комплементарного split (ФНЧ 1-го    
+// порядка, режим txlr2 off): k = 2*pi*f/Fs, Q15.    
+// Вызывается из af_tx_init и af_tx_set_split. Состояния xo_* не сбрасывает.    
+static void tx_xo_design(void) {    
+    const float w  = 2.0f * PI * (float)tx_split_hz / AF_FS_OUT_HZ;      
+    const float cw = cosf(w), sw = sinf(w);      
+    const float al = sw / (2.0f * 0.7071f);      
+    const float a0 = 1.0f + al;      
+    // LP      
+    xo_lp_b0 = (int32_t)lroundf(((1.0f - cw) * 0.5f / a0) * 32768.0f);      
+    xo_lp_b1 = (int32_t)lroundf(((1.0f - cw) / a0) * 32768.0f);      
+    xo_lp_b2 = xo_lp_b0;      
+    xo_lp_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);      
+    xo_lp_a2 = (int32_t)lroundf(((1.0f - al) / a0) * 32768.0f);      
+    // HP — b-коэффициенты инвертированы: у RBJ-пары LP/HP выходы      
+    // на fc в противофазе (180°), сумма lo+hi дала бы провал на      
+    // кроссовере. С инверсией HP сумма = all-pass (плоская АЧХ).      
+    xo_hp_b0 = -(int32_t)lroundf(((1.0f + cw) * 0.5f / a0) * 32768.0f);        
+    xo_hp_b1 = -(int32_t)lroundf((-(1.0f + cw) / a0) * 32768.0f);        
+    xo_hp_b2 = xo_hp_b0;        
+    xo_hp_a1 = xo_lp_a1;      
+    xo_hp_a2 = xo_lp_a2;      
+    // Коэффициент старого split: k = 2*pi*f/Fs, Q15 (кламп 0..32768)    
+    int32_t k = (int32_t)lroundf(w * 32768.0f);    
+    if (k < 0)     k = 0;    
+    if (k > 32768) k = 32768;    
+    tx_split_k_q15 = k;    
+}    
+
 void af_tx_init(void) {
     agc_env   = 0;  
     gate_gain = 0;
@@ -694,20 +776,7 @@ void af_tx_init(void) {
     split_lp = 0;  
     ap_x1 = 0;  
     ap_y1 = 0;
-    // Коэффициенты нотчей: w = 2*pi*f0/Fs, b1 = -2cos(w), a1 = -2r*cos(w), a2 = r^2  
-    {  
-        const float r  = (float)AF_TX_NOTCH_R_Q15 / 32768.0f;  
-        const float w1 = 2.0f * PI * (float)AF_TX_NOTCH1_HZ / AF_FS_OUT_HZ;  
-        const float w2 = 2.0f * PI * (float)AF_TX_NOTCH2_HZ / AF_FS_OUT_HZ;  
-        n1_b1 = (int32_t)lroundf(-2.0f * cosf(w1) * 32768.0f);  
-        n1_a1 = (int32_t)lroundf(-2.0f * r * cosf(w1) * 32768.0f);  
-        n1_a2 = (int32_t)lroundf(r * r * 32768.0f);  
-        n2_b1 = (int32_t)lroundf(-2.0f * cosf(w2) * 32768.0f);  
-        n2_a1 = (int32_t)lroundf(-2.0f * r * cosf(w2) * 32768.0f);  
-        n2_a2 = n1_a2;  
-        n1_x1 = n1_x2 = n1_y1 = n1_y2 = 0;  
-        n2_x1 = n2_x2 = n2_y1 = n2_y2 = 0;  
-    }
+    tx_notch_design();
     // Этап 2: HP-биквад ~1.5 кГц для env_hi_pre (RBJ high-pass, Q=0.707)  
     {  
         const float w  = 2.0f * PI * (float)AF_TX_PRES_HP_HZ / AF_FS_OUT_HZ;  
@@ -721,47 +790,14 @@ void af_tx_init(void) {
         hp_a2 = (int32_t)lroundf(((1.0f - al) / a0) * 32768.0f);  
         hp_x1 = hp_x2 = hp_y1 = hp_y2 = 0;  
     }  
-    // Этап 2: peaking-биквад AF_TX_PRES_FREQ_HZ, Q, подъём presmax (RBJ)  
-    {  
-        const float A  = sqrtf((float)tx_presmax_q15 / 32768.0f); // лин. амплитуда  
-        const float w  = 2.0f * PI * (float)AF_TX_PRES_FREQ_HZ / AF_FS_OUT_HZ;  
-        const float cw = cosf(w), sw = sinf(w);  
-        const float al = sw / (2.0f * AF_TX_PRES_Q_X100 / 100.0f);  
-        const float a0 = 1.0f + al / A;  
-        pe_b0 = (int32_t)lroundf(((1.0f + al * A) / a0) * 32768.0f);  
-        pe_b1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
-        pe_b2 = (int32_t)lroundf(((1.0f - al * A) / a0) * 32768.0f);  
-        pe_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
-        pe_a2 = (int32_t)lroundf(((1.0f - al / A) / a0) * 32768.0f);  
-        pe_x1 = pe_x2 = pe_y1 = pe_y2 = 0;  
-    }
+    // Этап 2: peaking-биквад presence (RBJ) — расчёт вынесен в функцию    
+    tx_pres_design();    
+    pe_x1 = pe_x2 = pe_y1 = pe_y2 = 0;    
 
-    // Этап 4: кроссовер Баттерворта 2-го порядка на AF_TX_SPLIT_HZ —      
-    // RBJ LP+HP, Q=0.7071; HP инвертирован -> сумма all-pass, -3 дБ      
-    // каждой ветви на разделе. Не LR2 (у LR2 Q=0.5, -6 дБ на разделе).      
-    {    
-        const float w  = 2.0f * PI * (float)AF_TX_SPLIT_HZ / AF_FS_OUT_HZ;    
-        const float cw = cosf(w), sw = sinf(w);    
-        const float al = sw / (2.0f * 0.7071f);    
-        const float a0 = 1.0f + al;    
-        // LP    
-        xo_lp_b0 = (int32_t)lroundf(((1.0f - cw) * 0.5f / a0) * 32768.0f);    
-        xo_lp_b1 = (int32_t)lroundf(((1.0f - cw) / a0) * 32768.0f);    
-        xo_lp_b2 = xo_lp_b0;    
-        xo_lp_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);    
-        xo_lp_a2 = (int32_t)lroundf(((1.0f - al) / a0) * 32768.0f);    
-        // HP — b-коэффициенты инвертированы: у RBJ-пары LP/HP выходы        
-        // на fc в противофазе (180°), сумма lo+hi дала бы провал на        
-        // кроссовере. С инверсией HP сумма = all-pass (плоская АЧХ,        
-        // подтверждено спектром).        
-        xo_hp_b0 = -(int32_t)lroundf(((1.0f + cw) * 0.5f / a0) * 32768.0f);      
-        xo_hp_b1 = -(int32_t)lroundf((-(1.0f + cw) / a0) * 32768.0f);      
-        xo_hp_b2 = xo_hp_b0;      
-        xo_hp_a1 = xo_lp_a1;    
-        xo_hp_a2 = xo_lp_a2;    
-        xo_lp_x1 = xo_lp_x2 = xo_lp_y1 = xo_lp_y2 = 0;    
-        xo_hp_x1 = xo_hp_x2 = xo_hp_y1 = xo_hp_y2 = 0;    
-    }    
+    // Этап 4: кроссовер Баттерворта 2-го порядка — расчёт вынесен в функцию    
+    tx_xo_design();    
+    xo_lp_x1 = xo_lp_x2 = xo_lp_y1 = xo_lp_y2 = 0;      
+    xo_hp_x1 = xo_hp_x2 = xo_hp_y1 = xo_hp_y2 = 0;      
 
     env_hi_pre_q16 = (int64_t)256 << 16;    
     pres_nf_q16    = (int64_t)256 << 16;    
@@ -858,24 +894,30 @@ uint32_t af_tx_agc_gain(void) { return (uint32_t)tx_agc_gain_q15; }
 void af_tx_set_pres(bool on)  { tx_pres_on = on ? 1 : 0; }  
 bool af_tx_pres(void)         { return tx_pres_on != 0; }  
   
-void af_tx_set_presmax(uint32_t db_x10) {   // потолок подъёма, дБ x10    
-    if (db_x10 > 120) db_x10 = 120;         // max +12 дБ    
-    tx_presmax_db_x10 = db_x10;             // для stats    
-    // Q15 = 10^(dB/20): float только в сеттере, не в горячем пути    
-    tx_presmax_q15 = (int32_t)lroundf(powf(10.0f, (float)db_x10 / 200.0f) * 32768.0f);    
-    // пересчёт коэффициентов peaking-биквада под новый потолок  
-    const float A  = sqrtf((float)tx_presmax_q15 / 32768.0f);  
-    const float w  = 2.0f * PI * (float)AF_TX_PRES_FREQ_HZ / AF_FS_OUT_HZ;  
-    const float cw = cosf(w), sw = sinf(w);  
-    const float al = sw / (2.0f * AF_TX_PRES_Q_X100 / 100.0f);
-    const float a0 = 1.0f + al / A;  
-    pe_b0 = (int32_t)lroundf(((1.0f + al * A) / a0) * 32768.0f);  
-    pe_b1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
-    pe_b2 = (int32_t)lroundf(((1.0f - al * A) / a0) * 32768.0f);  
-    pe_a1 = (int32_t)lroundf((-2.0f * cw / a0) * 32768.0f);  
-    pe_a2 = (int32_t)lroundf(((1.0f - al / A) / a0) * 32768.0f);  
-}  
-uint32_t af_tx_presmax(void) { return tx_presmax_db_x10; }   // дБ x10    
+void af_tx_set_presmax(uint32_t db_x10) {   // потолок подъёма, дБ x10      
+    if (db_x10 > 120) db_x10 = 120;         // max +12 дБ      
+    tx_presmax_db_x10 = db_x10;             // для stats      
+    // Q15 = 10^(dB/20): float только в сеттере, не в горячем пути      
+    tx_presmax_q15 = (int32_t)lroundf(powf(10.0f, (float)db_x10 / 200.0f) * 32768.0f);      
+    tx_pres_design();                       // пересчёт pe-биквада    
+}    
+uint32_t af_tx_presmax(void) { return tx_presmax_db_x10; }   // дБ x10      
+  
+void af_tx_set_presfreq(uint32_t hz) {      // центр presence-пика, Гц    
+    if (hz < 500)  hz = 500;    
+    if (hz > 6000) hz = 6000;    
+    tx_pres_freq_hz = hz;    
+    tx_pres_design();    
+}    
+uint32_t af_tx_presfreq(void) { return tx_pres_freq_hz; }    
+  
+void af_tx_set_presq(uint32_t q_x100) {     // добротность x100 (100 = 1.00)    
+    if (q_x100 < 10)   q_x100 = 10;    
+    if (q_x100 > 500)  q_x100 = 500;    
+    tx_pres_q_x100 = q_x100;    
+    tx_pres_design();    
+}    
+uint32_t af_tx_presq(void) { return tx_pres_q_x100; }    
   
 // --- debug getters (этап 2) ---  
 uint32_t af_tx_env_hi_pre(void) { return (uint32_t)(env_hi_pre_q16 >> 16); }  
@@ -898,15 +940,15 @@ bool af_tx_intel(void)        { return tx_intel_on != 0; }
 uint32_t af_tx_g_intel(void)  { return (uint32_t)g_intel_q15; }   // debug, Q15  
 
 // --- High-shelf полка (вариант A) ---  
-void af_tx_set_shelf(uint32_t db_x10) {   // подъём ВЧ, дБ x10 (0 = off)  
-    if (db_x10 > 120) db_x10 = 120;       // max +12 дБ  
-    tx_shelf_db_x10 = db_x10;  
-    if (db_x10 == 0) return;              // байпас, коэффициенты не нужны  
-    // RBJ high-shelf: A = 10^(dB/40), w = 2*pi*f0/Fs, alpha = sin(w)/(2Q)  
-    const float A  = powf(10.0f, (float)db_x10 / 400.0f);  
-    const float w  = 2.0f * PI * (float)AF_TX_SHELF_FREQ_HZ / AF_FS_OUT_HZ;  
-    const float cw = cosf(w), sw = sinf(w);  
-    const float al = sw / (2.0f * AF_TX_SHELF_Q_X100 / 100.0f);  
+void af_tx_set_shelf(uint32_t db_x10) {   // подъём ВЧ, дБ x10 (0 = off)    
+    if (db_x10 > 120) db_x10 = 120;       // max +12 дБ    
+    tx_shelf_db_x10 = db_x10;    
+    if (db_x10 == 0) return;              // байпас, коэффициенты не нужны    
+    // RBJ high-shelf: A = 10^(dB/40), w = 2*pi*f0/Fs, alpha = sin(w)/(2Q)    
+    const float A  = powf(10.0f, (float)db_x10 / 400.0f);    
+    const float w  = 2.0f * PI * (float)tx_shelf_freq_hz / AF_FS_OUT_HZ;    
+    const float cw = cosf(w), sw = sinf(w);    
+    const float al = sw / (2.0f * tx_shelf_q_x100 / 100.0f);    
     const float sq = 2.0f * sqrtf(A) * al;  
     const float a0 = (A + 1.0f) - (A - 1.0f) * cw + sq;  
     sh_b0 = (int32_t)lroundf((A * ((A + 1.0f) + (A - 1.0f) * cw + sq) / a0) * 32768.0f);  
@@ -916,3 +958,102 @@ void af_tx_set_shelf(uint32_t db_x10) {   // подъём ВЧ, дБ x10 (0 = of
     sh_a2 = (int32_t)lroundf(((A + 1.0f) - (A - 1.0f) * cw - sq) / a0 * 32768.0f);  
 }  
 uint32_t af_tx_shelf(void) { return tx_shelf_db_x10; }   // дБ x10  
+
+void af_tx_set_shelffreq(uint32_t hz) {   // частота полки, Гц    
+    if (hz < 500)  hz = 500;    
+    if (hz > 6000) hz = 6000;    
+    tx_shelf_freq_hz = hz;    
+    if (tx_shelf_db_x10 != 0) af_tx_set_shelf(tx_shelf_db_x10);  // пересчёт    
+}    
+uint32_t af_tx_shelffreq(void) { return tx_shelf_freq_hz; }    
+  
+void af_tx_set_shelfq(uint32_t q_x100) {  // добротность x100    
+    if (q_x100 < 10)   q_x100 = 10;    
+    if (q_x100 > 500)  q_x100 = 500;    
+    tx_shelf_q_x100 = q_x100;    
+    if (tx_shelf_db_x10 != 0) af_tx_set_shelf(tx_shelf_db_x10);    
+}    
+uint32_t af_tx_shelfq(void) { return tx_shelf_q_x100; }    
+  
+// --- Пороги компрессора ---    
+void af_tx_set_compthr(int32_t v) {    
+    if (v < 256)   v = 256;    
+    if (v > 32767) v = 32767;    
+    tx_comp_thr = v;    
+}    
+void af_tx_set_compthrlo(int32_t v) {    
+    if (v < 256)   v = 256;    
+    if (v > 32767) v = 32767;    
+    tx_comp_thr_lo = v;    
+}    
+void af_tx_set_compthrhi(int32_t v) {    
+    if (v < 256)   v = 256;    
+    if (v > 32767) v = 32767;    
+    tx_comp_thr_hi = v;    
+}    
+int32_t af_tx_compthr(void)   { return tx_comp_thr; }    
+int32_t af_tx_compthrlo(void) { return tx_comp_thr_lo; }    
+int32_t af_tx_compthrhi(void) { return tx_comp_thr_hi; }    
+  
+// --- Частота кроссовера (пересчёт LR2-биквадов и k старого split) ---    
+void af_tx_set_split(uint32_t hz) {    
+    if (hz < 300)  hz = 300;    
+    if (hz > 3000) hz = 3000;    
+    tx_split_hz = hz;    
+    tx_xo_design();    
+}    
+uint32_t af_tx_split(void) { return tx_split_hz; }    
+  
+// --- Гейт: hangover и гистерезис ---    
+void af_tx_set_gatehold(uint32_t ms) {    
+    if (ms > 2000) ms = 2000;    
+    tx_gate_hold_ms = ms;    
+}    
+void af_tx_set_gatehyst(uint32_t x10) {    
+    if (x10 < 1)  x10 = 1;    
+    if (x10 > 10) x10 = 10;    
+    tx_gate_hyst_x10 = x10;    
+}    
+uint32_t af_tx_gatehold(void) { return tx_gate_hold_ms; }    
+uint32_t af_tx_gatehyst(void) { return tx_gate_hyst_x10; }    
+  
+// --- Потолок АРУ, x10 ---    
+void af_tx_set_agcmax(uint32_t x10) {    
+    if (x10 < 10)   x10 = 10;    
+    if (x10 > 1000) x10 = 1000;    
+    tx_agc_max_x10 = x10;    
+}    
+uint32_t af_tx_agcmax(void) { return tx_agc_max_x10; }    
+  
+// --- k_intelligibility: цель и потолки, Q15 ---    
+void af_tx_set_inteltgt(int32_t v) {    
+    if (v < 0)     v = 0;    
+    if (v > 32768) v = 32768;    
+    tx_intel_tgt_q15 = v;    
+}    
+void af_tx_set_intelcut(int32_t v) {    
+    if (v < 0)     v = 0;    
+    if (v > 32768) v = 32768;    
+    tx_intel_cut_q15 = v;    
+}    
+void af_tx_set_intelboost(int32_t v) {    
+    if (v < 0)     v = 0;    
+    if (v > 32768) v = 32768;    
+    tx_intel_boost_q15 = v;    
+}    
+int32_t af_tx_inteltgt(void)   { return tx_intel_tgt_q15; }    
+int32_t af_tx_intelcut(void)   { return tx_intel_cut_q15; }    
+int32_t af_tx_intelboost(void) { return tx_intel_boost_q15; }    
+  
+// --- Частоты TX-нотчей (пересчёт коэффициентов) ---    
+void af_tx_set_notchf(uint32_t f1, uint32_t f2) {    
+    if (f1 < 200)  f1 = 200;    
+    if (f1 > 7000) f1 = 7000;    
+    if (f2 < 200)  f2 = 200;    
+    if (f2 > 7000) f2 = 7000;    
+    tx_notch1_hz = f1;    
+    tx_notch2_hz = f2;    
+    tx_notch_design();    
+}    
+uint32_t af_tx_notch1(void) { return tx_notch1_hz; }    
+uint32_t af_tx_notch2(void) { return tx_notch2_hz; }    
