@@ -94,7 +94,7 @@ static void cli_help(void) {
     Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам"); 
     Serial.println("# === СИСТЕМА ===");    
     Serial.println("#   stats             — таблица параметров RX/TX/SYS");  
-    Serial.println("#   dump              — инженерный дамп (дельты счётчиков, ur-логи)");  
+    Serial.println("#   dump [N|off]      — инженерный дамп счётчиков: однократно / каждые N сек / стоп");  
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");    
     Serial.println("#   banks             — показать все ячейки");  
@@ -109,7 +109,12 @@ static void cli_help(void) {
   
 // ---------------------------------------------------------------------------  
 // Диагностика  
-// ---------------------------------------------------------------------------  
+// --------------------------------------------------------------------------- 
+
+// Периодический дамп: dump <N> — каждые N сек, dump 0/off — стоп.  
+static uint32_t dump_period_ms = 0;  
+static uint32_t dump_next_ms   = 0;  
+
 static void cli_stats(void) {      
     uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);      
     bool tx = af_dsp_tx_on();      
@@ -282,15 +287,72 @@ static void cli_dump(void) {
     for (int i = 0; i < 8; i++) Serial.printf(" %u", (unsigned)un[i]);  
     Serial.println();  
   
-    uint32_t pt[8];  
-    af_pwm_ur_log(pt);  
-    Serial.printf("# pwm_ur_t:");  
-    for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)pt[i]);  
-    Serial.println();  
-  
-    p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;  
-    p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap; p_isr = isr;  
-}  
+    uint32_t pt[8];    
+    af_pwm_ur_log(pt);    
+    Serial.printf("# pwm_ur_t:");    
+    for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)pt[i]);    
+    Serial.println();    
+    
+    // ---- Мини-проверка: заключение о здоровье тракта ----    
+    // Проверки на дельтах за период (не накопленное с boot) + пики.    
+    // Порядок — от источника к потребителю: cap -> core1 -> out -> клиппинг.    
+    {    
+        const uint32_t d_cap  = cap - p_cap;      // потери на захвате за период    
+        const uint32_t d_dU   = dU - p_dU;        // дропы USB-очереди    
+        const uint32_t d_dP   = dP - p_dP;        // дропы PWM-очереди    
+        const uint32_t d_urU  = urU - p_urU;      // underruns USB (публикация)    
+        const uint32_t d_urP  = urP - p_urP;      // underruns PWM (публикация)    
+        const uint32_t max_us = af_dsp_max_block_us();    
+        const uint32_t l1     = af_dsp_load_permille();    
+        bool ok = true;    
+    
+        if (d_cap != 0 || af_drop_queue_full != 0 || af_adc_fcs_over != 0) {    
+            ok = false;    
+            Serial.printf("# WARN cap: потери захвата (dropped+%lu q_full=%lu fcs_over=%lu)\n",    
+                          (unsigned long)d_cap,    
+                          (unsigned long)af_drop_queue_full,    
+                          (unsigned long)af_adc_fcs_over);    
+        }    
+        if (max_us > 4096) {    
+            ok = false;    
+            Serial.printf("# WARN core1: max_block_us=%lu > окна блока (~4096) — перегрузка DSP\n",    
+                          (unsigned long)max_us);    
+        } else if (l1 > 950) {    
+            ok = false;    
+            Serial.printf("# WARN core1: load=%lu.%lu%% — на пределе\n",    
+                          (unsigned long)(l1 / 10u), (unsigned long)(l1 % 10u));    
+        }    
+        if (af_q_fill_max >= 3) {    
+            ok = false;    
+            Serial.printf("# WARN cap: очередь заполнялась до %lu — Core 1 не успевает забирать\n",    
+                          (unsigned long)af_q_fill_max);    
+        }    
+        if (d_dU != 0 || d_dP != 0) {    
+            ok = false;    
+            Serial.printf("# WARN out: дропы блоков usb=%lu pwm=%lu\n",    
+                          (unsigned long)d_dU, (unsigned long)d_dP);    
+        }    
+        if (af_usb_mounted() && d_urU != 0) {    
+            ok = false;    
+            Serial.printf("# WARN usb: underruns +%lu при подключённом хосте\n",    
+                          (unsigned long)d_urU);    
+        }    
+        if (af_pwm_is_enabled() && d_urP != 0) {    
+            ok = false;    
+            Serial.printf("# WARN pwm: underruns +%lu — выход голодает\n",    
+                          (unsigned long)d_urP);    
+        }    
+        if (af_dsp_clip_count() != 0) {    
+            ok = false;    
+            Serial.printf("# WARN clip: клиппинг выхода, count=%lu\n",    
+                          (unsigned long)af_dsp_clip_count());    
+        }    
+        if (ok) Serial.println("# OK: потерь нет, тракт здоров");    
+    }    
+    
+    p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;    
+    p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap; p_isr = isr;    
+}    
 
 // TX-профили по таблице пресетов: 1=FLAT .. 7=MAX (от прозрачного к плотному).  
 // Каждый профиль — полный снимок тракта: общий блок + per-профиль отличия.  
@@ -471,9 +533,23 @@ static void cli_exec(char* line) {
     else if (strcmp(cmd, "stats") == 0) {  
         cli_stats();  
     }
-    else if (strcmp(cmd, "dump") == 0) {  
-        cli_dump();  
-    }
+    else if (strcmp(cmd, "dump") == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) {    
+            dump_period_ms = 0;                    // однократно    
+            cli_dump();    
+        } else if (strcmp(v, "off") == 0 || strcmp(v, "0") == 0) {    
+            dump_period_ms = 0;    
+            Serial.println("# OK dump=off");    
+        } else {    
+            uint32_t sec = (uint32_t)strtoul(v, NULL, 10);    
+            if (sec < 1 || sec > 3600) { Serial.println("# ERR: dump [1..3600|off]"); return; }    
+            dump_period_ms = sec * 1000u;    
+            dump_next_ms   = millis() + dump_period_ms;    
+            Serial.printf("# OK dump every %lu s\n", (unsigned long)sec);    
+            cli_dump();                            // первый сразу    
+        }    
+    }    
     else if (strcmp(cmd, "band") == 0) {  
         char* s_lo = strtok(NULL, " \t");  
         char* s_hi = strtok(NULL, " \t");  
@@ -1265,11 +1341,16 @@ void af_cli_init(void) {
     Serial.println("# CLI ready. 'help' — список команд.");  
 }  
   
-void af_cli_poll(void) {  
-    static char line[64];  
-    static uint8_t pos = 0;  
-  
-    while (Serial.available() > 0) {  
+void af_cli_poll(void) {    
+    static char line[64];    
+    static uint8_t pos = 0;    
+    
+    if (dump_period_ms != 0 && (int32_t)(millis() - dump_next_ms) >= 0) {    
+        dump_next_ms = millis() + dump_period_ms;    
+        cli_dump();    
+    }    
+    
+    while (Serial.available() > 0) {    
         char c = (char)Serial.read();  
         if (c == '\r') continue;  
         if (c == '\n') {  
