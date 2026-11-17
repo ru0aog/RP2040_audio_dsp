@@ -262,6 +262,46 @@ static void tx_apply_profile(uint8_t idx) {
     }  
 }  
 
+// Заводские дефолты банка: RX — из af_config.h, TX — рабочая точка    
+// tx_apply_profile. Per-банк отличия задаются в banks clr.    
+static void bank_fill_defaults(af_bank_t* b) {    
+    // RX    
+    b->lo_hz = 300;  b->hi_hz = 3000;    
+    b->cw_on = 0;  b->cw_f0 = 700;  b->cw_bw = 150;  b->cw_noise = 400;    
+    b->agc_on = 1;  b->gain_pct = 256;  b->voice_vol = 300;    
+    b->agc_ref = AGC_REF;    
+    b->agc_max_x100 = (uint16_t)(AGC_MAX_GAIN * 100.0f + 0.5f);    
+    b->agc_min_x100 = (uint16_t)(AGC_MIN_GAIN * 100.0f + 0.5f);    
+    b->lim_ceil = LIMIT_CEIL;    
+    b->nr_depth = NR_DEPTH_Q15;  b->nr_makeup = NR_MAKEUP_Q15;    
+    b->nt_mu = NOTCH_MU_Q;  b->nr_mu = NR_MU_Q;    
+    // TX — рабочая точка (как базис tx_apply_profile)    
+    b->tx_lo_hz = 300;  b->tx_hi_hz = 2700;    
+    b->tx_ratio_x10 = 40;  b->tx_clip = 26000;    
+    b->tx_agc_target = 18000;  b->tx_agc_max_x10 = AF_TX_AGC_MAX_X10;    
+    b->tx_gate_thr = AF_TX_GATE_THR;    
+    b->tx_gate_hold_ms = AF_TX_GATE_HOLD_MS;    
+    b->tx_gate_hyst_x10 = AF_TX_GATE_HYST_X10;    
+    b->tx_gfloor = AF_TX_GATE_FLOOR_Q16;    
+    b->tx_ap_on = 1;  b->tx_softclip = 1;  b->tx_2band_on = 1;    
+    b->tx_split_hz = AF_TX_SPLIT_HZ;  b->tx_lr2_on = 1;    
+    b->tx_comp_thr = 8192;    
+    b->tx_comp_thr_lo = AF_TX_COMP_THR_LO;    
+    b->tx_comp_thr_hi = AF_TX_COMP_THR_HI;    
+    b->tx_duck_on = 1;  b->tx_duckmax = 30;    
+    b->tx_intel_on = 1;    
+    b->tx_intel_tgt = AF_TX_INTEL_TGT_Q15;    
+    b->tx_intel_cut = AF_TX_INTEL_CUT_Q15;    
+    b->tx_intel_boost = AF_TX_INTEL_BOOST_Q15;    
+    b->tx_pres_on = 1;  b->tx_presmax = 15;    
+    b->tx_pres_freq = AF_TX_PRES_FREQ_HZ;  b->tx_pres_q = AF_TX_PRES_Q_X100;    
+    b->tx_shelf_db = 0;    
+    b->tx_shelf_freq = AF_TX_SHELF_FREQ_HZ;  b->tx_shelf_q = AF_TX_SHELF_Q_X100;    
+    b->tx_exc_on = 1;  b->tx_excmix = 3277;    
+    b->tx_notch_on = 1;    
+    b->tx_notch1_hz = AF_TX_NOTCH1_HZ;  b->tx_notch2_hz = AF_TX_NOTCH2_HZ;    
+}    
+
 // ---------------------------------------------------------------------------  
 // Разбор одной строки  
 // ---------------------------------------------------------------------------  
@@ -431,46 +471,84 @@ static void cli_exec(char* line) {
     }  
     else if (strcmp(cmd, "banks") == 0) {  
         char* sub = strtok(NULL, " \t");  
-        if (sub && strcmp(sub, "clr") == 0) {  
-            // Перезаписать все 7 ячеек заводскими пресетами (ребут).
-            // Поля: {lo_hz, hi_hz, cw_on, cw_f0, cw_bw, cw_noise, agc_on, gain_pct, voice_vol}  
-            //   lo_hz/hi_hz — полоса ПФ, Гц  
-            //   cw_on       — телеграфный фильтр (0/1)  
-            //   cw_f0       — центральная частота CW, Гц  
-            //   cw_bw       — полоса CW, Гц  
-            //   cw_noise    — примесь шума в CW, уровень 0..2000  
-            //   agc_on      — АРУ (0/1); при 0 — ручное усиление  
-            //   gain_q8     — ручное усиление при agc off, Q8 (256 = ×1.0) 
-            //   voice_vol   — громкость голосовых сообщений, % (0..400) 
-            static const af_bank_t preset[AF_STORE_BANKS] = {  
-                {  100, 3100, 0, 700, 150, 400, 1, 256, 300 },  // 1 (GP2): SSB нормальная  
-                {  300, 2200, 0, 700, 150, 400, 1, 256, 300 },  // 2 (GP3): SSB узкая  
-                {  100, 4000, 0, 700, 150, 400, 1, 256, 300 },  // 3: резерв — широкая  
-                {  450,  950, 1, 700, 150, 400, 1, 256, 300 },  // 4 (GP4): CW 700 Гц  
-                {  300,  900, 0, 700, 150, 400, 1, 256, 300 },  // 5: резерв — очень узкая  
-                {  300, 3000, 0, 700, 150, 400, 0, 384, 300 },  // 6: резерв — AM, АРУ off (×1.5)  
-                {  200, 3500, 0, 700, 150, 400, 1, 256, 300 },  // 7: резерв  
-            };
-            Serial.println("# banks clr: writing 7 banks, rebooting...");  
-            Serial.flush();  
-            af_store_write_all(preset);   // не возвращается — ребут  
-        }  
-        // Без аргументов — список ячеек, как раньше.  
-        for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {  
-            af_bank_t b;  
-            if (af_store_read(i, &b)) {  
-                uint32_t g100 = (uint32_t)b.gain_pct * 100u / 256u;  
-                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%lu.%02lu vvol=%lu%%\n",
-                              i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,      
-                              b.cw_on ? "on" : "off",      
-                              (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,      
-                              (unsigned long)b.cw_noise, b.agc_on ? "on" : "off",    
-                              (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),  
-                              (unsigned long)b.voice_vol);
-            } else {  
-                Serial.printf("# bank %d: empty\n", i);  
+        if (sub && strcmp(sub, "clr") == 0) {    
+            // Перезаписать все 7 ячеек заводскими пресетами (ребут).  
+            // Банк = полный снимок RX+TX: сначала дефолты из af_config.h  
+            // и рабочая точка tx_apply_profile, затем per-банк отличия  
+            // (полоса ПФ, CW, АРУ/gain — как раньше).  
+            af_bank_t preset[AF_STORE_BANKS];  
+            for (uint8_t i = 0; i < AF_STORE_BANKS; i++) {  
+                bank_fill_defaults(&preset[i]);  
             }  
-        }  
+            // Per-банк отличия — только RX-поля, TX у всех одинаковый.  
+            // 1 (GP2): SSB нормальная  
+            preset[0].lo_hz = 100;  preset[0].hi_hz = 3100;  
+            // 2 (GP3): SSB узкая  
+            preset[1].lo_hz = 300;  preset[1].hi_hz = 2200;  
+            // 3: резерв — широкая  
+            preset[2].lo_hz = 100;  preset[2].hi_hz = 4000;  
+            // 4 (GP4): CW 700 Гц  
+            preset[3].lo_hz = 450;  preset[3].hi_hz = 950;  
+            preset[3].cw_on = 1;  
+            // 5: резерв — очень узкая  
+            preset[4].lo_hz = 300;  preset[4].hi_hz = 900;  
+            // 6: резерв — AM, АРУ off (×1.5)  
+            preset[5].lo_hz = 300;  preset[5].hi_hz = 3000;  
+            preset[5].agc_on = 0;   preset[5].gain_pct = 384;  
+            // 7: резерв  
+            preset[6].lo_hz = 200;  preset[6].hi_hz = 3500;  
+  
+            Serial.println("# banks clr: writing 7 banks, rebooting...");    
+            Serial.flush();    
+            af_store_write_all(preset);   // не возвращается — ребут    
+        }    
+        // Без аргументов — список ячеек, как раньше.  
+        for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {    
+            af_bank_t b;    
+            if (af_store_read(i, &b)) {    
+                uint32_t g100 = (uint32_t)b.gain_pct * 100u / 256u;    
+                Serial.printf("# bank %d: band=%lu..%lu cw=%s f0=%lu bw=%lu noise=%lu agc=%s gain=%lu.%02lu vvol=%lu%%\n",  
+                              i, (unsigned long)b.lo_hz, (unsigned long)b.hi_hz,        
+                              b.cw_on ? "on" : "off",        
+                              (unsigned long)b.cw_f0, (unsigned long)b.cw_bw,        
+                              (unsigned long)b.cw_noise, b.agc_on ? "on" : "off",      
+                              (unsigned long)(g100 / 100), (unsigned long)(g100 % 100),    
+                              (unsigned long)b.voice_vol);  
+                Serial.printf("#   rx: agcref=%u agcmax=%u.%02u agcmin=%u.%02u lim=%u nrd=%u nrm=%lu ntmu=%u nrmu=%u\n",  
+                              (unsigned)b.agc_ref,  
+                              (unsigned)(b.agc_max_x100 / 100), (unsigned)(b.agc_max_x100 % 100),  
+                              (unsigned)(b.agc_min_x100 / 100), (unsigned)(b.agc_min_x100 % 100),  
+                              (unsigned)b.lim_ceil, (unsigned)b.nr_depth,  
+                              (unsigned long)b.nr_makeup,  
+                              (unsigned)b.nt_mu, (unsigned)b.nr_mu);  
+                Serial.printf("#   tx: band=%u..%u comp=%u clip=%u agc=%u/%u gate=%u h=%u y=%u gf=%u\n",  
+                              (unsigned)b.tx_lo_hz, (unsigned)b.tx_hi_hz,  
+                              (unsigned)b.tx_ratio_x10, (unsigned)b.tx_clip,  
+                              (unsigned)b.tx_agc_target, (unsigned)b.tx_agc_max_x10,  
+                              (unsigned)b.tx_gate_thr, (unsigned)b.tx_gate_hold_ms,  
+                              (unsigned)b.tx_gate_hyst_x10, (unsigned)b.tx_gfloor);  
+                Serial.printf("#   tx: ap=%u soft=%u 2b=%u split=%u lr2=%u cthr=%u/%u/%u duck=%u/%u\n",  
+                              (unsigned)b.tx_ap_on, (unsigned)b.tx_softclip,  
+                              (unsigned)b.tx_2band_on, (unsigned)b.tx_split_hz,  
+                              (unsigned)b.tx_lr2_on,  
+                              (unsigned)b.tx_comp_thr, (unsigned)b.tx_comp_thr_lo,  
+                              (unsigned)b.tx_comp_thr_hi,  
+                              (unsigned)b.tx_duck_on, (unsigned)b.tx_duckmax);  
+                Serial.printf("#   tx: intel=%u %u/%u/%u pres=%u/%u f%u q%u shelf=%u f%u q%u exc=%u/%u notch=%u %u/%u\n",  
+                              (unsigned)b.tx_intel_on,  
+                              (unsigned)b.tx_intel_tgt, (unsigned)b.tx_intel_cut,  
+                              (unsigned)b.tx_intel_boost,  
+                              (unsigned)b.tx_pres_on, (unsigned)b.tx_presmax,  
+                              (unsigned)b.tx_pres_freq, (unsigned)b.tx_pres_q,  
+                              (unsigned)b.tx_shelf_db, (unsigned)b.tx_shelf_freq,  
+                              (unsigned)b.tx_shelf_q,  
+                              (unsigned)b.tx_exc_on, (unsigned)b.tx_excmix,  
+                              (unsigned)b.tx_notch_on,  
+                              (unsigned)b.tx_notch1_hz, (unsigned)b.tx_notch2_hz);  
+            } else {    
+                Serial.printf("# bank %d: empty\n", i);    
+            }    
+        }    
     }
 
     else if (strcmp(cmd, "pwm") == 0) {  
