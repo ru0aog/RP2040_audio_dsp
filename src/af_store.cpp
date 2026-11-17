@@ -216,6 +216,9 @@ bool af_store_save(uint8_t idx) {
     noInterrupts();    
     do_flash_write(NULL);   // RAM: erase+program, XIP off    
     
+    Serial.printf("# OK save=%d, rebooting...\n", idx);  
+    Serial.flush(); 
+    
     // Сюда доходим только если запись завершилась.    
     watchdog_reboot(0, 0, 0);    
     while (true) { tight_loop_contents(); }   // на случай задержки ребута
