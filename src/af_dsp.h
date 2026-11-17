@@ -87,5 +87,25 @@ bool af_dsp_ramp_on(void);
 void af_dsp_set_tx(bool on);  
 bool af_dsp_tx_on(void);  
 
-void     af_dsp_set_rxnotch(bool on);  
-bool     af_dsp_rxnotch_on(void);  
+void     af_dsp_set_rxnotch(bool on);    
+bool     af_dsp_rxnotch_on(void);    
+  
+// Настройка АРУ/лимитера (SSB-ветка; CW-профиль — CW_AGC_* дефайны).  
+void    af_dsp_set_agcref(int32_t v);    // целевой уровень, 1000..32767  
+int32_t af_dsp_agcref(void);  
+void    af_dsp_set_agcmax(float g);      // потолок усиления, 1..1000  
+float   af_dsp_agcmax(void);  
+void    af_dsp_set_agcmin(float g);      // нижний предел, 0.01..1.0  
+float   af_dsp_agcmin(void);  
+void    af_dsp_set_limceil(int32_t v);   // потолок лимитера, 1000..32767  
+int32_t af_dsp_limceil(void);  
+  
+// Настройка NT/NR (шаги адаптации и глубина — экспертные).  
+void    af_dsp_set_ntmu(int32_t v);      // шаг NLMS нотча, 0..32768  
+int32_t af_dsp_ntmu(void);  
+void    af_dsp_set_nrmu(int32_t v);      // шаг LMS NR, 0..32768  
+int32_t af_dsp_nrmu(void);  
+void    af_dsp_set_nrdepth(int32_t v);   // глубина подавления Q15, 0..65536  
+int32_t af_dsp_nrdepth(void);  
+void    af_dsp_set_nrmakeup(int32_t v);  // makeup-gain Q15, 0..131072  
+int32_t af_dsp_nrmakeup(void);  

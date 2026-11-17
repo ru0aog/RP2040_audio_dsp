@@ -328,9 +328,12 @@ static int64_t notch_pow = 0;   // EMA мощности опорного век�
   
 // Скользящее окно энергии: кольцо последних NOTCH_N опорных отсчётов    
 // и бегущая сумма их квадратов — вместо O(N) пересчёта на каждый отсчёт.    
-static int32_t  notch_v[NOTCH_N] = {};    
-static int      notch_vidx = 0;    
-static int64_t  notch_energy = 0;
+static int32_t  notch_v[NOTCH_N] = {};      
+static int      notch_vidx = 0;      
+static int64_t  notch_energy = 0;  
+  
+// Шаг NLMS — runtime-параметр (дефайн = значение по умолчанию, команда ntmu).  
+static volatile int32_t notch_mu = NOTCH_MU_Q;  
   
 // Один отсчёт автонотча. Возвращает ОШИБКУ e = x - y (тон вычтен).  
 static inline int32_t __not_in_flash_func(notch_lms_push)(int32_t x) {  
@@ -372,7 +375,7 @@ static inline int32_t __not_in_flash_func(notch_lms_push)(int32_t x) {
     // по старшему биту den (шаг mu гуляет в пределах x2 — допустимо).  
     // int64-деление на M0+ — это ~100 циклов на КАЖДЫЙ отсчёт.  
     int k = 63 - __builtin_clzll((uint64_t)den);   // den > 0 всегда  
-    int64_t g = (((int64_t)e * NOTCH_MU_Q) << 15) >> k;  
+    int64_t g = (((int64_t)e * notch_mu) << 15) >> k;  
     if (g >  NOTCH_G_MAX) g =  NOTCH_G_MAX;  
     if (g < -NOTCH_G_MAX) g = -NOTCH_G_MAX; 
   
@@ -392,11 +395,16 @@ static inline int32_t __not_in_flash_func(notch_lms_push)(int32_t x) {
 // Шумоподавление NR — LMS Adaptive Line Enhancer (ALE)  
 // ---------------------------------------------------------------------------  
   
-static volatile bool nr_on = false;  
-static int32_t nr_buf[NR_N + NR_DELAY] = {0};  
-static int     nr_idx = 0;  
-static int16_t nr_w[NR_N]  = {0};  
+static volatile bool nr_on = false;    
+static int32_t nr_buf[NR_N + NR_DELAY] = {0};    
+static int     nr_idx = 0;    
+static int16_t nr_w[NR_N]  = {0};    
 static int64_t nr_pow = 0;  
+  
+// Runtime-параметры NR (дефайны = значения по умолчанию, команды nrmu/nrdepth/nrmakeup).  
+static volatile int32_t nr_mu         = NR_MU_Q;  
+static volatile int32_t nr_depth_q15  = NR_DEPTH_Q15;  
+static volatile int32_t nr_makeup_q15 = NR_MAKEUP_Q15;  
   
 static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {  
     nr_idx = (nr_idx + 1); if (nr_idx >= NR_N + NR_DELAY) nr_idx = 0;  
@@ -420,7 +428,7 @@ static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {
   
     int64_t den = nr_pow + NR_EPS;  
     int k = 63 - __builtin_clzll((uint64_t)den);  
-    int64_t g = (((int64_t)e * NR_MU_Q) << 15) >> k;
+    int64_t g = (((int64_t)e * nr_mu) << 15) >> k;  
     if (g >  NR_G_MAX) g =  NR_G_MAX;  
     if (g < -NR_G_MAX) g = -NR_G_MAX;  
   
@@ -433,10 +441,10 @@ static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {
         nr_w[k] = (int16_t)w;  
     }  
   
-    // dry/wet с фиксированной глубиной: out = x − NR_DEPTH_Q15·e  
-    int32_t out = x - (int32_t)(((int64_t)e * NR_DEPTH_Q15) >> 15);  
-    // makeup-gain — компенсация просадки уровня  
-    out = (int32_t)(((int64_t)out * NR_MAKEUP_Q15) >> 15);  
+    // dry/wet с настраиваемой глубиной: out = x − nr_depth_q15·e    
+    int32_t out = x - (int32_t)(((int64_t)e * nr_depth_q15) >> 15);    
+    // makeup-gain — компенсация просадки уровня    
+    out = (int32_t)(((int64_t)out * nr_makeup_q15) >> 15);  
     if (out >  32767) out =  32767;  
     if (out < -32768) out = -32768;  
     return out;  
@@ -452,9 +460,16 @@ static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {
 static int64_t agc_avg_q16  = (int64_t)4096 << 16;   // среднее уровня, Q16  
 static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера, Q16
 
-static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)  
-static volatile uint32_t gain_q15  = 32768;   // ручное усиление, Q15 (32768 = ×1.0)
-static volatile bool     bypass_on = false;   // обход всего тракта
+static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)    
+static volatile uint32_t gain_q15  = 32768;   // ручное усиление, Q15 (32768 = ×1.0)  
+static volatile bool     bypass_on = false;   // обход всего тракта  
+  
+// Runtime-параметры АРУ/лимитера SSB-ветки (дефайны = значения по умолчанию).  
+// CW-режим использует CW_AGC_* — команды его не трогают.  
+static volatile int32_t agc_ref      = AGC_REF;        // целевой уровень АРУ  
+static volatile float   agc_max_gain = AGC_MAX_GAIN;   // потолок усиления  
+static volatile float   agc_min_gain = AGC_MIN_GAIN;   // нижний предел  
+static volatile int32_t lim_ceil     = LIMIT_CEIL;     // потолок лимитера  
 
 static volatile bool tx_on = false;   // false=RX, true=TX (PTT GP8 / "tx on")  
   
@@ -479,17 +494,17 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
         // [MIN_GAIN .. MAX_GAIN] => avg в [REF/MAX .. REF/MIN].  
         // В тишине avg упирается в REF/MAX_GAIN — шум не разгоняется  
         // под потолок, голосовые сообщения слышны без agc off.  
-        const float max_g = cw_on ? CW_AGC_MAX_GAIN : AGC_MAX_GAIN;  
-        const float min_g = cw_on ? CW_AGC_MIN_GAIN : AGC_MIN_GAIN;  
-        int32_t avg_lo = (int32_t)(AGC_REF / max_g);  
-        int32_t avg_hi = (int32_t)(AGC_REF / min_g);  
+        const float max_g = cw_on ? CW_AGC_MAX_GAIN : agc_max_gain;    
+        const float min_g = cw_on ? CW_AGC_MIN_GAIN : agc_min_gain;    
+        int32_t avg_lo = (int32_t)(agc_ref / max_g);    
+        int32_t avg_hi = (int32_t)(agc_ref / min_g);  
         if (avg < avg_lo) avg = avg_lo;  
         if (avg > avg_hi) avg = avg_hi;  
         // Точное деление вместо >>k: сдвиг по старшему биту давал  
         // gain с ошибкой до 2x и СКАЧКИ gain при пересечении avg  
         // границ степени двойки -> AM-модуляция -> гребёнка палок.  
         // int64-деление ~100 циклов x 15.5 ksps = ~0.6% Core 1.  
-        y1 = (int32_t)(((int64_t)x * AGC_REF) / avg);  
+        y1 = (int32_t)(((int64_t)x * agc_ref) / avg);  
     } else {  
         // АРУ off: фиксированное ручное усиление, множитель в Q15.  
         y1 = (int32_t)(((int64_t)x * (int64_t)gain_q15) >> 15);
@@ -511,8 +526,8 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
   
     int32_t lpk = (int32_t)(lim_peak_q16 >> 16);  
     if (lpk < 1) lpk = 1;  
-    if (lpk > LIMIT_CEIL) {  
-        y1 = (int32_t)(((int64_t)y1 * LIMIT_CEIL) / lpk);  
+    if (lpk > lim_ceil) {    
+        y1 = (int32_t)(((int64_t)y1 * lim_ceil) / lpk);    
     }  
   
     if (y1 >  32767) y1 =  32767;  
@@ -753,9 +768,61 @@ void af_dsp_set_gain(float m) {
     if (m > AF_GAIN_MAX) m = AF_GAIN_MAX;  
     gain_q15 = (uint32_t)(m * 32768.0f + 0.5f);  
 }  
-float af_dsp_gain(void) { return (float)gain_q15 / 32768.0f; }
-
-void af_dsp_set_bypass(bool on) { bypass_on = on; }
+float af_dsp_gain(void) { return (float)gain_q15 / 32768.0f; }  
+  
+// --- Настройка АРУ/лимитера (SSB-ветка; CW использует CW_AGC_*) ---  
+void af_dsp_set_agcref(int32_t v) {  
+    if (v < 1000)  v = 1000;  
+    if (v > 32767) v = 32767;  
+    agc_ref = v;  
+}  
+void af_dsp_set_agcmax(float g) {  
+    if (g < 1.0f)    g = 1.0f;  
+    if (g > 1000.0f) g = 1000.0f;  
+    agc_max_gain = g;  
+}  
+void af_dsp_set_agcmin(float g) {  
+    if (g < 0.01f) g = 0.01f;  
+    if (g > 1.0f)  g = 1.0f;  
+    agc_min_gain = g;  
+}  
+void af_dsp_set_limceil(int32_t v) {  
+    if (v < 1000)  v = 1000;  
+    if (v > 32767) v = 32767;  
+    lim_ceil = v;  
+}  
+int32_t af_dsp_agcref(void)  { return agc_ref; }  
+float   af_dsp_agcmax(void)  { return agc_max_gain; }  
+float   af_dsp_agcmin(void)  { return agc_min_gain; }  
+int32_t af_dsp_limceil(void) { return lim_ceil; }  
+  
+// --- Настройка NT/NR (шаги адаптации и глубина — экспертные) ---  
+void af_dsp_set_ntmu(int32_t v) {  
+    if (v < 0)     v = 0;  
+    if (v > 32768) v = 32768;  
+    notch_mu = v;  
+}  
+void af_dsp_set_nrmu(int32_t v) {  
+    if (v < 0)     v = 0;  
+    if (v > 32768) v = 32768;  
+    nr_mu = v;  
+}  
+void af_dsp_set_nrdepth(int32_t v) {  
+    if (v < 0)     v = 0;  
+    if (v > 65536) v = 65536;  
+    nr_depth_q15 = v;  
+}  
+void af_dsp_set_nrmakeup(int32_t v) {  
+    if (v < 0)      v = 0;  
+    if (v > 131072) v = 131072;   // до ×4  
+    nr_makeup_q15 = v;  
+}  
+int32_t af_dsp_ntmu(void)     { return notch_mu; }  
+int32_t af_dsp_nrmu(void)     { return nr_mu; }  
+int32_t af_dsp_nrdepth(void)  { return nr_depth_q15; }  
+int32_t af_dsp_nrmakeup(void) { return nr_makeup_q15; }  
+  
+void af_dsp_set_bypass(bool on) { bypass_on = on; }  
 void af_dsp_set_ramp(bool on) { ramp_on = on; ramp_val = 0; }  
 bool af_dsp_ramp_on(void)     { return ramp_on; }  
 bool     af_dsp_agc_on(void)     { return agc_on; }  
