@@ -87,7 +87,7 @@ static void cli_help(void) {
     Serial.println("#   txnotch on|off    — узкие нотчи против тонов-наводок");  
     Serial.println("#   txnotchf <f1> <f2> — частоты TX-нотчей, Гц (200..7000)");    
     Serial.println("#   txpreset <aggro|max|flat|def> — пресет речевого процессора");  
-    Serial.println("#   txprof <1..7|имя> — TX-профиль: 1 natural, 2 dx, 3 bass, 4 whisper, 5 loud, 6 flat, 7 work");    
+    Serial.println("#   txprof <1..7|имя> — профиль передачи: 1 flat, 2 natural, 3 dx, 4 bass, 5 whisper, 6 loud, 7 max");  
     Serial.println("# === СИСТЕМА ===");    
     Serial.println("#   stats             — диагностика");    
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
@@ -201,63 +201,120 @@ static void cli_stats(void) {
     
 }  
 
-// TX-профили: 7 штук, нумерация совпадает с будущими банками flash.  
-// Каждый профиль — полный набор параметров тракта (как af_store_load для RX).  
+// TX-профили по таблице пресетов: 1=FLAT .. 7=MAX (от прозрачного к плотному).  
+// Каждый профиль — полный снимок тракта: общий блок + per-профиль отличия.  
+// Порядок сеттеров важен: freq/Q до presmax/shelf (пересчёт биквадов),  
+// split при включённом 2band.  
 static void tx_apply_profile(uint8_t idx) {  
-    // общий базис: рабочая точка, от которой профили отличаются деталями  
-    af_tx_set_band(300, 2700);    
-    af_tx_set_ratio(40);  af_tx_set_clip(26000);  af_tx_set_agc(18000);    
-    af_tx_set_gate(AF_TX_GATE_THR);  af_tx_set_gfloor(AF_TX_GATE_FLOOR_Q16);    
-    af_tx_set_ap(true);  af_tx_set_softclip(true);  af_tx_set_2band(true);    
-    af_tx_set_pres(true);  af_tx_set_presmax(15);    
-    af_tx_set_lr2(true);    
-    af_tx_set_duck(true);  af_tx_set_duckmax(30);    
-    af_tx_set_exc(true);   af_tx_set_excmix(3277);    
-    af_tx_set_intel(true); af_tx_set_shelf(0);    
-    af_tx_set_notch(true);    
-    // Новые параметры — к дефолтам из af_config.h    
-    af_tx_set_compthr(8192);    
-    af_tx_set_compthrlo(AF_TX_COMP_THR_LO);  af_tx_set_compthrhi(AF_TX_COMP_THR_HI);    
-    af_tx_set_split(AF_TX_SPLIT_HZ);    
-    af_tx_set_gatehold(AF_TX_GATE_HOLD_MS);  af_tx_set_gatehyst(AF_TX_GATE_HYST_X10);    
-    af_tx_set_agcmax(AF_TX_AGC_MAX_X10);    
-    af_tx_set_inteltgt(AF_TX_INTEL_TGT_Q15);    
-    af_tx_set_intelcut(AF_TX_INTEL_CUT_Q15);    
-    af_tx_set_intelboost(AF_TX_INTEL_BOOST_Q15);    
-    af_tx_set_presfreq(AF_TX_PRES_FREQ_HZ);  af_tx_set_presq(AF_TX_PRES_Q_X100);    
-    af_tx_set_shelffreq(AF_TX_SHELF_FREQ_HZ); af_tx_set_shelfq(AF_TX_SHELF_Q_X100);    
-    af_tx_set_notchf(AF_TX_NOTCH1_HZ, AF_TX_NOTCH2_HZ);    
+    // --- Общее для всех профилей ---  
+    af_tx_set_softclip(true);                       // txmode soft  
+    af_tx_set_split(900);  
+    af_tx_set_compthr(8192);                        // при 2band не активен  
+    af_tx_set_gatehyst(7);  
+    af_tx_set_presfreq(1900);  af_tx_set_presq(90);  
+    af_tx_set_shelffreq(1800); af_tx_set_shelfq(70);  
+    af_tx_set_notchf(1000, 2000);  
+    af_tx_set_inteltgt(15400); af_tx_set_intelcut(16384); af_tx_set_intelboost(32768);  
   
     switch (idx) {  
-    case 1: // natural — мягкий повседневный  
-        af_tx_set_ratio(30);  af_tx_set_clip(20000);  
-        af_tx_set_exc(false);  af_tx_set_duck(false);  
+    case 1: // FLAT — линейный тракт (только FIR + АРУ-лимитер)  
+        af_tx_set_band(300, 2700);  
+        af_tx_set_ratio(10);   af_tx_set_clip(32767);  
+        af_tx_set_agc(18000);  af_tx_set_agcmax(200);  
+        af_tx_set_gate(0);     af_tx_set_gatehold(0);   af_tx_set_gfloor(65536);  
+        af_tx_set_ap(false);   af_tx_set_2band(false);  af_tx_set_lr2(false);  
+        af_tx_set_compthrlo(8192); af_tx_set_compthrhi(6144);  
+        af_tx_set_pres(false); af_tx_set_presmax(0);  
+        af_tx_set_exc(false);  af_tx_set_excmix(3277);  
+        af_tx_set_duck(false); af_tx_set_duckmax(30);  
+        af_tx_set_intel(false);  
+        af_tx_set_shelf(0);  
+        af_tx_set_notch(false);  
         break;  
-    case 2: // dx — пробив на слабом сигнале  
-        af_tx_set_ratio(60);  af_tx_set_clip(12000);  
-        af_tx_set_presmax(30);  af_tx_set_shelf(20);  
+    case 2: // NATURAL — мягкий повседневный  
+        af_tx_set_band(300, 2700);  
+        af_tx_set_ratio(30);   af_tx_set_clip(20000);  
+        af_tx_set_agc(16000);  af_tx_set_agcmax(200);  
+        af_tx_set_gate(250);   af_tx_set_gatehold(180); af_tx_set_gfloor(4120);  
+        af_tx_set_ap(true);    af_tx_set_2band(true);   af_tx_set_lr2(true);  
+        af_tx_set_compthrlo(8192); af_tx_set_compthrhi(6144);  
+        af_tx_set_pres(true);  af_tx_set_presmax(15);  
+        af_tx_set_exc(false);  af_tx_set_excmix(3277);  
+        af_tx_set_duck(false); af_tx_set_duckmax(30);  
+        af_tx_set_intel(true);  
+        af_tx_set_shelf(0);  
+        af_tx_set_notch(true);  
         break;  
-    case 3: // bass — низкий голос  
-        af_tx_set_presmax(20);  af_tx_set_shelf(10);
-        af_tx_set_band(350, 2700);                      // было 200 — срез «бочки»  
-        af_tx_set_duck(true);  af_tx_set_duckmax(40);   // было off — критично для баса 
+    case 3: // DX — пробив на слабом сигнале  
+        af_tx_set_band(300, 2700);  
+        af_tx_set_ratio(60);   af_tx_set_clip(12000);  
+        af_tx_set_agc(18000);  af_tx_set_agcmax(200);  
+        af_tx_set_gate(250);   af_tx_set_gatehold(200); af_tx_set_gfloor(4120);  
+        af_tx_set_ap(true);    af_tx_set_2band(true);   af_tx_set_lr2(true);  
+        af_tx_set_compthrlo(8192); af_tx_set_compthrhi(6144);  
+        af_tx_set_pres(true);  af_tx_set_presmax(30);  
+        af_tx_set_exc(true);   af_tx_set_excmix(3277);  
+        af_tx_set_duck(true);  af_tx_set_duckmax(30);  
+        af_tx_set_intel(true);  
+        af_tx_set_shelf(20);  
+        af_tx_set_notch(true);  
         break;  
-    case 4: // whisper — тихая речь  
-        af_tx_set_agc(22000);  af_tx_set_gate(150);  af_tx_set_duck(false); 
-        af_tx_set_ratio(50);   af_tx_set_excmix(1638);  
+    case 4: // BASS — низкий голос  
+        af_tx_set_band(350, 2700);  
+        af_tx_set_ratio(40);   af_tx_set_clip(26000);  
+        af_tx_set_agc(16000);  af_tx_set_agcmax(200);  
+        af_tx_set_gate(250);   af_tx_set_gatehold(180); af_tx_set_gfloor(4120);  
+        af_tx_set_ap(true);    af_tx_set_2band(true);   af_tx_set_lr2(true);  
+        af_tx_set_compthrlo(8192); af_tx_set_compthrhi(6144);  
+        af_tx_set_pres(true);  af_tx_set_presmax(20);  
+        af_tx_set_exc(false);  af_tx_set_excmix(3277);  
+        af_tx_set_duck(true);  af_tx_set_duckmax(40);  
+        af_tx_set_intel(true);  
+        af_tx_set_shelf(10);  
+        af_tx_set_notch(true);  
         break;  
-    case 5: // loud — громкий голос  
-        af_tx_set_agc(14000);  af_tx_set_gate(350);  
-        af_tx_set_ratio(50);   af_tx_set_clip(24000);   // было 16000 — клиппер «хрипел» бы  
+    case 5: // WHISPER — тихая речь  
+        af_tx_set_band(300, 2700);  
+        af_tx_set_ratio(50);   af_tx_set_clip(16000);  
+        af_tx_set_agc(20000);  af_tx_set_agcmax(200);  
+        af_tx_set_gate(150);   af_tx_set_gatehold(250); af_tx_set_gfloor(4120);  
+        af_tx_set_ap(true);    af_tx_set_2band(true);   af_tx_set_lr2(true);  
+        af_tx_set_compthrlo(8192); af_tx_set_compthrhi(6144);  
+        af_tx_set_pres(true);  af_tx_set_presmax(30);  
+        af_tx_set_exc(true);   af_tx_set_excmix(1638);  
+        af_tx_set_duck(false); af_tx_set_duckmax(30);  
+        af_tx_set_intel(true);  
+        af_tx_set_shelf(0);  
+        af_tx_set_notch(true);  
         break;  
-    case 6: // flat — линейный тракт  
-        af_tx_set_ratio(10);  af_tx_set_clip(32767);  af_tx_set_gate(0);  
-        af_tx_set_ap(false);  af_tx_set_2band(false);  af_tx_set_gfloor(65536);  
-        af_tx_set_pres(false); af_tx_set_lr2(false);  af_tx_set_duck(false);  
-        af_tx_set_exc(false);  af_tx_set_intel(false); af_tx_set_notch(false);  
+    case 6: // LOUD — громкий голос  
+        af_tx_set_band(300, 2700);  
+        af_tx_set_ratio(40);   af_tx_set_clip(24000);  
+        af_tx_set_agc(14000);  af_tx_set_agcmax(200);  
+        af_tx_set_gate(350);   af_tx_set_gatehold(150); af_tx_set_gfloor(4120);  
+        af_tx_set_ap(true);    af_tx_set_2band(true);   af_tx_set_lr2(true);  
+        af_tx_set_compthrlo(8192); af_tx_set_compthrhi(6144);  
+        af_tx_set_pres(true);  af_tx_set_presmax(15);  
+        af_tx_set_exc(false);  af_tx_set_excmix(3277);  
+        af_tx_set_duck(true);  af_tx_set_duckmax(30);  
+        af_tx_set_intel(true);  
+        af_tx_set_shelf(0);  
+        af_tx_set_notch(true);  
         break;  
-    case 7: // work — рабочая точка (базис уже её и есть)  
+    case 7: // MAX — максимум плотности  
     default:  
+        af_tx_set_band(300, 2400);  
+        af_tx_set_ratio(80);   af_tx_set_clip(6144);  
+        af_tx_set_agc(18000);  af_tx_set_agcmax(300);  
+        af_tx_set_gate(250);   af_tx_set_gatehold(180); af_tx_set_gfloor(4120);  
+        af_tx_set_ap(true);    af_tx_set_2band(true);   af_tx_set_lr2(true);  
+        af_tx_set_compthrlo(6144); af_tx_set_compthrhi(6144);  
+        af_tx_set_pres(true);  af_tx_set_presmax(30);  
+        af_tx_set_exc(true);   af_tx_set_excmix(3277);  
+        af_tx_set_duck(true);  af_tx_set_duckmax(30);  
+        af_tx_set_intel(true);  
+        af_tx_set_shelf(40);  
+        af_tx_set_notch(true);  
         break;  
     }  
 }  
@@ -773,21 +830,22 @@ static void cli_exec(char* line) {
                       af_tx_2band() ? "on" : "off");    
     }    
 
-    else if (strncmp(cmd, "txprof", 6) == 0) {  
-        char* v = strtok(NULL, " \t");  
-        if (v == NULL) { Serial.println("# ERR: txprof <1..7|natural|dx|bass|whisper|loud|flat|work>"); return; }  
-        uint8_t idx = 0;  
-        if      (strcmp(v, "natural") == 0) idx = 1;  
-        else if (strcmp(v, "dx")      == 0) idx = 2;  
-        else if (strcmp(v, "bass")    == 0) idx = 3;  
-        else if (strcmp(v, "whisper") == 0) idx = 4;  
-        else if (strcmp(v, "loud")    == 0) idx = 5;  
-        else if (strcmp(v, "flat")    == 0) idx = 6;  
-        else if (strcmp(v, "work")    == 0) idx = 7;  
-        else {  
-            idx = (uint8_t)strtoul(v, NULL, 10);  
-            if (idx < 1 || idx > 7) { Serial.println("# ERR: txprof <1..7>"); return; }  
-        }  
+    else if (strncmp(cmd, "txprof", 6) == 0) {    
+        char* v = strtok(NULL, " \t");    
+        if (v == NULL) { Serial.println("# ERR: txprof <1..7|flat|natural|dx|bass|whisper|loud|max>"); return; }    
+        uint8_t idx = 0;    
+        if      (strcmp(v, "flat")    == 0) idx = 1;    
+        else if (strcmp(v, "natural") == 0) idx = 2;    
+        else if (strcmp(v, "dx")      == 0) idx = 3;    
+        else if (strcmp(v, "bass")    == 0) idx = 4;    
+        else if (strcmp(v, "whisper") == 0) idx = 5;    
+        else if (strcmp(v, "loud")    == 0) idx = 6;    
+        else if (strcmp(v, "max")     == 0) idx = 7;    
+        else if (strcmp(v, "work")    == 0) { Serial.println("# work -> txpreset def"); return; }    
+        else {    
+            idx = (uint8_t)strtoul(v, NULL, 10);    
+            if (idx < 1 || idx > 7) { Serial.println("# ERR: txprof <1..7>"); return; }    
+        }    
         tx_apply_profile(idx);  
         Serial.printf("# OK txprof=%u\n", idx);  
     }  
