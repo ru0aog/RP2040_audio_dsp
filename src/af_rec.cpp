@@ -100,11 +100,12 @@ void af_rec_init(void) {
 bool af_rec_start(void) {      
     if (state != ST_IDLE) return false;      
     // RAM-схема: flash не трогаем — стирание слота отложено до stop.    
-    pos = 0;    
-    rec_src_tx = af_dsp_tx_on() ? 1 : 0;        
-    state = ST_REC;  
-    rec_len = 0;    // старый слот логически пуст до дампа в af_rec_stop    
-    af_rec_active = 1;  
+    rec_len = 0;          
+    pos = 0;  
+    rec_src_tx = af_dsp_tx_on() ? 1 : 0;      
+    state = ST_REC;
+    rec_len = 0;    // старый слот логически пуст до дампа в af_rec_stop  
+    af_rec_active = 1;
     Serial.printf("# rec: recording (%s), ram buf %lu samp\n",  
                   rec_src_tx ? "tx" : "rx", (unsigned long)AF_REC_RAM_SAMP);      
     return true;      
@@ -135,21 +136,12 @@ void af_rec_stop(void) {
         slot_erase_sector(s * 4096u);  
         watchdog_update();                   // ~45 мс на сектор — кормим пса  
     }  
-    // Данные — страницами по 256 байт из ram_buf.  
-    // flash_range_program требует len кратной 256 — хвост дополняем  
-    // 0xFF до полной страницы (стёртое состояние, читается как -1).  
-    uint8_t page[256];  
-    for (uint32_t off = 0; off < rec_len * 2u; off += 256u) {    
-        uint32_t chunk = rec_len * 2u - off;    
-        if (chunk < 256u) {  
-            memcpy(page, (const uint8_t*)ram_buf + off, chunk);  
-            memset(page + chunk, 0xFF, 256u - chunk);  
-            slot_program(AF_REC_HDR_BYTES + off, page, 256u);  
-        } else {  
-            slot_program(AF_REC_HDR_BYTES + off, (const uint8_t*)ram_buf + off, 256u);  
-        }  
-        watchdog_update();               // ~0.5 с на 120 КБ — кормим пса  
-    }    
+    // Данные — страницами по 256 байт из ram_buf  
+    for (uint32_t off = 0; off < rec_len * 2u; off += 256u) {  
+        uint32_t chunk = rec_len * 2u - off;  
+        if (chunk > 256u) chunk = 256u;  
+        slot_program(AF_REC_HDR_BYTES + off, (const uint8_t*)ram_buf + off, chunk);  
+    }  
     // Заголовок — последним: прерванный дамп читается как пустой слот  
     rec_hdr_t h;  
     memset(&h, 0, sizeof(h));  
@@ -181,8 +173,8 @@ void af_rec_play_stop(void) {
     }
 }    
   
-// Геттеры — в RAM: вызываются из af_voice_mix/af_dsp_poll (Core 1).  
-// Во время дампа Core 1 в reset, но геттеры читаются и в рабочем цикле.  
+// Геттеры — в RAM: вызываются из af_voice_mix/af_dsp_poll (Core 1)  
+// во время erase/program, когда XIP выключен.  
 bool     __not_in_flash_func(af_rec_is_recording)(void)  { return state == ST_REC; }      
 bool     __not_in_flash_func(af_rec_is_playing)(void)    { return state == ST_PLAY; }      
 uint32_t __not_in_flash_func(af_rec_len_samples)(void)   { return rec_len; }      
@@ -211,7 +203,7 @@ int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {
     return (int32_t)d[pos++];              // замещение микрофона    
 }    
   
-// --- Core 0: контроль записи (смена тракта, переполнение буфера) --------------  
+// --- Core 0: программирование готовых буферов ---------------------------------    
 void af_rec_poll(void) {          
     if (state != ST_REC) return;          
     if ((af_dsp_tx_on() ? 1 : 0) != rec_src_tx) {   // тракт сменился — финализируем      
