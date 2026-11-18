@@ -21,9 +21,9 @@
 // Максимум отсчётов int16 в слоте — нужен и CLI (recs/rec).    
 #define AF_REC_MAX_SAMP   (AF_REC_FLASH_LEN / 2)    
     
-// RAM-буфер записи: 160 КБ = 81920 отсчётов ≈ 5,3 с при 15464 Гц.    
-// Ограничение — свободная RAM (~183 КБ), не слот во flash.    
-#define AF_REC_RAM_SAMP   80000u          // 160 КБ ≈ 5.2 с @ 15464 Гц  
+// RAM-буфер записи при 15464 Гц.    
+// Ограничение — свободная RAM    
+#define AF_REC_RAM_SAMP   60000u          // 117 КБ ≈ 3.9 с @ 15464 Гц  
   
 void     af_rec_init(void);    
 void     af_rec_poll(void);        // Core 0: контроль записи (src change, buf full)      
