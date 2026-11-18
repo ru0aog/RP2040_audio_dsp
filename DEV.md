@@ -247,3 +247,9 @@ enum расширен `VOICE_PROF_1..VOICE_PROF_7` (id 07–13), в
    должны быть на тех же SDK-обёртках; прямые ROM-вызовы без  
    `enter_cmd_xip` висят тем же образом (см. BUG-011).  
 
+6. **`clock_configure(clk_sys)` затирает `ssi_hw->baudr`** —  
+   в `reprogram_pll` делитель флеша писать строго ПОСЛЕ  
+   `clock_configure` (коммит `d08ebcd`, см. BUG-012). Симптом  
+   регрессии: `stats` → `flash_sck=1.5 MHz (BAUDR=162)`,  
+   `core1 load` ~100%, `cap dropped` растёт.  
+
