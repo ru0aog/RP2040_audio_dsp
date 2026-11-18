@@ -49,16 +49,17 @@ static volatile bool g_parked   = false;
   
 // Вызывается с Core 1 из af_dsp_poll. Вся функция в RAM — во время  
 // erase/program flash недоступен, spin-цикл обязан быть не во flash.  
-void __not_in_flash_func(af_store_core1_park_poll)(void) {    
-    if (!g_park_req) return;    
-    uint32_t irq = save_and_disable_interrupts();  // IRQ Core 1 off —    
-                                                   // ISR лежит во flash    
-    g_parked = true;    
-    __dmb();    
-    while (g_park_req) { /* spin в RAM, без IRQ */ }    
-    g_parked = false;    
-    restore_interrupts(irq);    
-}
+void __not_in_flash_func(af_store_core1_park_poll)(void) {      
+    if (!g_park_req) return;      
+    uint32_t irq = save_and_disable_interrupts();  // IRQ Core 1 off —      
+                                                   // ISR лежит во flash      
+    g_parked = true;      
+    __dmb();      
+    while (g_park_req) { /* spin в RAM, без IRQ */ }      
+    af_led_set(255, 0, 0);   // М5: Core 1 вышла из spin — жива      
+    g_parked = false;      
+    restore_interrupts(irq);      
+}  
   
 // Core 0: запросить парковку, ждать ack с таймаутом.  
 static bool park_core1(void) {    
@@ -222,23 +223,24 @@ bool af_store_save(uint8_t idx) {
     // (__not_in_flash_func на всей DSP-цепочке) — после записи    
     // отпускаем его и возвращаемся, ребут не нужен.    
     
-    af_led_set(255, 255, 0);            // М1 жёлтый: park req  
-    if (!park_core1()) {      
-        Serial.println("# save: core1 park timeout");      
-        return false;      
-    }      
-    af_led_set(0, 255, 0);            // М2: ЗЕЛЁНЫЙ — Core 1 припаркован 
-    // Прямой вызов: Core 1 припаркован в RAM, VTOR в RAM,  
-    // IRQ Core 0 заглушены — flash_safe_execute не нужен  
-    // (и не работает без multicore lockout: rc=-4).  
+    af_led_set(255, 255, 0);  
+    Serial.println("# save: parking..."); Serial.flush();  
+    if (!park_core1()) {  
+        Serial.println("# save: core1 park timeout");  
+        return false;  
+    }  
+    Serial.println("# save: parked"); Serial.flush();  
+    af_led_set(0, 255, 255);  
     noInterrupts();  
-    do_flash_write(NULL);      // RAM: erase+program, XIP off  
-    interrupts();    
-    af_led_set(255, 0, 255);            // М3 пурпурный: write done  
-    g_park_req = false;     // отпустить Core 1      
-    __dmb();      
-    while (g_parked) { }    // дождаться выхода из spin      
-    af_led_set(255, 255, 255);          // М4 белый: core1 released    
+    do_flash_write(NULL);  
+    interrupts();  
+    af_led_set(0, 255, 0);  
+    Serial.println("# save: write done, releasing core1"); Serial.flush();  
+    g_park_req = false;  
+    __dmb();  
+    while (g_parked) { }  
+    af_led_set(255, 255, 255);  
+    Serial.println("# save: core1 released"); Serial.flush();  
   
     // Синхронизируем RAM-буфер EEPROM с записанным сектором —    
     // иначе af_store_read (через EEPROM.get) вернёт старые данные.    
