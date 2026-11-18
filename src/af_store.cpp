@@ -29,6 +29,7 @@
 #include "hardware/flash.h"
 #include "pico/flash.h"
 #include "hardware/watchdog.h"
+#include "hardware/flash.h"  
   
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
@@ -91,7 +92,19 @@ static uint8_t crc8(const void* p, size_t n) {
 static int rec_addr(uint8_t idx) {           // idx = 1..7  
     return 4 + (idx - 1) * (int)sizeof(af_bank_rec_t);  
 }  
-  
+
+// JEDEC ID: [0]=manufacturer, [1]=memory type, [2]=capacity (2^N bytes)  
+static void print_flash_jedec(void) {  
+    uint8_t tx[4] = { 0x9F, 0, 0, 0 };  
+    uint8_t rx[4] = { 0 };  
+    uint32_t ints = save_and_disable_interrupts();  
+    flash_do_cmd(tx, rx, 4);  
+    restore_interrupts(ints);  
+    uint32_t size = 1u << rx[3];  
+    Serial.printf("# flash JEDEC: mfr=%02X type=%02X cap=%02X -> %u bytes (%u MB)\n",  
+                  rx[1], rx[2], rx[3], size, size >> 20);  
+}  
+
 // ---------------------------------------------------------------------------  
 // Запись сектора во flash. Выполняется внутри flash_safe_execute —  
 // Core 1 припаркован, код исполняется из RAM, flash недоступен для чтения.  
@@ -108,6 +121,7 @@ static void __not_in_flash_func(do_flash_write)(void* param) {
 // API  
 // ---------------------------------------------------------------------------  
 void af_store_init(void) {  
+    print_flash_jedec();
     EEPROM.begin(AF_EEPROM_SIZE);  
     // Если magic не совпал — форматируем: все ячейки пустые (0xFF).  
     if (EEPROM.read(0) != AF_STORE_MAGIC0 ||  
