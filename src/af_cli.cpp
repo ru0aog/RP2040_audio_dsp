@@ -1230,22 +1230,19 @@ static void cli_exec(char* line) {
         af_rec_stop();    
         Serial.println("# OK stop");    
     }    
-    else if (strcmp(cmd, "recs") == 0) {    
-        const uint32_t len = af_rec_len();    
-        if (len == 0) {    
-            Serial.println("# rec: slot empty");    
-        const uint32_t len = af_rec_len_samples();      
-        if (len == 0) {      
-            Serial.println("# rec: slot empty");      
-        } else {      
-            Serial.printf("# rec: slot used %lu samp (%lu.%lu s)  state=%s\n",      
-                          (unsigned long)len,      
-                          (unsigned long)(len / AF_FS_OUT_HZ),      
-                          (unsigned long)((len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),      
-                          af_rec_is_recording() ? "REC" :      
-                          af_rec_is_playing()   ? "PLAY" : "idle");      
-        }      
-    }    
+    else if (strcmp(cmd, "recs") == 0) {      
+        const uint32_t len = af_rec_len_samples();        
+        if (len == 0) {        
+            Serial.println("# rec: slot empty");        
+        } else {        
+            Serial.printf("# rec: slot used %lu samp (%lu.%lu s)  state=%s\n",        
+                          (unsigned long)len,        
+                          (unsigned long)(len / AF_FS_OUT_HZ),        
+                          (unsigned long)((len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),        
+                          af_rec_is_recording() ? "REC" :        
+                          af_rec_is_playing()   ? "PLAY" : "idle");        
+        }        
+    }      
     
     // вставлять сюда  
   

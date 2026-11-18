@@ -9,7 +9,8 @@
   
 #pragma once    
   
-#include <Arduino.h>    
+#include <Arduino.h>
+#include "af_config.h"   // AF_REC_FLASH_OFF/LEN  
 
 // Геометрия слота — в af_config.h (AF_REC_FLASH_OFF/LEN).  
 // Максимум отсчётов int16 в слоте — нужен и CLI (recs/rec).  
