@@ -11,8 +11,11 @@
 // Этап 1: стирание всего слота при старте записи через    
 // flash_safe_execute (Core 1 паркуется, пауза ~8.6 с при перезаписи    
 // занятого слота; пустой слот — стирание пропускается).    
-// Этап 2 (TODO): конвейер «пишем сектор N — стираем N+1» без парковки,    
-// DSP-цепочка под __not_in_flash_func.    
+// Этап 2: конвейер «пишем сектор N — стираем N+1» без парковки Core 1.      
+// Инвариант: сектора [0, erase_off) всегда стёрты; erase_off держится      
+// на сектор впереди указателя записи. Стирание/программирование —      
+// прямые flash_range_* с запретом прерываний Core 0 (~45 мс на сектор);      
+// Core 1 продолжает работать — вся DSP-цепочка под __not_in_flash_func.      
 // ============================================================================    
 #include <Arduino.h>    
 #include <string.h>    
@@ -20,9 +23,10 @@
 #include "af_config.h"    
 #include "af_dsp.h"    
   
-#include "pico/stdlib.h"    
-#include "hardware/flash.h"    
-#include "pico/flash.h"    
+#include "pico/stdlib.h"      
+#include "hardware/flash.h"      
+#include "hardware/sync.h"     // save_and_disable_interrupts      
+#include "pico/flash.h"      
   
 #define AF_REC_MAGIC0     'R'    
 #define AF_REC_MAGIC1     'C'    
@@ -48,8 +52,9 @@ static int16_t            buf[2][AF_REC_BUF_SAMP];
 static volatile uint8_t   buf_wr      = 0;           // буфер наполнения    
 static volatile uint16_t  buf_fill    = 0;    
 static volatile uint8_t   buf_rdy[2]  = { 0, 0 };    // готов к program    
-static volatile uint32_t  flash_wr    = 0;           // байт в data-области    
-static volatile uint32_t  rec_dropped = 0;           // блоки без свободного буфера    
+static volatile uint32_t  flash_wr    = 0;           // байт в data-области      
+static volatile uint32_t  erase_off   = 0;           // стёрто до этого смещения      
+static volatile uint32_t  rec_dropped = 0;           // блоки без свободного буфера      
   
 static const uint8_t* slot_base(void) {    
     return (const uint8_t*)(XIP_BASE + AF_REC_FLASH_OFF);    
@@ -62,22 +67,26 @@ static bool hdr_read(rec_hdr_t* h) {
            h->ver == AF_REC_VER && h->len <= AF_REC_MAX_SAMP;    
 }    
   
-// --- flash I/O через flash_safe_execute (Core 1 паркуется) ------------------    
-static void do_erase(void* p) {    
-    flash_range_erase(AF_REC_FLASH_OFF, AF_REC_FLASH_LEN);    
-    (void)p;    
-}    
-static void do_program(void* p) {    
-    const uint32_t* a = (const uint32_t*)p;    
-    flash_range_program(a[0], (const uint8_t*)a[1], a[2]);    
-}    
-static void slot_erase(void) {    
-    flash_safe_execute(do_erase, NULL, 20000);    
-}    
-static void slot_program(uint32_t off, const void* data, uint32_t len) {    
-    uint32_t a[3] = { AF_REC_FLASH_OFF + off, (uint32_t)data, len };    
-    flash_safe_execute(do_program, a, 5000);    
-}    
+// --- flash I/O: прямые вызовы, запрет прерываний только на Core 0 -----------      
+// Core 1 не паркуется — условие: вся цепочка loop1() в RAM (__not_in_flash_func).      
+static void slot_erase_sector(uint32_t off) {        // off кратно 4096, внутри слота      
+    uint32_t ints = save_and_disable_interrupts();      
+    flash_range_erase(AF_REC_FLASH_OFF + off, 4096);      
+    restore_interrupts(ints);      
+}      
+static void slot_program(uint32_t off, const void* data, uint32_t len) {      
+    uint32_t ints = save_and_disable_interrupts();      
+    flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);      
+    restore_interrupts(ints);      
+}      
+// Держим erase_off на сектор впереди следующей записи.      
+static void erase_ahead(void) {      
+    const uint32_t need = AF_REC_HDR_BYTES + flash_wr + 4096;      
+    while (erase_off < need && erase_off < AF_REC_FLASH_LEN) {      
+        slot_erase_sector(erase_off);      
+        erase_off += 4096;      
+    }      
+}      
   
 // --- API --------------------------------------------------------------------    
 void af_rec_init(void) {    
@@ -92,17 +101,14 @@ void af_rec_init(void) {
   
 bool af_rec_start(void) {    
     if (state != ST_IDLE) return false;    
-    if (rec_len != 0) {                     // слот занят — стираем (этап 1: целиком)    
-        Serial.println("# rec: erasing slot...");    
-        slot_erase();    
-        rec_len = 0;    
-    } else {                                // пустой — проверяем, стёрт ли    
-        const uint32_t* p = (const uint32_t*)slot_base();    
-        for (uint32_t i = 0; i < AF_REC_FLASH_LEN / 4; i += 1024)    
-            if (p[i] != 0xFFFFFFFF) { slot_erase(); break; }    
-    }    
-    pos = 0; flash_wr = 0; buf_fill = 0; buf_wr = 0;    
-    buf_rdy[0] = buf_rdy[1] = 0; rec_dropped = 0;    
+    // Стираем сектор 0 (заголовок) и сектор 1 (первые данные) — ~90 мс.      
+    // Остальные сектора стирает erase_ahead() по мере записи.      
+    slot_erase_sector(0);      
+    slot_erase_sector(4096);      
+    erase_off = 8192;      
+    rec_len = 0;      
+    pos = 0; flash_wr = 0; buf_fill = 0; buf_wr = 0;
+    buf_rdy[0] = buf_rdy[1] = 0; rec_dropped = 0;
     rec_src_tx = af_dsp_tx_on() ? 1 : 0;    
     state = ST_REC;    
     Serial.printf("# rec: recording (%s)\n", rec_src_tx ? "tx" : "rx");    
@@ -195,11 +201,12 @@ void af_rec_poll(void) {
         af_rec_stop();    
         return;    
     }    
-    for (int i = 0; i < 2; i++) {        
-        if (!buf_rdy[i]) continue;      
-        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);      
-        flash_wr += AF_REC_BUF_SAMP * 2;      
-        buf_rdy[i] = 0;      
-    }      
-    if (pos >= AF_REC_MAX_SAMP) af_rec_stop();   // слот заполнен — дописать хвост и заголовок    
+    for (int i = 0; i < 2; i++) {          
+        if (!buf_rdy[i]) continue;        
+        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);        
+        flash_wr += AF_REC_BUF_SAMP * 2;        
+        buf_rdy[i] = 0;        
+    }        
+    erase_ahead();                          // стираем сектор N+1, пока пишется N      
+    if (pos >= AF_REC_MAX_SAMP) af_rec_stop();   // слот заполнен — дописать хвост и заголовок      
 }  

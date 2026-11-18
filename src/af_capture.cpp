@@ -29,7 +29,8 @@
 #include "hardware/dma.h"  
 #include "hardware/irq.h"  
 #include "hardware/sync.h"  
-#include "hardware/clocks.h"  
+#include "hardware/clocks.h"
+#include "hardware/structs/scb.h"
   
 // Один блок = AF_BLOCK_SAMPLES 16-битных переносов (моно).  
 #define AF_BLOCK_TRANSFERS  AF_BLOCK_SAMPLES  
@@ -313,12 +314,22 @@ void af_capture_start(void) {
     dma_channel_configure(af_dma_b, &cb, (void*)af_buf_b0, &adc_hw->fifo,  
                           AF_BLOCK_TRANSFERS, false);  
   
-    // IRQ: оба канала на DMA_IRQ_0, обработчик на Core 0.  
-    dma_channel_acknowledge_irq0(af_dma_a);  
-    dma_channel_acknowledge_irq0(af_dma_b);  
-    dma_channel_set_irq0_enabled(af_dma_a, true);  
-    dma_channel_set_irq0_enabled(af_dma_b, true);  
-    irq_set_exclusive_handler(DMA_IRQ_0, af_dma_irq);  
+    // IRQ: оба канала на DMA_IRQ_0, обработчик на Core 0.    
+    dma_channel_acknowledge_irq0(af_dma_a);    
+    dma_channel_acknowledge_irq0(af_dma_b);    
+    dma_channel_set_irq0_enabled(af_dma_a, true);    
+    dma_channel_set_irq0_enabled(af_dma_b, true);    
+    irq_set_exclusive_handler(DMA_IRQ_0, af_dma_irq);    
+    
+    // VTOR -> RAM: при стирании сектора магнитофона (XIP off ~45 мс)    
+    // вход в ISR не должен читать векторную таблицу из flash.    
+    static uint32_t ram_vtor[192] __attribute__((aligned(256)));    
+    static bool vtor_in_ram = false;    
+    if (!vtor_in_ram) {    
+        memcpy(ram_vtor, (const void*)scb_hw->vtor, sizeof(ram_vtor));    
+        scb_hw->vtor = (uint32_t)ram_vtor;    
+        vtor_in_ram = true;    
+    }    
   
     // Чистый старт: стоп ADC, дренаж FIFO, затем пуск.  
     adc_run(false);  
@@ -379,7 +390,7 @@ void af_capture_stop(void) {
 // Пауза adc_run + дренаж FIFO: DMA-цепочка продолжает ждать DREQ,    
 // разрыв потока ~мкс–мс — допустимо для PTT. Вызывать при смене RX/TX.    
 // ---------------------------------------------------------------------------    
-void af_capture_set_channel(uint8_t adc_input) {    
+void __not_in_flash_func(af_capture_set_channel)(uint8_t adc_input) {
     if (!af_running) return;    
     adc_run(false);    
     adc_fifo_drain();    
@@ -390,14 +401,14 @@ void af_capture_set_channel(uint8_t adc_input) {
 // ---------------------------------------------------------------------------  
 // API очереди — ТОЛЬКО Core 1 (из af_dsp_poll)  
 // ---------------------------------------------------------------------------  
-const volatile uint16_t* af_capture_get_block(void) {    
+const volatile uint16_t* __not_in_flash_func(af_capture_get_block)(void) {
     const uint8_t tail = af_q_tail;    
     if (tail == af_q_head) { ++af_cap_get_empty; return NULL; }    
     __dmb();    
     return af_queue[tail];    
 }    
   
-void af_capture_release(void) {    
+void __not_in_flash_func(af_capture_release)(void) { 
     const uint8_t tail = af_q_tail;    
     if (tail == af_q_head) return;    
     ++af_cap_released;    

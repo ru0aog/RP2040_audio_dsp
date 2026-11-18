@@ -213,7 +213,7 @@ static volatile int32_t tx_comp_thr_hi = AF_TX_COMP_THR_HI;  // ВЧ-полос�
 // All-pass 1-го порядка (phase rotator): y = a*(x - y1) + x1.  
 // Амплитуда не меняется, фаза крутится — пики речи симметрируются,  
 // клипперу достаётся более «квадратный» сигнал.  
-static inline int32_t tx_allpass(int32_t x) {  
+static inline int32_t __not_in_flash_func(tx_allpass)(int32_t x) {  
     int32_t y = (int32_t)(((int64_t)AF_TX_AP_COEFF_Q15 * (x - ap_y1)) >> 15) + ap_x1;  
     ap_x1 = x;  
     ap_y1 = y;  
@@ -254,8 +254,8 @@ static inline int32_t __not_in_flash_func(tx_comp_band)(int32_t x,
   
 // Пересчёт gain одной полосы по её огибающей — вызывается из    
 // tx_compress раз в 64 отсчёта.    
-static inline void tx_comp_gain_update(int64_t env_q16, int32_t* gain_q15,    
-                                       int32_t thr) {    
+static inline void __not_in_flash_func(tx_comp_gain_update)(int64_t env_q16,  
+                                       int32_t* gain_q15, int32_t thr) {  
     int32_t env = (int32_t)(env_q16 >> 16);    
     if (env > thr) {    
         int32_t inv = (int32_t)(((int64_t)thr << 15) / env);   // thr/env Q15    
@@ -583,7 +583,7 @@ static inline int32_t __not_in_flash_func(tx_exciter)(int32_t x, int32_t hi) {
 
 // АРУ: gain = target/env, кламп 1..max. EMA огибающей — общая с  
 // компрессором нет, своя (агрессивнее атака, медленнее спад).  
-static int32_t tx_agc(int32_t x) {  
+static int32_t __not_in_flash_func(tx_agc)(int32_t x) {  
     uint32_t a = (uint32_t)(x >= 0 ? x : -x);    
     uint32_t c = (a > (agc_env >> 8)) ? AF_TX_AGC_ATT_Q24 : AF_TX_AGC_REL_Q24;    
     // ВАЖНО: вычитание в int64 — иначе при agc_env > a<<8 беззнаковый    
@@ -619,7 +619,7 @@ static int32_t tx_agc(int32_t x) {
 //   между порогами   -> держать текущее состояние (нет болтанки)  
 // Открытие мгновенное — начала слов не съедаются; EMA gate_gain  
 // даёт плавные фронты без щелчков.  
-static int32_t tx_gate(int32_t x) {  
+static int32_t __not_in_flash_func(tx_gate)(int32_t x) {  
     if (tx_gate_thr == 0) return x;                  // гейт выключен  
     uint32_t env = agc_env >> 8;                     // та же огибающая  
     const uint32_t thr_close = (tx_gate_thr * tx_gate_hyst_x10) / 10;    

@@ -68,7 +68,7 @@ void af_voice_play(af_voice_id_t id) {
   
 bool af_voice_busy(void) { return s_cur != NULL || s_q_head != s_q_tail; }  
   
-int16_t af_voice_mix(int16_t s) {  
+int16_t __not_in_flash_func(af_voice_mix)(int16_t s) {  
     // Подхват следующего клипа из очереди  
     if (s_cur == NULL && s_q_tail != s_q_head) {  
         af_voice_id_t id = s_queue[s_q_tail];  

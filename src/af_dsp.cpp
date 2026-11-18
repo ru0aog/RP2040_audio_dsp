@@ -32,16 +32,18 @@
   
 // Каскад 0: проверенный 15-отводный, ~80 дБ.  
 // Сумма = 16384 + 2·(10030 − 2250 + 532 − 120) = 32768 → DC-gain = 1.0.  
-#define HB0_NTAPS 15  
-static const int16_t hb0_taps[HB0_NTAPS] = {  
+#define HB0_NTAPS 15    
+// Без const: таблица уходит в .data (RAM) — читается во время flash-erase    
+// при записи магнитофона (Core 1 не паркуется, вариант B).    
+static int16_t hb0_taps[HB0_NTAPS] = {    
     -120,     0,   532,     0, -2250,  
        0, 10030, 16384, 10030,     0,  
     -2250,     0,   532,     0,  -120  
 };  
   
 // Каскады 1 и 2: 31 отвод, окно Блэкмана-Харриса, ~90 дБ заграждения.  
-#define HBX_NTAPS 31  
-static const int16_t hbx_taps[HBX_NTAPS] = {  
+#define HBX_NTAPS 31    
+static int16_t hbx_taps[HBX_NTAPS] = {   // в RAM — см. hb0_taps    
        0,     0,     3,     0,   -25,     0,   119,     0,  
     -399,     0,  1086,     0, -2760,     0, 10168, 16384,  
    10168,     0, -2760,     0,  1086,     0,  -399,     0,  
@@ -901,7 +903,7 @@ void af_dsp_init(void) {
 // ---------------------------------------------------------------------------  
 // Измерение загрузки Core 1 (порт core1_update_load из rx_dsp.cpp)  
 // ---------------------------------------------------------------------------  
-static inline void core1_update_load(uint32_t now_us) {  
+static inline void __not_in_flash_func(core1_update_load)(uint32_t now_us) {    
     const uint32_t window_us = now_us - core1_window_start_us;  
     if (window_us < 1000000u) return;  
   
