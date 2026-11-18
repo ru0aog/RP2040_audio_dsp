@@ -19,7 +19,11 @@
 // во время play flash-операций нет, чтение безопасно.  
 //  
 // Этап 1: дамп ещё не внедрён — af_rec_stop только фиксирует rec_len,  
-// слот валиден только если был записан ранее (после ребута — пуст).     
+// слот валиден только если был записан ранее (после ребута — пуст).
+//
+// Этап 2: дамп внедрён с маркерами Serial.println — отладка,    
+// после проверки на железе маркеры убираются (этап 3).       
+//
 // ============================================================================    
 #include <Arduino.h>    
 #include <string.h>    
@@ -61,14 +65,28 @@ static inline const uint8_t* slot_base(void) {
     return (const uint8_t*)(XIP_BASE + AF_REC_FLASH_OFF);  
 }  
   
-// Чтение заголовка через XIP — только на Core 0, вне flash-операций.  
-static bool hdr_read(uint32_t* len_out) {  
-    const rec_hdr_t* h = (const rec_hdr_t*)slot_base();  
-    if (h->magic[0] != 'R' || h->magic[1] != 'C') return false;  
-    if (h->len_samples == 0 || h->len_samples > AF_REC_RAM_SAMP) return false;  
-    *len_out = h->len_samples;  
-    return true;  
-}  
+// Чтение заголовка через XIP — только на Core 0, вне flash-операций.    
+static bool hdr_read(uint32_t* len_out) {    
+    const rec_hdr_t* h = (const rec_hdr_t*)slot_base();    
+    if (h->magic[0] != 'R' || h->magic[1] != 'C') return false;    
+    if (h->len_samples == 0 || h->len_samples > AF_REC_RAM_SAMP) return false;    
+    *len_out = h->len_samples;    
+    return true;    
+}    
+  
+// --- Flash I/O: SDK-обёртки, вызывать ТОЛЬКО при остановленном Core 1 ---------    
+// (после multicore_reset_core1 — Core 1 не трогает XIP, IRQ Core 0    
+// запрещены внутри flash_range_* на время операции).    
+static void slot_erase_sector(uint32_t off) {    
+    uint32_t ints = save_and_disable_interrupts();    
+    flash_range_erase(AF_REC_FLASH_OFF + off, FLASH_SECTOR_SIZE);    
+    restore_interrupts(ints);    
+}    
+static void slot_program(uint32_t off, const void* data, uint32_t len) {    
+    uint32_t ints = save_and_disable_interrupts();    
+    flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);    
+    restore_interrupts(ints);    
+}    
 
 // --- API --------------------------------------------------------------------    
 void af_rec_init(void) {        
@@ -98,19 +116,62 @@ bool af_rec_start(void) {
     return true;      
 }      
   
-void af_rec_stop(void) {            
-    if (state == ST_PLAY) { af_rec_play_stop(); return; }   // stop универсальный        
-    if (state != ST_REC) return;            
-    state = ST_IDLE;
-    af_rec_active = 0;
-    rec_len = pos;        
-    if (rec_len == 0) { Serial.println("# rec: nothing recorded"); return; }        
-    // RAM-режим: запись остаётся в ram_buf, flash не трогаем (см. TODO).  
-    Serial.printf("# rec: saved %lu samp (%lu.%lu s)\n",            
-                  (unsigned long)rec_len,          
-                  (unsigned long)(rec_len / AF_FS_OUT_HZ),          
-                  (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));          
-}        
+void af_rec_stop(void) {              
+    if (state == ST_PLAY) { af_rec_play_stop(); return; }   // stop универсальный          
+    if (state != ST_REC) return;              
+    state = ST_IDLE;  
+    af_rec_active = 0;  
+    rec_len = pos;          
+    if (rec_len == 0) { Serial.println("# rec: nothing recorded"); return; }          
+    Serial.printf("# rec: saved %lu samp (%lu.%lu s)\n",              
+                  (unsigned long)rec_len,            
+                  (unsigned long)(rec_len / AF_FS_OUT_HZ),            
+                  (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));            
+  
+    // --- Дамп ram_buf -> flash-слот (этап 2: с маркерами) -------------------    
+    Serial.println("# rec: dump: reset c1");    
+    multicore_reset_core1();    
+  
+    Serial.println("# rec: dump: downclock");    
+    set_sys_clock_khz(125000, false);    
+  
+    // Стирание: заголовочный сектор + сектора данных (округление вверх).    
+    const uint32_t data_bytes = rec_len * 2u;    
+    const uint32_t nsec = 1 + (data_bytes + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;    
+    Serial.printf("# rec: dump: erase %lu sec\n", (unsigned long)nsec);    
+    for (uint32_t i = 0; i < nsec; i++) {    
+        slot_erase_sector(i * FLASH_SECTOR_SIZE);    
+        watchdog_update();    
+    }    
+  
+    // Данные — страницами по 256 байт; хвост добиваем 0xFF до страницы.    
+    Serial.println("# rec: dump: program data");    
+    uint8_t page[256];    
+    for (uint32_t off = 0; off < data_bytes; off += 256u) {    
+        uint32_t chunk = data_bytes - off;    
+        if (chunk >= 256u) {    
+            slot_program(AF_REC_HDR_BYTES + off, (const uint8_t*)ram_buf + off, 256u);    
+        } else {    
+            memcpy(page, (const uint8_t*)ram_buf + off, chunk);    
+            memset(page + chunk, 0xFF, 256u - chunk);    
+            slot_program(AF_REC_HDR_BYTES + off, page, 256u);    
+        }    
+        watchdog_update();    
+    }    
+  
+    // Заголовок — последним: прерванный дамп читается как пустой слот.    
+    Serial.println("# rec: dump: header");    
+    rec_hdr_t h;    
+    memset(&h, 0xFF, sizeof(h));    
+    h.magic[0] = 'R'; h.magic[1] = 'C'; h.ver = 1; h.flags = 0;    
+    h.len_samples = rec_len;    
+    slot_program(0, &h, AF_REC_HDR_BYTES);    
+  
+    Serial.println("# rec: dump: restore clk + c1");    
+    af_set_clk();    
+    rp2040.restartCore1();    
+    Serial.println("# rec: flash dump done");    
+}          
   
 bool af_rec_play(void) {    
     if (state != ST_IDLE || rec_len == 0) return false;    
