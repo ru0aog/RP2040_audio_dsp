@@ -1,26 +1,37 @@
 // src/af_rec.cpp    
 // ============================================================================    
-// af_rec.cpp — цифровой магнитофон, один слот в RAM (отладочный этап).    
-//    
-// Запись: af_rec_push (Core 1) пишет int16 в ram_buf[AF_REC_RAM_SAMP].    
-// Воспроизведение: af_rec_mix/af_rec_src читают ram_buf — flash не    
-// трогаем вообще, инвариант «loop1() в RAM» для магнитофона не нужен.    
-// Запись не переживает ребут — слот volatile.    
-//    
-// TODO(flash): вернуть дамп ram_buf -> flash-слот AF_REC_FLASH_OFF    
-// (191 сектор) в af_rec_stop — последовательность как в af_store:    
-// multicore_reset_core1 + set_sys_clock_khz(125000) + erase/program +    
-// af_set_clk + rp2040.restartCore1. Заголовок rec_hdr_t писать последним.    
+// af_rec.cpp — цифровой магнитофон, один слот во flash.  
+//  
+// Запись: af_rec_push (Core 1) пишет int16 в ram_buf[AF_REC_RAM_SAMP]  
+// в реальном времени — flash во время записи не трогаем.  
+// Стоп: af_rec_stop (Core 0) дампит ram_buf во flash-слот  
+// AF_REC_FLASH_OFF — последовательность как в af_store:  
+// multicore_reset_core1 + set_sys_clock_khz(125000) + erase/program +  
+// af_set_clk + rp2040.restartCore1. Тракт встаёт на ~1.5 с.  
+//  
+// Раскладка слота:  
+//   [0..255]    заголовок rec_hdr_t: magic 'R','C', ver, len_samples  
+//   [256..]     данные int16  
+// Заголовок пишется ПОСЛЕДНИМ — прерванный дамп (питание, ребут)  
+// читается как пустой слот.  
+//  
+// Воспроизведение: af_rec_mix/af_rec_src читают слот через XIP —  
+// во время play flash-операций нет, чтение безопасно.  
+//  
+// Этап 1: дамп ещё не внедрён — af_rec_stop только фиксирует rec_len,  
+// слот валиден только если был записан ранее (после ребута — пуст).     
 // ============================================================================    
 #include <Arduino.h>    
 #include <string.h>    
 #include "af_rec.h"    
 #include "af_config.h"    
 #include "af_dsp.h"    
-  
-#include "pico/stdlib.h"  
-// hardware/flash.h, hardware/sync.h, af_store.h — не нужны в RAM-режиме,  
-// вернуть вместе с flash-дампом (см. TODO в шапке).  
+#include "pico/stdlib.h"    
+#include "af_store.h"          // af_set_clk — восстановление клоков после дампа  
+#include "hardware/flash.h"    // flash_range_erase/program  
+#include "hardware/sync.h"     // save_and_disable_interrupts  
+#include "hardware/watchdog.h" // watchdog_update в циклах дампа  
+#include "pico/multicore.h"    // multicore_reset_core1  
 
 typedef enum { ST_IDLE = 0, ST_REC, ST_PLAY } rec_state_t;    
   
@@ -29,19 +40,50 @@ volatile uint8_t af_rec_active = 0;   // 0=idle, 1=rec, 2=play — для af_dsp
 
 static volatile uint32_t    rec_len = 0;             // валидных отсчётов в слоте    
 static volatile uint32_t    pos     = 0;             // позиция записи/чтения    
-static volatile uint8_t     rec_src_tx = 0;    
+
+static volatile uint8_t     rec_src_tx = 0;      
+    
+// --- RAM-буфер записи --------------------------------------------------------    
+static int16_t  ram_buf[AF_REC_RAM_SAMP];    
   
-// --- RAM-буфер записи --------------------------------------------------------  
-static int16_t  ram_buf[AF_REC_RAM_SAMP];  
-// pos (ниже) — позиция записи/чтения, она же граница записанных данных.  
+// --- Flash-слот: заголовок ---------------------------------------------------  
+#define AF_REC_HDR_BYTES  256u  
+  
+typedef struct {  
+    uint8_t  magic[2];      // 'R','C'  
+    uint8_t  ver;  
+    uint8_t  flags;  
+    uint32_t len_samples;  
+    uint8_t  rsv[248];  
+} rec_hdr_t;                // ровно 256 байт  
+  
+static inline const uint8_t* slot_base(void) {  
+    return (const uint8_t*)(XIP_BASE + AF_REC_FLASH_OFF);  
+}  
+  
+// Чтение заголовка через XIP — только на Core 0, вне flash-операций.  
+static bool hdr_read(uint32_t* len_out) {  
+    const rec_hdr_t* h = (const rec_hdr_t*)slot_base();  
+    if (h->magic[0] != 'R' || h->magic[1] != 'C') return false;  
+    if (h->len_samples == 0 || h->len_samples > AF_REC_RAM_SAMP) return false;  
+    *len_out = h->len_samples;  
+    return true;  
+}  
 
 // --- API --------------------------------------------------------------------    
-void af_rec_init(void) {      
-    rec_len = 0;   // RAM-слот volatile — после ребута всегда пуст  
-    Serial.printf("# rec: ram slot, max %lu samp (%lu s)\n",  
-                  (unsigned long)AF_REC_RAM_SAMP,  
-                  (unsigned long)(AF_REC_RAM_SAMP / AF_FS_OUT_HZ));  
-}      
+void af_rec_init(void) {        
+    uint32_t len = 0;  
+    if (hdr_read(&len)) {  
+        rec_len = len;  
+        Serial.printf("# rec: slot used %lu samp (%lu.%lu s)\n",  
+                      (unsigned long)rec_len,  
+                      (unsigned long)(rec_len / AF_FS_OUT_HZ),  
+                      (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));  
+    } else {  
+        rec_len = 0;  
+        Serial.println("# rec: slot empty");  
+    }  
+}        
   
 bool af_rec_start(void) {      
     if (state != ST_IDLE) return false;      
@@ -104,8 +146,8 @@ void __not_in_flash_func(af_rec_push)(int16_t s) {
 int16_t __not_in_flash_func(af_rec_mix)(int16_t s) {    
     if (state != ST_PLAY) return s;    
     if (pos >= rec_len) { state = ST_IDLE; af_rec_active = 0; return s; }    
-    const int16_t* d = ram_buf; 
-    int32_t v = s + d[pos++];    
+    const int16_t* d = (const int16_t*)(slot_base() + AF_REC_HDR_BYTES);    
+    int32_t v = s + d[pos++];      
     if (v > 32767) v = 32767; else if (v < -32768) v = -32768;    
     return (int16_t)v;    
 }    
@@ -113,11 +155,11 @@ int16_t __not_in_flash_func(af_rec_mix)(int16_t s) {
 int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {    
     if (state != ST_PLAY) return mic;    
     if (pos >= rec_len) { state = ST_IDLE; af_rec_active = 0; return mic; }    
-    const int16_t* d = ram_buf; 
-    return (int32_t)d[pos++];              // замещение микрофона    
+    const int16_t* d = (const int16_t*)(slot_base() + AF_REC_HDR_BYTES);    
+    return (int32_t)d[pos++];              // замещение микрофона      
 }    
   
-// --- Core 0: программирование готовых буферов ---------------------------------    
+// --- Core 0: контроль записи (смена тракта, переполнение буфера) --------------  
 void af_rec_poll(void) {          
     if (state != ST_REC) return;          
     if ((af_dsp_tx_on() ? 1 : 0) != rec_src_tx) {   // тракт сменился — финализируем      
