@@ -208,9 +208,15 @@ bool af_store_save(uint8_t idx) {
     r.d.tx_notch2_hz  = (uint16_t)af_tx_notch2();    
     r.crc = crc8(&r.d, sizeof(r.d));    
   
-    // Читаем текущий сектор из flash напрямую (XIP), патчим запись.  
-    memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));  
-    memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));  
+    // Читаем текущий сектор из flash напрямую (XIP), патчим запись.    
+    memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));    
+    // Гарантируем заголовок: если сектор был пустой/чужой, без magic    
+    // af_store_init при следующем boot сотрёт образ — банк потеряется.    
+    s_sector_img[0] = AF_STORE_MAGIC0;    
+    s_sector_img[1] = AF_STORE_MAGIC1;    
+    s_sector_img[2] = AF_STORE_VER;    
+    s_sector_img[3] = 0xFF;    
+    memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));     
 
     // Как в af_store_write_all: жёсткий reset Core 1 — детерминированно,  
     // без гонки с флаговой парковкой. Восстанавливать не нужно — дальше reboot.

@@ -766,7 +766,7 @@ static void cli_exec(char* line) {
             // 7: резерв  
             preset[6].lo_hz = 200;  preset[6].hi_hz = 3500;  
   
-            Serial.println("# banks clr: writing 7 banks, rebooting...");    
+            Serial.println("# banks clr: writing 7 banks...");    
             Serial.flush();    
             af_store_write_all(preset);   // не возвращается — ребут    
         }    
