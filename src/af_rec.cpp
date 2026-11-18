@@ -99,33 +99,28 @@ static void __not_in_flash_func(do_rec_dump)(void* param) {
     const uint32_t data_bytes = rec_len * 2u;  
     const uint8_t* p = (const uint8_t*)ram_buf;  
   
-    if (sec == 0) {  
-        // Сектор 0: [0..255] заголовок (пишется позже), [256..4095] данные.  
-        uint32_t n = data_bytes < 3840u ? data_bytes : 3840u;  
-        uint32_t off = 0;  
-        while (off < n) {  
-            uint32_t chunk = n - off; if (chunk > 256u) chunk = 256u;  
-            flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + off,  
-                                p + off, chunk);  
-            off += chunk;  
-        }  
-        // Хвост сектора 0 до 256-границы не нужен — n кратна 256 или  
-        // добивается последней страницей ниже.  
-        if (n & 255u) { /* unreachable: chunk уже кратна */ }  
-    } else {  
-        // Сектор s>0: данные [s*4096-256, s*4096-256+4096).  
-        uint32_t dstart = sec_off - AF_REC_HDR_BYTES;  
-        if (dstart < data_bytes) {  
-            uint32_t n = data_bytes - dstart; if (n > 4096u) n = 4096u;  
-            uint32_t off = 0;  
-            while (off < n) {  
-                uint32_t chunk = n - off; if (chunk > 256u) chunk = 256u;  
-                flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + dstart + off,  
-                                    p + dstart + off, chunk);  
-                off += chunk;  
-            }  
-        }  
-    }  
+    // Данные сектора — непрерывный кусок ram_buf:    
+    // sec 0 → данные [0, 3840), sec s>0 → [s*4096-256, +4096).    
+    uint32_t dstart = (sec == 0) ? 0u : (sec_off - AF_REC_HDR_BYTES);    
+    if (dstart >= data_bytes) return;           // сектор за пределами данных    
+    uint32_t n = data_bytes - dstart;    
+    const uint32_t cap = (sec == 0) ? 3840u : 4096u;    
+    if (n > cap) n = cap;    
+    
+    // ОДИН вызов на полные 256-страницы — повторные XIP-переходы вешают.    
+    const uint32_t full = n & ~255u;    
+    if (full)    
+        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + dstart,    
+                            p + dstart, full);    
+    const uint32_t tail = n - full;    
+    if (tail) {    
+        static uint8_t tail_page[256];          // статик — точно в SRAM    
+        const uint8_t* src = p + dstart + full;    
+        for (uint32_t i = 0; i < tail; i++) tail_page[i] = src[i];    
+        for (uint32_t i = tail; i < 256u; i++) tail_page[i] = 0xFF;    
+        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + dstart + full,    
+                            tail_page, 256u);    
+    }    
 }  
   
 // Заголовок — отдельным IRQ-off окном ПОСЛЕ всех секторов:  
