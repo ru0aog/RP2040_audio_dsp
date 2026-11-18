@@ -6,9 +6,10 @@
 // в реальном времени — flash во время записи не трогаем.  
 // Стоп: af_rec_stop (Core 0) дампит ram_buf во flash-слот    
 // AF_REC_FLASH_OFF — последовательность как в af_store:      
-// af_store_core1_park + set_sys_clock_khz(125000) +      
-// flash_safe_execute(do_rec_dump) + af_set_clk + af_store_core1_unpark.      
-// Core 1 паркуется в safe-точке (не reset), lockout проходит штатно.      
+// af_store_core1_park + set_sys_clock_khz(125000) +        
+// save_and_disable_interrupts + do_rec_dump (RAM) + restore_interrupts +    
+// flash_flush_cache + af_set_clk + af_store_core1_unpark.        
+// Core 1 паркуется в safe-точке (не reset) — тракт поднимается мгновенно.    
 //  
 // Раскладка слота:  
 //   [0..255]    заголовок rec_hdr_t: magic 'R','C', ver, len_samples  
@@ -75,8 +76,9 @@ static bool hdr_read(uint32_t* len_out) {
     return true;    
 }    
   
-// --- Flash I/O: вызывается через flash_safe_execute при припаркованном Core 1 -  
-// (park_core1 — Core 1 в safe-точке, lockout внутри safe_execute проходит).      
+// --- Flash I/O: вызывается напрямую под save_and_disable_interrupts    
+// при припаркованном Core 1 (как do_flash_write в af_store).    
+// flash_safe_execute НЕ используем — его lockout молча возвращал ошибку.    
 // Весь дамп — одна RAM-функция под одним запретом IRQ (как do_flash_write    
 // в af_store): во время erase/program XIP выключен, код обязан быть в RAM.    
 // memset/memcpy не вызываем — они могут лежать во flash; копия — циклом.    
@@ -166,10 +168,13 @@ void af_rec_stop(void) {
     Serial.flush();  
     set_sys_clock_khz(125000, false);  
   
-    const uint32_t nsec = (AF_REC_HDR_BYTES + rec_len * 2u + 4095) / 4096;  
-    Serial.printf("# rec: dump: erase+program %lu sec\n", (unsigned long)nsec);    
-    Serial.flush();  
-    flash_safe_execute(do_rec_dump, NULL, 5000);   // lockout пройдёт: Core 1 припаркован  
+    const uint32_t nsec = (AF_REC_HDR_BYTES + rec_len * 2u + 4095) / 4096;    
+    Serial.printf("# rec: dump: erase+program %lu sec\n", (unsigned long)nsec);      
+    Serial.flush();    
+    uint32_t ints = save_and_disable_interrupts();    
+    do_rec_dump(NULL);              // RAM-функция: erase + program + заголовок    
+    restore_interrupts(ints);    
+    flash_flush_cache();            // сброс XIP-кэша после записи    
   
     Serial.println("# rec: dump: restore clk + c1");  
     af_set_clk();  

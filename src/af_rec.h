@@ -23,7 +23,7 @@
     
 // RAM-буфер записи при 15464 Гц.    
 // Ограничение — свободная RAM    
-#define AF_REC_RAM_SAMP  2500u    // ОТЛАДКА: 3840 B + 256 hdr = 1 сектор (~0.12 с)  
+#define AF_REC_RAM_SAMP  8000u    // ОТЛАДКА: 3840 B + 256 hdr = 1 сектор (~0.12 с)  
   
 void     af_rec_init(void);    
 void     af_rec_poll(void);        // Core 0: контроль записи (src change, buf full)      
