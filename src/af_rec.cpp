@@ -1,22 +1,28 @@
 // src/af_rec.cpp    
-// ============================================================================    
-// af_rec.cpp — цифровой магнитофон, один слот 25 с во flash.    
-//    
-// Раскладка слота (AF_REC_FLASH_OFF, 189 секторов = 774144 байт):      
-//   [0..255]    заголовок: magic 'R','C', ver, flags, len_samples    
-//   [256..]     данные int16, до AF_REC_MAX_SAMPLES отсчётов    
-// Заголовок пишется ПОСЛЕДНИМ при финализации — прерванная запись    
-// (питание, ребут) читается как пустой слот.    
-//    
-// Этап 1: стирание всего слота при старте записи через    
-// flash_safe_execute (Core 1 паркуется, пауза ~8.6 с при перезаписи    
-// занятого слота; пустой слот — стирание пропускается).    
-// Этап 2: конвейер «пишем сектор N — стираем N+1» без парковки Core 1.      
-// Инвариант: сектора [0, erase_off) всегда стёрты; erase_off держится      
-// на сектор впереди указателя записи. Стирание/программирование —      
-// прямые flash_range_* с запретом прерываний Core 0 (~45 мс на сектор);      
-// Core 1 продолжает работать — вся DSP-цепочка под __not_in_flash_func.      
-// ============================================================================    
+// ============================================================================  
+// af_rec.cpp — цифровой магнитофон, один слот ~25 с во flash.  
+//  
+// Раскладка слота (AF_REC_FLASH_OFF, 191 сектор = 782336 байт):  
+//   [0..255]    заголовок: magic 'R','C', ver, flags, len_samples  
+//   [256..]     данные int16, до AF_REC_MAX_SAMP отсчётов  
+// Заголовок пишется ПОСЛЕДНИМ при финализации — прерванная запись  
+// (питание, ребут) читается как пустой слот.  
+//  
+// Старт записи: стираются только сектора 0 и 1 (~90 мс), остальные  
+// стирает erase_ahead() по мере записи — конвейер «пишем сектор N,  
+// стираем N+1». Инвариант: сектора [0, erase_off) всегда стёрты.  
+//  
+// Flash I/O — SDK-обёртки flash_range_erase/flash_range_program  
+// (hardware/flash.h): они сами делают connect_internal_flash,  
+// flush_cache и enter_cmd_xip. Прямые ROM-вызовы rom_flash_range_*  
+// ЗАПРЕЩЕНЫ — без enter_cmd_xip XIP остаётся выключенным и следующее  
+// обращение к flash вешает оба ядра (см. BUGS.MD, af_store).  
+//  
+// Core 1 НЕ паркуется и не сбрасывается на время erase/program.  
+// ИНВАРИАНТ: вся цепочка loop1()/af_dsp_poll должна быть в RAM —  
+// запрещено вызывать оттуда любые функции без __not_in_flash_func.  
+// Нарушение инварианта = зависание во время записи.  
+// ============================================================================  
 #include <Arduino.h>    
 #include <string.h>    
 #include "af_rec.h"    
@@ -26,7 +32,7 @@
 #include "pico/stdlib.h"        
 #include "hardware/flash.h"        
 #include "hardware/sync.h"     // save_and_disable_interrupts        
-#include "pico/bootrom.h"      // rom_flash_range_erase/program — прямые ROM-вызовы  
+
   
 #define AF_REC_MAGIC0     'R'    
 #define AF_REC_MAGIC1     'C'    
@@ -67,22 +73,20 @@ static bool hdr_read(rec_hdr_t* h) {
            h->ver == AF_REC_VER && h->len <= AF_REC_MAX_SAMP;    
 }    
   
-// --- flash I/O: прямые вызовы, запрет прерываний только на Core 0 -----------      
-// Core 1 не паркуется — условие: вся цепочка loop1() в RAM (__not_in_flash_func).      
-static void slot_erase_sector(uint32_t off) {        // off кратно 4096, внутри слота          
-    uint32_t ints = save_and_disable_interrupts();          
-    flash_flush_cache();   // дождаться висящих SSI-транзакций до erase          
-    rom_flash_range_erase(AF_REC_FLASH_OFF + off, 4096, 4096, 0x20);          
-    flash_flush_cache();   // сброс кэша после — чтение увидит стёртое          
-    restore_interrupts(ints);          
-}          
-static void slot_program(uint32_t off, const void* data, uint32_t len) {          
-    uint32_t ints = save_and_disable_interrupts();          
-    flash_flush_cache();          
-    rom_flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);          
-    flash_flush_cache();          
-    restore_interrupts(ints);          
-}          
+// --- flash I/O: SDK-обёртки, запрет прерываний только на Core 0 -------------  
+// flash_range_* сами делают connect/flush/enter_cmd_xip — ручной  
+// flash_flush_cache() не нужен. Core 1 не паркуется — условие: вся  
+// цепочка loop1() в RAM (__not_in_flash_func).  
+static void slot_erase_sector(uint32_t off) {        // off кратно 4096, внутри слота  
+    uint32_t ints = save_and_disable_interrupts();  
+    flash_range_erase(AF_REC_FLASH_OFF + off, 4096);  
+    restore_interrupts(ints);  
+}  
+static void slot_program(uint32_t off, const void* data, uint32_t len) {  
+    uint32_t ints = save_and_disable_interrupts();  
+    flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);  
+    restore_interrupts(ints);  
+}  
 // Держим erase_off на сектор впереди следующей записи.      
 static void erase_ahead(void) {      
     const uint32_t need = AF_REC_HDR_BYTES + flash_wr + 4096;      
@@ -142,8 +146,8 @@ void af_rec_stop(void) {
     memset(&h, 0xFF, sizeof(h));    
     h.magic0 = AF_REC_MAGIC0; h.magic1 = AF_REC_MAGIC1;    
     h.ver = AF_REC_VER; h.flags = rec_src_tx; h.len = rec_len;    
-    slot_program(0, &h, AF_REC_HDR_BYTES);  // заголовок — последним      
-    flash_flush_cache();   // сброс XIP-кэша: play/recs увидят свежие данные  
+    slot_program(0, &h, AF_REC_HDR_BYTES);  // заголовок — последним  
+    // flush/enter_xip уже сделаны внутри flash_range_program  
     Serial.printf("# rec: saved %lu samp (%lu.%lu s), dropped=%lu\n",        
                   (unsigned long)rec_len,      
                   (unsigned long)(rec_len / AF_FS_OUT_HZ),      
