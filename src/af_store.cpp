@@ -109,11 +109,13 @@ static void __not_in_flash_func(do_flash_erase)(void* p) {
     flash_flush_cache();  
 }     
     
-static void __not_in_flash_func(do_flash_program)(void* p) {        
-    (void)p;        
-    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);        
-    flash_flush_cache();        
-}    
+static void __not_in_flash_func(do_flash_program)(void* p) {          
+    (void)p;          
+    rom_connect_internal_flash();  
+    flash_flush_cache();  
+    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);          
+    flash_flush_cache();          
+}      
   
 // ---------------------------------------------------------------------------  
 // API  
@@ -147,8 +149,8 @@ void af_store_init(void) {
         while (g_parked) { }    // дождаться выхода из spin    
   
         // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
-        for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
-        Serial.println("[STORE] flash formatted (7 banks empty)");
+        for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);    
+        // Serial не используем — USB может быть мёртв после clk-переключения. 
     }  
 }  
   
@@ -232,36 +234,35 @@ bool af_store_save(uint8_t idx) {
     // (__not_in_flash_func на всей DSP-цепочке) — после записи    
     // отпускаем его и возвращаемся, ребут не нужен.    
     
-    Serial.println("# save: parking..."); Serial.flush();  
-    if (!park_core1()) {  
-        Serial.println("# save: core1 park timeout");  
-        return false;  
-    }  
-    Serial.println("# save: parked"); Serial.flush();  
+    Serial.println("# save: parking...");  
+    if (!park_core1()) {    
+        Serial.println("# save: core1 park timeout");    
+        return false;    
+    }    
+    Serial.println("# save: parked");  
     
     af_clk_flash_mode(true);              // clk_sys -> XOSC 12 МГц (как в маяке)  
     noInterrupts();      
     do_flash_erase(NULL);      
     do_flash_program(NULL);      
     interrupts();      
-    af_clk_flash_mode(false);             // обратно на PLL_SYS  
-    af_led_set(0, 255, 0);                    // зелёный: записано    
-
-    Serial.println("# save: write done, releasing core1"); Serial.flush();  
-    g_park_req = false;  
-    __dmb();  
-    while (g_parked) { }  
-    af_led_set(255, 0, 0);
-    // Без flush: если clk_usb пострадал при переключении clk_sys,  
-    // flush уйдёт в вечное ожидание — строка и так попадёт в лог позже.  
-    Serial.println("# save: core1 released");  
+    af_clk_flash_mode(false);             // обратно на PLL_SYS    
+    af_led_set(0, 255, 0);                // зелёный: записано    
   
-    // Синхронизируем RAM-буфер EEPROM с записанным сектором —    
-    // иначе af_store_read (через EEPROM.get) вернёт старые данные.    
-    for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);    
-  
-    Serial.printf("# OK save=%d\n", idx);    
-    return true; 
+    g_park_req = false;    
+    __dmb();    
+    while (g_parked) { }    
+    af_led_set(255, 0, 0);                // красный: Core 1 отпущен  
+    
+    // Синхронизируем RAM-буфер EEPROM с записанным сектором —      
+    // иначе af_store_read (через EEPROM.get) вернёт старые данные.      
+    for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);      
+    
+    af_led_set(0, 0, 255);                // синий: EEPROM sync done  
+    // Serial после записи не используем: USB-стек может быть мёртв  
+    // после переключения clk_sys — println/printf уходят в вечное  
+    // ожидание. Успех виден по синему LED, проверка — 'load x'/'stats'.  
+    return true;   
 
 }  
   
@@ -362,7 +363,6 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
     while (g_parked) { }    // дождаться выхода из spin    
     
     // Синхронизируем RAM-буфер EEPROM с записанным сектором.    
-    for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);    
-    
-    Serial.println("# OK banks written");    
+    for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);      
+    // Serial не используем — USB может быть мёртв после clk-переключения. 
 }  

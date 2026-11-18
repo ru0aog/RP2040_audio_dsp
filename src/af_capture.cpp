@@ -323,7 +323,7 @@ void af_capture_start(void) {
     
     // VTOR -> RAM: при стирании сектора магнитофона (XIP off ~45 мс)    
     // вход в ISR не должен читать векторную таблицу из flash.    
-    static uint32_t ram_vtor[192] __attribute__((aligned(256)));    
+    static uint32_t ram_vtor[192] __attribute__((aligned(1024))); 
     static bool vtor_in_ram = false;    
     if (!vtor_in_ram) {    
         memcpy(ram_vtor, (const void*)scb_hw->vtor, sizeof(ram_vtor));    

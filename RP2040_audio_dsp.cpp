@@ -190,7 +190,9 @@ void setup()
   
     af_dsp_init();  
     af_cli_init();  
-    af_store_init();
+    Serial.println("# before store_init"); Serial.flush();  
+    af_store_init();  
+    Serial.println("# after store_init");  Serial.flush(); 
     af_rec_init();
     af_led_set(0, 0, 10);
     af_gpio_ctl_init();
