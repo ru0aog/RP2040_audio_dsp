@@ -4,10 +4,12 @@
 //  
 // Запись: af_rec_push (Core 1) пишет int16 в ram_buf[AF_REC_RAM_SAMP]  
 // в реальном времени — flash во время записи не трогаем.  
-// Стоп: af_rec_stop (Core 0) дампит ram_buf во flash-слот  
-// AF_REC_FLASH_OFF — последовательность как в af_store:  
-// multicore_reset_core1 + set_sys_clock_khz(125000) + erase/program +  
-// af_set_clk + rp2040.restartCore1. Тракт встаёт на ~1.5 с.  
+// Стоп: af_rec_stop (Core 0) дампит ram_buf во flash-слот    
+// AF_REC_FLASH_OFF — последовательность как в af_store:    
+// multicore_reset_core1 + set_sys_clock_khz(125000) +    
+// save_and_disable_interrupts + do_rec_dump (RAM, erase/program) +    
+// restore_interrupts + flash_flush_cache + af_set_clk + restartCore1.    
+// Тракт встаёт на ~1.5 с, IRQ Core 0 выключены на время дампа.    
 //  
 // Раскладка слота:  
 //   [0..255]    заголовок rec_hdr_t: magic 'R','C', ver, len_samples  
@@ -34,7 +36,6 @@
 #include "af_store.h"          // af_set_clk — восстановление клоков после дампа  
 #include "hardware/flash.h"    // flash_range_erase/program  
 #include "hardware/sync.h"     // save_and_disable_interrupts  
-#include "hardware/watchdog.h" // watchdog_update в циклах дампа  
 #include "pico/multicore.h"    // multicore_reset_core1  
 
 typedef enum { ST_IDLE = 0, ST_REC, ST_PLAY } rec_state_t;    
@@ -77,15 +78,36 @@ static bool hdr_read(uint32_t* len_out) {
 // --- Flash I/O: SDK-обёртки, вызывать ТОЛЬКО при остановленном Core 1 ---------    
 // (после multicore_reset_core1 — Core 1 не трогает XIP, IRQ Core 0    
 // запрещены внутри flash_range_* на время операции).    
-static void slot_erase_sector(uint32_t off) {    
-    uint32_t ints = save_and_disable_interrupts();    
-    flash_range_erase(AF_REC_FLASH_OFF + off, FLASH_SECTOR_SIZE);    
-    restore_interrupts(ints);    
-}    
-static void slot_program(uint32_t off, const void* data, uint32_t len) {    
-    uint32_t ints = save_and_disable_interrupts();    
-    flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);    
-    restore_interrupts(ints);    
+// Весь дамп — одна RAM-функция под одним запретом IRQ (как do_flash_write    
+// в af_store): во время erase/program XIP выключен, код обязан быть в RAM.    
+// memset/memcpy не вызываем — они могут лежать во flash; копия — циклом.    
+static void __not_in_flash_func(do_rec_dump)(void* param) {    
+    (void)param;    
+    const uint32_t data_bytes = rec_len * 2;    
+    const uint32_t need = AF_REC_HDR_BYTES + data_bytes;    
+    const uint32_t secs = (need + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;    
+  
+    for (uint32_t i = 0; i < secs; i++)    
+        flash_range_erase(AF_REC_FLASH_OFF + i * FLASH_SECTOR_SIZE,    
+                          FLASH_SECTOR_SIZE);    
+  
+    const uint8_t* p = (const uint8_t*)ram_buf;    
+    for (uint32_t off = 0; off < data_bytes; off += 256) {    
+        uint8_t page[256];    
+        uint32_t chunk = data_bytes - off;    
+        if (chunk > 256) chunk = 256;    
+        for (uint32_t i = 0; i < 256; i++)    
+            page[i] = (i < chunk) ? p[off + i] : 0xFF;    
+        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + off,    
+                            page, 256);    
+    }    
+  
+    rec_hdr_t h;    
+    uint8_t* hb = (uint8_t*)&h;    
+    for (uint32_t i = 0; i < sizeof(h); i++) hb[i] = 0xFF;    
+    h.magic[0] = 'R'; h.magic[1] = 'C'; h.ver = 1; h.flags = 0;    
+    h.len_samples = rec_len;    
+    flash_range_program(AF_REC_FLASH_OFF, hb, AF_REC_HDR_BYTES);    
 }    
 
 // --- API --------------------------------------------------------------------    
@@ -128,50 +150,28 @@ void af_rec_stop(void) {
                   (unsigned long)(rec_len / AF_FS_OUT_HZ),            
                   (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));            
   
-    // --- Дамп ram_buf -> flash-слот (этап 2: с маркерами) -------------------    
-    Serial.println("# rec: dump: reset c1");    
-    multicore_reset_core1();    
-  
-    Serial.println("# rec: dump: downclock");    
-    set_sys_clock_khz(125000, false);    
-  
-    // Стирание: заголовочный сектор + сектора данных (округление вверх).    
+    // --- Дамп ram_buf -> flash-слот (этап 2: с маркерами) -------------------      
+    Serial.println("# rec: dump: reset c1");      
+    multicore_reset_core1();      
+    
+    Serial.println("# rec: dump: downclock");      
+    set_sys_clock_khz(125000, false);      
+    
+    // Весь дамп — одна RAM-функция под одним запретом IRQ (как af_store):    
+    // во время erase/program XIP выключен, код обязан быть в RAM.    
     const uint32_t data_bytes = rec_len * 2u;    
     const uint32_t nsec = 1 + (data_bytes + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;    
-    Serial.printf("# rec: dump: erase %lu sec\n", (unsigned long)nsec);    
-    for (uint32_t i = 0; i < nsec; i++) {    
-        slot_erase_sector(i * FLASH_SECTOR_SIZE);    
-        watchdog_update();    
-    }    
-  
-    // Данные — страницами по 256 байт; хвост добиваем 0xFF до страницы.    
-    Serial.println("# rec: dump: program data");    
-    uint8_t page[256];    
-    for (uint32_t off = 0; off < data_bytes; off += 256u) {    
-        uint32_t chunk = data_bytes - off;    
-        if (chunk >= 256u) {    
-            slot_program(AF_REC_HDR_BYTES + off, (const uint8_t*)ram_buf + off, 256u);    
-        } else {    
-            memcpy(page, (const uint8_t*)ram_buf + off, chunk);    
-            memset(page + chunk, 0xFF, 256u - chunk);    
-            slot_program(AF_REC_HDR_BYTES + off, page, 256u);    
-        }    
-        watchdog_update();    
-    }    
-  
-    // Заголовок — последним: прерванный дамп читается как пустой слот.    
-    Serial.println("# rec: dump: header");    
-    rec_hdr_t h;    
-    memset(&h, 0xFF, sizeof(h));    
-    h.magic[0] = 'R'; h.magic[1] = 'C'; h.ver = 1; h.flags = 0;    
-    h.len_samples = rec_len;    
-    slot_program(0, &h, AF_REC_HDR_BYTES);    
-  
-    Serial.println("# rec: dump: restore clk + c1");    
-    af_set_clk();    
-    rp2040.restartCore1();    
-    Serial.println("# rec: flash dump done");    
-}          
+    Serial.printf("# rec: dump: erase+program %lu sec, irq off\n", (unsigned long)nsec);    
+    uint32_t ints = save_and_disable_interrupts();    
+    do_rec_dump(NULL);    
+    restore_interrupts(ints);    
+    flash_flush_cache();            // сброс XIP-кэша после записи    
+    
+    Serial.println("# rec: dump: restore clk + c1");      
+    af_set_clk();      
+    rp2040.restartCore1();      
+    Serial.println("# rec: flash dump done");      
+}            
   
 bool af_rec_play(void) {    
     if (state != ST_IDLE || rec_len == 0) return false;    
