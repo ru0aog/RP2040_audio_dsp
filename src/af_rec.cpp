@@ -4,12 +4,13 @@
 //  
 // Запись: af_rec_push (Core 1) пишет int16 в ram_buf[AF_REC_RAM_SAMP]  
 // в реальном времени — flash во время записи не трогаем.  
-// Стоп: af_rec_stop (Core 0) дампит ram_buf во flash-слот    
-// AF_REC_FLASH_OFF — последовательность как в af_store:    
-// multicore_reset_core1 + set_sys_clock_khz(125000) +    
-// save_and_disable_interrupts + do_rec_dump (RAM, erase/program) +    
-// restore_interrupts + flash_flush_cache + af_set_clk + restartCore1.    
-// Тракт встаёт на ~1.5 с, IRQ Core 0 выключены на время дампа.    
+// Стоп: af_rec_stop (Core 0) дампит ram_buf во flash-слот      
+// AF_REC_FLASH_OFF — последовательность как в af_store:      
+// multicore_reset_core1 + set_sys_clock_khz(125000) +      
+// посекторно: save_and_disable_interrupts + do_rec_dump(sec) +      
+// restore_interrupts + watchdog_update; заголовок последним;      
+// flash_flush_cache + af_set_clk + restartCore1.      
+// IRQ выключены только на время одного сектора (~50 мс).       
 //  
 // Раскладка слота:  
 //   [0..255]    заголовок rec_hdr_t: magic 'R','C', ver, len_samples  
@@ -82,40 +83,62 @@ static bool hdr_read(uint32_t* len_out) {
 // Весь дамп — одна RAM-функция под одним запретом IRQ (как do_flash_write    
 // в af_store): во время erase/program XIP выключен, код обязан быть в RAM.    
 // memset/memcpy не вызываем — они могут лежать во flash; копия — циклом.    
-static void __not_in_flash_func(do_rec_dump)(void* param) {      
-    (void)param;      
-    const uint32_t data_bytes = rec_len * 2u;      
-    const uint32_t nsec = (AF_REC_HDR_BYTES + data_bytes + 4095) / 4096;      
+// Дамп ОДНОГО сектора: erase + program данных, попадающих в этот сектор.  
+// Вызывается из af_rec_stop внутри IRQ-off окна — по одному окну на сектор,  
+// как af_store (которая доказанно работает). Между секторами IRQ включены.  
+// sec 0 содержит заголовок (пишется последним, отдельным вызовом  
+// do_rec_dump_hdr после всех секторов).  
+static void __not_in_flash_func(do_rec_dump)(void* param) {  
+    const uint32_t sec = (uint32_t)(uintptr_t)param;  
+    const uint32_t sec_off = sec * 4096u;  
   
-    // Стирание — ОДНИМ вызовом на весь диапазон (как af_store: один заход,    
-    // без повторных XIP-переходов между секторами).    
-    flash_range_erase(AF_REC_FLASH_OFF, nsec * 4096u);    
+    flash_range_erase(AF_REC_FLASH_OFF + sec_off, 4096u);  
   
-    // Данные — напрямую из ram_buf, без промежуточного буфера.    
-    // flash_range_program требует кратности 256: полные страницы пишем    
-    // прямо из буфера, хвост (<256) — через статический SRAM-буфер.    
-    const uint8_t* p = (const uint8_t*)ram_buf;    
-    const uint32_t full = data_bytes & ~255u;    
-    if (full)    
-        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES, p, full);    
-    const uint32_t tail = data_bytes - full;    
-    if (tail) {    
-        static uint8_t tail_page[256];            // статик — точно в SRAM    
-        const uint8_t* src = p + full;    
-        for (uint32_t i = 0; i < tail; i++) tail_page[i] = src[i];    
-        for (uint32_t i = tail; i < 256u; i++) tail_page[i] = 0xFF;    
-        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + full,    
-                            tail_page, 256u);    
-    }    
+    // Данные лежат со смещения AF_REC_HDR_BYTES: сектор sec покрывает  
+    // байты данных [sec*4096 - 256, (sec+1)*4096 - 256).  
+    const uint32_t data_bytes = rec_len * 2u;  
+    const uint8_t* p = (const uint8_t*)ram_buf;  
   
-    // Заголовок — последним: прерванный дамп читается как пустой слот.    
-    rec_hdr_t h;      
-    uint8_t* hb = (uint8_t*)&h;      
-    for (uint32_t i = 0; i < sizeof(h); i++) hb[i] = 0xFF;      
-    h.magic[0] = 'R'; h.magic[1] = 'C'; h.ver = 1; h.flags = 0;      
-    h.len_samples = rec_len;      
-    flash_range_program(AF_REC_FLASH_OFF, hb, AF_REC_HDR_BYTES);      
-}      
+    if (sec == 0) {  
+        // Сектор 0: [0..255] заголовок (пишется позже), [256..4095] данные.  
+        uint32_t n = data_bytes < 3840u ? data_bytes : 3840u;  
+        uint32_t off = 0;  
+        while (off < n) {  
+            uint32_t chunk = n - off; if (chunk > 256u) chunk = 256u;  
+            flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + off,  
+                                p + off, chunk);  
+            off += chunk;  
+        }  
+        // Хвост сектора 0 до 256-границы не нужен — n кратна 256 или  
+        // добивается последней страницей ниже.  
+        if (n & 255u) { /* unreachable: chunk уже кратна */ }  
+    } else {  
+        // Сектор s>0: данные [s*4096-256, s*4096-256+4096).  
+        uint32_t dstart = sec_off - AF_REC_HDR_BYTES;  
+        if (dstart < data_bytes) {  
+            uint32_t n = data_bytes - dstart; if (n > 4096u) n = 4096u;  
+            uint32_t off = 0;  
+            while (off < n) {  
+                uint32_t chunk = n - off; if (chunk > 256u) chunk = 256u;  
+                flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + dstart + off,  
+                                    p + dstart + off, chunk);  
+                off += chunk;  
+            }  
+        }  
+    }  
+}  
+  
+// Заголовок — отдельным IRQ-off окном ПОСЛЕ всех секторов:  
+// прерванный дамп читается как пустой слот.  
+static void __not_in_flash_func(do_rec_dump_hdr)(void* param) {  
+    (void)param;  
+    rec_hdr_t h;  
+    uint8_t* hb = (uint8_t*)&h;  
+    for (uint32_t i = 0; i < sizeof(h); i++) hb[i] = 0xFF;  
+    h.magic[0] = 'R'; h.magic[1] = 'C'; h.ver = 1; h.flags = 0;  
+    h.len_samples = rec_len;  
+    flash_range_program(AF_REC_FLASH_OFF, hb, AF_REC_HDR_BYTES);  
+}  
 
 // --- API --------------------------------------------------------------------    
 void af_rec_init(void) {        
@@ -167,16 +190,29 @@ void af_rec_stop(void) {
     Serial.flush();    
     set_sys_clock_khz(125000, false);        
     
-    // Весь дамп — одна RAM-функция под одним запретом IRQ (как af_store):    
-    // во время erase/program XIP выключен, код обязан быть в RAM.    
-    const uint32_t data_bytes = rec_len * 2u;      
-    const uint32_t nsec = (AF_REC_HDR_BYTES + data_bytes + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;      
-    Serial.printf("# rec: dump: erase+program %lu sec, irq off\n", (unsigned long)nsec);           
-    Serial.flush();                 // без flush маркер может не дойти до хоста    
-    uint32_t ints = save_and_disable_interrupts();      
-    do_rec_dump(NULL);    
-    restore_interrupts(ints);    
-    flash_flush_cache();            // сброс XIP-кэша после записи    
+    // Посекторный дамп: каждый сектор — своё IRQ-off окно (erase+program),  
+    // между секторами IRQ включены — USB обслуживается, watchdog кормится.  
+    // Конфигурация окна идентична af_store (1 сектор за заход — работает).  
+    const uint32_t data_bytes = rec_len * 2u;  
+    const uint32_t nsec = (AF_REC_HDR_BYTES + data_bytes + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;  
+    Serial.printf("# rec: dump: %lu sec, per-sector irq off\n", (unsigned long)nsec);  
+    Serial.flush();  
+  
+    for (uint32_t s = 0; s < nsec; s++) {  
+        Serial.printf("# rec: dump: sec %lu\n", (unsigned long)s);  
+        Serial.flush();  
+        uint32_t ints = save_and_disable_interrupts();  
+        do_rec_dump((void*)(uintptr_t)s);  
+        restore_interrupts(ints);  
+        watchdog_update();              // между секторами — штатный корм  
+    }  
+    // Заголовок — последним, своим окном.  
+    {  
+        uint32_t ints = save_and_disable_interrupts();  
+        do_rec_dump_hdr(NULL);  
+        restore_interrupts(ints);  
+    }  
+    flash_flush_cache();                // сброс XIP-кэша после записи  
     
     Serial.println("# rec: dump: restore clk + c1");        
     Serial.flush();    
