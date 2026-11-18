@@ -158,15 +158,13 @@ void af_rec_stop(void) {
                   (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));            
   
     // --- Дамп ram_buf -> flash-слот (этап 2: с маркерами) -------------------      
-    Serial.println("# rec: dump: park c1");  
-    Serial.flush();  
-    if (!af_store_core1_park(500)) {          // Core 1 встал в safe-точку  
-        Serial.println("# rec: dump: park timeout — abort");  
-        return;                              // state уже ST_IDLE, запись в RAM сохранена  
-    }  
-    Serial.println("# rec: dump: downclock");  
-    Serial.flush();  
-    set_sys_clock_khz(125000, false);  
+    Serial.println("# rec: dump: reset c1");    
+    Serial.flush();    
+    multicore_reset_core1();    
+    busy_wait_us(100);                        // как в af_store — дать Core 1 умереть    
+    Serial.println("# rec: dump: downclock");    
+    Serial.flush();    
+    set_sys_clock_khz(125000, false);    
   
     const uint32_t nsec = (AF_REC_HDR_BYTES + rec_len * 2u + 4095) / 4096;    
     Serial.printf("# rec: dump: erase+program %lu sec\n", (unsigned long)nsec);      
@@ -176,10 +174,10 @@ void af_rec_stop(void) {
     restore_interrupts(ints);    
     flash_flush_cache();            // сброс XIP-кэша после записи    
   
-    Serial.println("# rec: dump: restore clk + c1");  
-    af_set_clk();  
-    af_store_core1_unpark();                  // Core 1 продолжает loop1 — без рестарта  
-    Serial.println("# rec: flash dump done");  
+    Serial.println("# rec: dump: restore clk + c1");    
+    af_set_clk();    
+    rp2040.restartCore1();                    // Core 1 поднимается заново    
+    Serial.println("# rec: flash dump done");    
 }            
   
 bool af_rec_play(void) {    
