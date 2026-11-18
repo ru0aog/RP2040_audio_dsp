@@ -704,8 +704,10 @@ static void cli_exec(char* line) {
             Serial.println("# ERR: save <1..7>");  
             return;  
         }  
-        af_store_save((uint8_t)idx);  
-        Serial.printf("# OK saved bank %d\n", idx);  
+        if (af_store_save((uint8_t)idx))  
+            Serial.printf("# OK saved bank %d\n", idx);  
+        else  
+            Serial.printf("# ERR save bank %d\n", idx);  
     }  
     else if (strcmp(cmd, "load") == 0) {  
         char* v = strtok(NULL, " \t");  

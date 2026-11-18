@@ -122,16 +122,11 @@ void af_store_init(void) {
             Serial.println("[STORE] core1 park timeout, format skipped");  
             return;   // не форматируем — чтение покажет мусор, но плата жива  
         }  
-    // flash_safe_execute: глушит IRQ, исполняет fn из RAM,      
-    // корректно работает при разгоне clk_sys (прямой вызов      
-    // flash_range_erase с noInterrupts на 250 МГц виснет).      
-    int rc = flash_safe_execute(do_flash_write, NULL, 1000);      
-    if (rc != PICO_OK) {      
-        Serial.printf("# flash write failed rc=%d\n", rc);      
-        g_park_req = false; __dmb();      
-        while (g_parked) { }      
-        return; 
-    }      
+    // Прямой вызов: Core 1 припаркован в RAM, IRQ Core 0 заглушены.  
+    // flash_safe_execute не работает без multicore lockout (rc=-4).  
+    noInterrupts();  
+    do_flash_write(NULL);      // RAM: erase+program, XIP off  
+    interrupts();  
         g_park_req = false;   // отпустить Core 1    
         __dmb();    
         while (g_parked) { }    // дождаться выхода из spin    
@@ -227,14 +222,13 @@ bool af_store_save(uint8_t idx) {
         Serial.println("# save: core1 park timeout");      
         return false;      
     }      
-    af_led_set(0, 255, 255);            // М2 циан: parked, пишем  
-    int rc = flash_safe_execute(do_flash_write, NULL, 1000);        
-    if (rc != PICO_OK) {        
-        Serial.printf("# flash write failed rc=%d\n", rc);        
-        g_park_req = false; __dmb();        
-        while (g_parked) { }        
-        return false;        
-    }        
+    af_led_set(0, 255, 255);   // М2: циан — flash-операция  
+    // Прямой вызов: Core 1 припаркован в RAM, VTOR в RAM,  
+    // IRQ Core 0 заглушены — flash_safe_execute не нужен  
+    // (и не работает без multicore lockout: rc=-4).  
+    noInterrupts();  
+    do_flash_write(NULL);      // RAM: erase+program, XIP off  
+    interrupts();    
     af_led_set(255, 0, 255);            // М3 пурпурный: write done  
     g_park_req = false;     // отпустить Core 1      
     __dmb();      
@@ -335,16 +329,10 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         Serial.println("# bank clr: core1 park timeout");    
         return;    
     }    
-    // flash_safe_execute: глушит IRQ, исполняет fn из RAM,      
-    // корректно работает при разгоне clk_sys (прямой вызов      
-    // flash_range_erase с noInterrupts на 250 МГц виснет).      
-    int rc = flash_safe_execute(do_flash_write, NULL, 1000);      
-    if (rc != PICO_OK) {      
-        Serial.printf("# flash write failed rc=%d\n", rc);      
-        g_park_req = false; __dmb();      
-        while (g_parked) { }      
-        return; 
-    }      
+    // Прямой вызов: Core 1 припаркован в RAM, IRQ Core 0 заглушены.  
+    noInterrupts();  
+    do_flash_write(NULL);      // RAM: erase+program, XIP off  
+    interrupts();  
     g_park_req = false;     // отпустить Core 1    
     __dmb();    
     while (g_parked) { }    // дождаться выхода из spin    
