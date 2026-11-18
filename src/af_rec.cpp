@@ -161,9 +161,9 @@ void af_rec_stop(void) {
     
     // Весь дамп — одна RAM-функция под одним запретом IRQ (как af_store):    
     // во время erase/program XIP выключен, код обязан быть в RAM.    
-    const uint32_t data_bytes = rec_len * 2u;    
-    const uint32_t nsec = 1 + (data_bytes + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;    
-    Serial.printf("# rec: dump: erase+program %lu sec, irq off\n", (unsigned long)nsec);      
+    const uint32_t data_bytes = rec_len * 2u;      
+    const uint32_t nsec = (AF_REC_HDR_BYTES + data_bytes + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;      
+    Serial.printf("# rec: dump: erase+program %lu sec, irq off\n", (unsigned long)nsec);           
     Serial.flush();                 // без flush маркер может не дойти до хоста    
     uint32_t ints = save_and_disable_interrupts();      
     do_rec_dump(NULL);    
