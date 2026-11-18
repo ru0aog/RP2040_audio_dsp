@@ -99,15 +99,16 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
 // ---------------------------------------------------------------------------  
 // Вся функция в RAM: во время erase/program XIP недоступен,    
 // вызов из flash-кода = зависание Core 0.    
-static void __not_in_flash_func(do_flash_write)(void* p) {    
-    (void)p;    
-    // ВАЖНО: внутри нельзя вызывать ничего из flash — ни af_led_set,    
-    // ни Serial. Только ROM-функции и RAM-код.    
-    rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);    
-    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);    
-    flash_flush_cache();   // RAM-функция SDK: сброс XIP-кэша, чтобы    
-                           // последующее чтение увидело свежие данные    
-}    
+static void __not_in_flash_func(do_flash_erase)(void* p) {      
+    (void)p;      
+    rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);      
+}      
+  
+static void __not_in_flash_func(do_flash_program)(void* p) {      
+    (void)p;      
+    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);      
+    flash_flush_cache();   // сброс XIP-кэша — чтение увидит свежие данные      
+}      
   
 // ---------------------------------------------------------------------------  
 // API  
@@ -130,9 +131,12 @@ void af_store_init(void) {
         }  
     // Прямой вызов: Core 1 припаркован в RAM, IRQ Core 0 заглушены.  
     // flash_safe_execute не работает без multicore lockout (rc=-4).  
-    noInterrupts();  
-    do_flash_write(NULL);      // RAM: erase+program, XIP off  
-    interrupts();  
+    noInterrupts();    
+    do_flash_erase(NULL);    
+    interrupts();    
+    noInterrupts();    
+    do_flash_program(NULL);    
+    interrupts();
         g_park_req = false;   // отпустить Core 1    
         __dmb();    
         while (g_parked) { }    // дождаться выхода из spin    
@@ -230,11 +234,15 @@ bool af_store_save(uint8_t idx) {
         return false;  
     }  
     Serial.println("# save: parked"); Serial.flush();  
-    af_led_set(0, 255, 255);  
-    noInterrupts();  
-    do_flash_write(NULL);  
-    interrupts();  
-    af_led_set(0, 255, 0);  
+    af_led_set(0, 255, 255);          // циан: перед erase  
+    noInterrupts();    
+    do_flash_erase(NULL);    
+    interrupts();    
+    af_led_set(0, 0, 255);            // синий: erase прошёл, перед program  
+    noInterrupts();    
+    do_flash_program(NULL);    
+    interrupts();    
+    af_led_set(0, 255, 0);            // зелёный: записано  
     Serial.println("# save: write done, releasing core1"); Serial.flush();  
     g_park_req = false;  
     __dmb();  
@@ -337,9 +345,12 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         return;    
     }    
     // Прямой вызов: Core 1 припаркован в RAM, IRQ Core 0 заглушены.  
-    noInterrupts();  
-    do_flash_write(NULL);      // RAM: erase+program, XIP off  
-    interrupts();  
+    noInterrupts();    
+    do_flash_erase(NULL);    
+    interrupts();    
+    noInterrupts();    
+    do_flash_program(NULL);    
+    interrupts();
     g_park_req = false;     // отпустить Core 1    
     __dmb();    
     while (g_parked) { }    // дождаться выхода из spin    
