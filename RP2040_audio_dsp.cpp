@@ -168,6 +168,8 @@ void af_clk_flash_mode(bool on) {
 // ============================================================================  
 // Arduino  
 // ============================================================================  
+static void core1_main(void);   // рабочий цикл Core 1, RAM-only  
+
 void setup()  
 {  
     af_set_clk();              // разгон первым делом, до USB/Serial  
@@ -233,18 +235,33 @@ void loop()
     // Периодическая сводка убрана — диагностика по команде 'stats'.  
 }
   
-void setup1()  
+void setup1()    
+{    
+    const uint32_t t0 = millis();    
+    while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {    
+        af_store_core1_park_poll();    
+        tight_loop_contents();    
+    }    
+    // Весь рабочий цикл Core 1 — в RAM. Инвариант магнитофона: во время  
+    // flash erase/program (af_rec, ~45 мс, XIP off) Core 1 не должна  
+    // обращаться к flash — ни кодом, ни данными. loop1() Arduino-ядра  
+    // лежит во flash, поэтому крутим свой цикл из RAM-функции.  
+    core1_main();   // не возвращается  
+}  
+  
+// Рабочий цикл Core 1 — строго в RAM. Запрещено вызывать отсюда  
+// (и из af_dsp_poll) любые функции без __not_in_flash_func и читать  
+// const-данные/XIP-указатели — иначе зависание во время записи af_rec.  
+static void __not_in_flash_func(core1_main)(void)  
 {  
-    const uint32_t t0 = millis();  
-    while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {  
-        af_store_core1_park_poll();  
-        tight_loop_contents();  
+    for (;;) {  
+        af_store_core1_park_poll();   // парковка по запросу af_store (RAM)  
+        af_dsp_poll();                // вся DSP-цепочка — __not_in_flash_func  
     }  
-}
+}  
   
 void loop1()  
 {  
-    // Core 1: пустой поллинг — просто крутится  
-    tight_loop_contents();
-    af_dsp_poll();
-}
+    // Не используется: рабочий цикл Core 1 — core1_main() в RAM,  
+    // вызывается из setup1(). Оставлена для Arduino-ядра.  
+}  

@@ -1,12 +1,21 @@
-// ============================================================================  
-// af_voice.cpp — голосовые сообщения (плеер на Core 1, запросы с Core 0)  
-//  
-// Клипы: PCM int16 mono 15625 Гц, const-массивы во flash.  
-// Подмес в выходной тракт после АРУ, до out_emit — слышно и в PWM, и в USB.  
-// ============================================================================  
+// src/af_voice.cpp
+// ============================================================================    
+// af_voice.cpp — голосовые сообщения (плеер на Core 1, запросы с Core 0)    
+//    
+// Клипы: PCM int16 mono 15625 Гц, const-массивы во flash.    
+// Подмес в выходной тракт после АРУ, до out_emit — слышно и в PWM, и в USB.    
+//    
+// ВАЖНО: данные клипов и таблица s_clips лежат во flash и читаются через    
+// XIP. Во время записи магнитофона (af_rec) XIP периодически выключается    
+// на erase/program — поэтому при af_rec_is_recording() подмес и подхват    
+// очереди запрещены: af_voice_mix возвращает вход без чтения flash.    
+// Текущий клип ставится на паузу (s_cur_pos не двигается), очередь    
+// сохраняется и доигрывает после stop.    
+// ============================================================================    
 #include <Arduino.h>  
 #include "af_voice.h"  
 #include "af_config.h"
+#include "af_rec.h"            // af_rec_is_recording — запрет чтения клипов при rec  
 #include "voice/voice_01.inc"  // 01: "радиотракт готов к работе"  
 #include "voice/voice_02.inc"  // 02: "автоматический режекторный фильтр включен"  
 #include "voice/voice_03.inc"  // 03: "телеграфный фильтр включен"  
@@ -68,9 +77,13 @@ void af_voice_play(af_voice_id_t id) {
   
 bool af_voice_busy(void) { return s_cur != NULL || s_q_head != s_q_tail; }  
   
-int16_t __not_in_flash_func(af_voice_mix)(int16_t s) {  
-    // Подхват следующего клипа из очереди  
-    if (s_cur == NULL && s_q_tail != s_q_head) {  
+int16_t __not_in_flash_func(af_voice_mix)(int16_t s) {    
+    // Запись магнитофона: XIP периодически off — не трогаем flash    
+    // (ни s_clips, ни данные клипа). Клип на паузе, очередь ждёт stop.    
+    if (af_rec_is_recording()) return s;    
+    
+    // Подхват следующего клипа из очереди    
+    if (s_cur == NULL && s_q_tail != s_q_head) {    
         af_voice_id_t id = s_queue[s_q_tail];  
         s_q_tail = (s_q_tail + 1) & 3;  
         s_cur = s_clips[id].data;  
