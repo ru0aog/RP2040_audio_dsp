@@ -6,7 +6,7 @@
 // EEPROM-эмуляция ядра Philhower. Чтение — через EEPROM (RAM-буфер),  
 // запись — напрямую flash_range_erase/flash_range_program через  
 // flash_safe_execute(): он сам паркует Core 1 и исполняет запись из RAM.  
-// Это устраняет зависания EEPROM.commit() при разгоне clk_sys до 220 МГц.  
+// Это устраняет зависания EEPROM.commit() при разгоне clk_sys до 250 МГц.  
 //  
 // Раскладка сектора:  
 //   [0..1]   magic 'A','F'  
@@ -26,6 +26,7 @@
 #include "af_dsp.h"  
 #include "af_tx.h"  
 #include "af_voice.h"  
+#include "af_led.h"
   
 #include "pico/stdlib.h"
 #include "hardware/flash.h"
@@ -121,9 +122,16 @@ void af_store_init(void) {
             Serial.println("[STORE] core1 park timeout, format skipped");  
             return;   // не форматируем — чтение покажет мусор, но плата жива  
         }  
-        noInterrupts();      
-        do_flash_write(NULL);   // RAM: erase+program, XIP off      
-        interrupts();      
+    // flash_safe_execute: глушит IRQ, исполняет fn из RAM,      
+    // корректно работает при разгоне clk_sys (прямой вызов      
+    // flash_range_erase с noInterrupts на 250 МГц виснет).      
+    int rc = flash_safe_execute(do_flash_write, NULL, 1000);      
+    if (rc != PICO_OK) {      
+        Serial.printf("# flash write failed rc=%d\n", rc);      
+        g_park_req = false; __dmb();      
+        while (g_parked) { }      
+        return; 
+    }      
         g_park_req = false;   // отпустить Core 1    
         __dmb();    
         while (g_parked) { }    // дождаться выхода из spin    
@@ -213,23 +221,33 @@ bool af_store_save(uint8_t idx) {
     // Паркуем Core 1 и пишем сектор. Core 1 исполняется из RAM    
     // (__not_in_flash_func на всей DSP-цепочке) — после записи    
     // отпускаем его и возвращаемся, ребут не нужен.    
-    if (!park_core1()) {    
-        Serial.println("# save: core1 park timeout");    
-        return false;    
-    }    
-    noInterrupts();      
-    do_flash_write(NULL);   // RAM: erase+program, XIP off      
-    interrupts();      
-    g_park_req = false;     // отпустить Core 1    
-    __dmb();    
-    while (g_parked) { }    // дождаться выхода из spin    
     
+    af_led_set(255, 255, 0);            // М1 жёлтый: park req  
+    if (!park_core1()) {      
+        Serial.println("# save: core1 park timeout");      
+        return false;      
+    }      
+    af_led_set(0, 255, 255);            // М2 циан: parked, пишем  
+    int rc = flash_safe_execute(do_flash_write, NULL, 1000);        
+    if (rc != PICO_OK) {        
+        Serial.printf("# flash write failed rc=%d\n", rc);        
+        g_park_req = false; __dmb();        
+        while (g_parked) { }        
+        return false;        
+    }        
+    af_led_set(255, 0, 255);            // М3 пурпурный: write done  
+    g_park_req = false;     // отпустить Core 1      
+    __dmb();      
+    while (g_parked) { }    // дождаться выхода из spin      
+    af_led_set(255, 255, 255);          // М4 белый: core1 released    
+  
     // Синхронизируем RAM-буфер EEPROM с записанным сектором —    
-    // иначе EEPROM.commit() при следующем save затрёт наши данные.    
+    // иначе af_store_read (через EEPROM.get) вернёт старые данные.    
     for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);    
-    
+  
     Serial.printf("# OK save=%d\n", idx);    
-    return true;  
+    return true; 
+
 }  
   
 bool af_store_load(uint8_t idx) {  
@@ -317,9 +335,16 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         Serial.println("# bank clr: core1 park timeout");    
         return;    
     }    
-    noInterrupts();      
-    do_flash_write(NULL);   // RAM: erase+program, XIP off      
-    interrupts();      
+    // flash_safe_execute: глушит IRQ, исполняет fn из RAM,      
+    // корректно работает при разгоне clk_sys (прямой вызов      
+    // flash_range_erase с noInterrupts на 250 МГц виснет).      
+    int rc = flash_safe_execute(do_flash_write, NULL, 1000);      
+    if (rc != PICO_OK) {      
+        Serial.printf("# flash write failed rc=%d\n", rc);      
+        g_park_req = false; __dmb();      
+        while (g_parked) { }      
+        return; 
+    }      
     g_park_req = false;     // отпустить Core 1    
     __dmb();    
     while (g_parked) { }    // дождаться выхода из spin    
