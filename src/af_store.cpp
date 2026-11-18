@@ -124,26 +124,11 @@ void af_store_init(void) {
     if (s_sector_img[0] != AF_STORE_MAGIC0 ||      
         s_sector_img[1] != AF_STORE_MAGIC1 ||      
         s_sector_img[2] != AF_STORE_VER) {      
+        // Boot-путь — только чтение. Никакой записи во flash здесь:  
+        // park/erase на этапе init периодически вешает плату.  
+        // Пустой/битый сектор = пустые банки; формат — через 'banks clr'.  
         memset(s_sector_img, 0xFF, sizeof(s_sector_img));      
-        s_sector_img[0] = AF_STORE_MAGIC0;      
-        s_sector_img[1] = AF_STORE_MAGIC1;      
-        s_sector_img[2] = AF_STORE_VER;      
-        if (!park_core1()) {      
-            Serial.println("[STORE] core1 park timeout, format skipped");      
-            return;    
-        }      
-        noInterrupts();        
-        do_flash_write(NULL);   // RAM: erase+program, XIP off        
-        interrupts();        
-        g_park_req = false;   // отпустить Core 1      
-        __dmb();    
-        while (g_parked) { }  // дождаться выхода из spin    
-    
-        // Verify: перечитываем сектор из XIP — записалось ли реально.    
-        uint8_t v[4];    
-        memcpy(v, (const void*)(XIP_BASE + AF_FLASH_OFF), 4);    
-        Serial.printf("[STORE] flash formatted, verify=%02x %02x %02x %02x\n",    
-            v[0], v[1], v[2], v[3]);    
+        Serial.println("[STORE] sector blank/foreign — banks empty (use 'banks clr')");    
     }      
 }  
   
@@ -226,20 +211,18 @@ bool af_store_save(uint8_t idx) {
     // Читаем текущий сектор из flash напрямую (XIP), патчим запись.  
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));  
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));  
+
+    // Как в af_store_write_all: жёсткий reset Core 1 — детерминированно,  
+    // без гонки с флаговой парковкой. Восстанавливать не нужно — дальше reboot.
+    multicore_reset_core1();  
+    busy_wait_us(100);  
   
-    // Паркуем Core 1 и пишем сектор. После записи — ребут:  
-    // возврат на 220 МГц и выход из парковки ненадёжны,  
-    // а данные уже во flash — после ребута всё поднимется чисто.  
-    if (!park_core1()) {  
-        Serial.println("# save: core1 park timeout");  
-        return false;  
-    }
-    // Как в маяке: flash пишем на номинальной частоте, не на разгоне.  
-    // Восстанавливать не нужно — дальше watchdog_reboot.  
-    set_sys_clock_khz(125000, false);  
-    noInterrupts();      
-    do_flash_write(NULL);   // RAM: erase+program, XIP off      
-    interrupts();           // вернуть IRQ — иначе Serial.flush виснет  
+    set_sys_clock_khz(125000, false);   // номинал, как vfo_clk_boost_exit  
+
+    uint32_t ints = save_and_disable_interrupts();  
+    do_flash_write(NULL);               // RAM: erase+program, XIP off  
+    restore_interrupts(ints);  
+    flash_flush_cache();                // сброс XIP-кэша после записи  
       
     Serial.printf("# OK save=%d, rebooting...\n", idx);    
     Serial.flush(); 
