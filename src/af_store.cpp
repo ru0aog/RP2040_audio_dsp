@@ -99,16 +99,18 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
 // ---------------------------------------------------------------------------  
 // Вся функция в RAM: во время erase/program XIP недоступен,    
 // вызов из flash-кода = зависание Core 0.    
-static void __not_in_flash_func(do_flash_erase)(void* p) {      
-    (void)p;      
-    rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);      
-}      
-  
-static void __not_in_flash_func(do_flash_program)(void* p) {      
-    (void)p;      
-    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);      
-    flash_flush_cache();   // сброс XIP-кэша — чтение увидит свежие данные      
-}      
+static void __not_in_flash_func(do_flash_erase)(void* p) {        
+    (void)p;        
+    flash_flush_cache();   // сбросить грязные линии XIP до отключения flash  
+    rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);        
+    flash_flush_cache();   // инвалидировать кэш — свежие данные при чтении  
+}        
+    
+static void __not_in_flash_func(do_flash_program)(void* p) {        
+    (void)p;        
+    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);        
+    flash_flush_cache();        
+}    
   
 // ---------------------------------------------------------------------------  
 // API  

@@ -69,16 +69,20 @@ static bool hdr_read(rec_hdr_t* h) {
   
 // --- flash I/O: прямые вызовы, запрет прерываний только на Core 0 -----------      
 // Core 1 не паркуется — условие: вся цепочка loop1() в RAM (__not_in_flash_func).      
-static void slot_erase_sector(uint32_t off) {        // off кратно 4096, внутри слота        
-    uint32_t ints = save_and_disable_interrupts();        
-    rom_flash_range_erase(AF_REC_FLASH_OFF + off, 4096, 4096, 0x20);        
-    restore_interrupts(ints);        
-}        
-static void slot_program(uint32_t off, const void* data, uint32_t len) {        
-    uint32_t ints = save_and_disable_interrupts();        
-    rom_flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);        
-    restore_interrupts(ints);        
-}        
+static void slot_erase_sector(uint32_t off) {        // off кратно 4096, внутри слота          
+    uint32_t ints = save_and_disable_interrupts();          
+    flash_flush_cache();   // дождаться висящих SSI-транзакций до erase          
+    rom_flash_range_erase(AF_REC_FLASH_OFF + off, 4096, 4096, 0x20);          
+    flash_flush_cache();   // сброс кэша после — чтение увидит стёртое          
+    restore_interrupts(ints);          
+}          
+static void slot_program(uint32_t off, const void* data, uint32_t len) {          
+    uint32_t ints = save_and_disable_interrupts();          
+    flash_flush_cache();          
+    rom_flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);          
+    flash_flush_cache();          
+    restore_interrupts(ints);          
+}          
 // Держим erase_off на сектор впереди следующей записи.      
 static void erase_ahead(void) {      
     const uint32_t need = AF_REC_HDR_BYTES + flash_wr + 4096;      
