@@ -13,7 +13,10 @@
 //   500..1000 мс — полностью погашен
 // ============================================================================  
 #include <Arduino.h>  
-#include <hardware/gpio.h>  
+#include <hardware/gpio.h>
+#include <hardware/gpio.h>    
+#include <hardware/timer.h>    
+#include <hardware/sync.h>  
 #include "af_led.h"
 #include "af_dsp.h"     // af_dsp_nr_on(), af_dsp_notch_on()  
   
@@ -59,20 +62,28 @@ static void __time_critical_func(send_raw_byte_parallel)(uint8_t v) {
     }  
 }  
   
-void af_led_set(uint8_t r, uint8_t g, uint8_t b) {  
-    noInterrupts();  
-    send_raw_byte_parallel(g);   // WS2812B: порядок G-R-B  
-    send_raw_byte_parallel(r);  
-    send_raw_byte_parallel(b);  
-    interrupts();  
-    sio_hw->gpio_clr = RGB_PINS_MASK;  
-    delayMicroseconds(600);      // latch  
+// Неблокирующая версия: latch (>50 мкс) обеспечивается проверкой  
+// интервала с прошлой посылки — если прошло <100 мкс, вызов  
+// пропускается (heartbeat повторит на следующем цикле).  
+// timer_hw->timerawl читается напрямую — time_us_32 может быть во flash.  
+void __not_in_flash_func(af_led_set)(uint8_t r, uint8_t g, uint8_t b) {    
+    static uint32_t last_us = 0;    
+    uint32_t now = timer_hw->timerawl;    
+    if ((uint32_t)(now - last_us) < 100u) return;   // latch ещё не выдержан    
+    last_us = now;    
   
-    if (r || g || b) sio_hw->gpio_set = (1u << PIN_PICO);  
-    else             sio_hw->gpio_clr = (1u << PIN_PICO);  
-}  
+    uint32_t ints = save_and_disable_interrupts();    
+    send_raw_byte_parallel(g);   // WS2812B: порядок G-R-B    
+    send_raw_byte_parallel(r);    
+    send_raw_byte_parallel(b);    
+    restore_interrupts(ints);    
+    sio_hw->gpio_clr = RGB_PINS_MASK;    
   
-void af_led_off(void) { af_led_set(0, 0, 0); }  
+    if (r || g || b) sio_hw->gpio_set = (1u << PIN_PICO);    
+    else             sio_hw->gpio_clr = (1u << PIN_PICO);    
+}    
+  
+void __not_in_flash_func(af_led_off)(void) { af_led_set(0, 0, 0); } 
   
 void af_led_init(void) {  
     gpio_init(PIN_ZERO); gpio_set_dir(PIN_ZERO, GPIO_OUT);  
