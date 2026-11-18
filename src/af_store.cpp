@@ -105,11 +105,8 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
 static void __not_in_flash_func(do_flash_erase)(void* p) {        
     (void)p;        
     rom_connect_internal_flash();   // SSI -> режим прямого доступа (как в SDK)  
-    af_led_set(64, 0, 64);            // тускло-пурпурный: вошли в erase-функцию  
     flash_flush_cache();  
-    af_led_set(0, 64, 64);            // тускло-циан: flush#1 прошёл, стартует erase  
     rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);        
-    af_led_set(64, 64, 0);            // тускло-жёлтый: erase вернулся, flush#2  
     flash_flush_cache();  
 }     
     
@@ -244,21 +241,22 @@ bool af_store_save(uint8_t idx) {
     }  
     Serial.println("# save: parked"); Serial.flush();  
     
-af_led_set(255, 0, 0);                    // красный: перед окном IRQ-off    
     af_clk_flash_mode(true);              // clk_sys -> XOSC 12 МГц (как в маяке)  
     noInterrupts();      
     do_flash_erase(NULL);      
     do_flash_program(NULL);      
     interrupts();      
     af_clk_flash_mode(false);             // обратно на PLL_SYS  
-af_led_set(0, 255, 0);                    // зелёный: записано    
+    af_led_set(0, 255, 0);                    // зелёный: записано    
 
     Serial.println("# save: write done, releasing core1"); Serial.flush();  
     g_park_req = false;  
     __dmb();  
     while (g_parked) { }  
-    af_led_set(255, 255, 255);  
-    Serial.println("# save: core1 released"); Serial.flush();  
+    af_led_set(255, 0, 0);
+    // Без flush: если clk_usb пострадал при переключении clk_sys,  
+    // flush уйдёт в вечное ожидание — строка и так попадёт в лог позже.  
+    Serial.println("# save: core1 released");  
   
     // Синхронизируем RAM-буфер EEPROM с записанным сектором —    
     // иначе af_store_read (через EEPROM.get) вернёт старые данные.    

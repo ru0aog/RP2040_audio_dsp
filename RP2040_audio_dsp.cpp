@@ -54,8 +54,8 @@ struct PllConfig {
 // VSEL 1.30 В, BAUDR=7 → SCK флеша ~35.7 МГц  
 
 
-//static const PllConfig pll_cfg = { 250000000UL, 1, 125, 6, 1, 7, 7 };
-static const PllConfig pll_cfg = { 133000000UL, 1, 133, 6, 2, 1, 4 };
+static const PllConfig pll_cfg = { 250000000UL, 1, 125, 6, 1, 7, 7 };
+//static const PllConfig pll_cfg = { 133000000UL, 1, 133, 6, 2, 1, 4 };
   
 static uint32_t current_clk_sys_hz = VFO_CLK_SYS_NOMINAL_HZ;  
   
