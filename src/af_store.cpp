@@ -29,7 +29,8 @@
 #include "hardware/flash.h"
 #include "pico/flash.h"
 #include "hardware/watchdog.h"
-#include "hardware/flash.h"  
+#include "hardware/flash.h"
+#include "pico/multicore.h"
   
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
@@ -329,17 +330,18 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));  
     }  
   
-    if (!park_core1()) {  
-        Serial.println("# bank clr: core1 park timeout");  
-        return;  
-    } 
-    // Как в маяке: flash пишем на номинальной частоте, не на разгоне.  
-    // Восстанавливать не нужно — дальше watchdog_reboot.  
-    set_sys_clock_khz(125000, false);  
-    noInterrupts();    
-    do_flash_write(NULL);   // RAM: erase+program, XIP off    
-    interrupts();    
+    // Как в маяке: жёсткий сброс Core 1 вместо флаговой парковки —  
+    // 100% гарантия, что Core 1 не трогает flash во время erase.  
+    multicore_reset_core1();  
+    busy_wait_us(100);  
+  
+    set_sys_clock_khz(125000, false);   // номинал, как vfo_clk_boost_exit  
+  
+    uint32_t ints = save_and_disable_interrupts();  
+    do_flash_write(NULL);               // RAM: erase+program, XIP off  
+    restore_interrupts(ints);  
+    flash_flush_cache();                // сброс XIP-кэша после записи  
   
     Serial.flush();  
-    watchdog_reboot(0, 0, 0);   // не возвращается  
+    watchdog_reboot(0, 0, 0);           // не возвращается  
 }
