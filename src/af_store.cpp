@@ -219,17 +219,17 @@ bool af_store_save(uint8_t idx) {
   
     set_sys_clock_khz(125000, false);   // номинал, как vfo_clk_boost_exit  
 
-    uint32_t ints = save_and_disable_interrupts();  
-    do_flash_write(NULL);               // RAM: erase+program, XIP off  
-    restore_interrupts(ints);  
-    flash_flush_cache();                // сброс XIP-кэша после записи  
-      
-    Serial.printf("# OK save=%d, rebooting...\n", idx);    
-    Serial.flush(); 
-    
-    // Сюда доходим только если запись завершилась.    
-    watchdog_reboot(0, 0, 0);    
-    while (true) { tight_loop_contents(); }   // на случай задержки ребута
+    uint32_t ints = save_and_disable_interrupts();    
+    do_flash_write(NULL);               // RAM: erase+program, XIP off    
+    restore_interrupts(ints);    
+    flash_flush_cache();                // сброс XIP-кэша после записи    
+  
+    // Возврат без ребута: разгон + перезапуск Core 1.    
+    af_set_clk();                       // обратно на 250 МГц (PLL + vreg + verify)    
+    rp2040.restartCore1();              // Core 1: setup1 -> loop1 
+  
+    Serial.printf("# OK save=%d\n", idx);      
+    return true;  
 }  
   
 bool af_store_load(uint8_t idx) {  
@@ -320,11 +320,14 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
   
     set_sys_clock_khz(125000, false);   // номинал, как vfo_clk_boost_exit  
   
-    uint32_t ints = save_and_disable_interrupts();  
-    do_flash_write(NULL);               // RAM: erase+program, XIP off  
-    restore_interrupts(ints);  
-    flash_flush_cache();                // сброс XIP-кэша после записи  
-  
-    Serial.flush();  
-    watchdog_reboot(0, 0, 0);           // не возвращается  
+    uint32_t ints = save_and_disable_interrupts();    
+    do_flash_write(NULL);               // RAM: erase+program, XIP off    
+    restore_interrupts(ints);    
+    flash_flush_cache();                // сброс XIP-кэша после записи    
+    
+    // Возврат без ребута: разгон + перезапуск Core 1.    
+    af_set_clk();                       // обратно на 250 МГц (PLL + vreg + verify)    
+    rp2040.restartCore1();              // Core 1: setup1 -> loop1 
+    
+    Serial.println("# OK banks written");    
 }

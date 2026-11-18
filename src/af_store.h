@@ -90,3 +90,5 @@ void af_store_core1_park_poll(void);
 // Записать массив из AF_STORE_BANKS записей разом (команда 'bank clr').  
 // После записи — watchdog_reboot, функция не возвращается.  
 void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]);
+
+void af_set_clk(void);   // разгон clk_sys по pll_cfg (RP2040_audio_dsp.cpp)  
