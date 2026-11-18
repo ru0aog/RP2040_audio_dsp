@@ -195,3 +195,55 @@ enum расширен `VOICE_PROF_1..VOICE_PROF_7` (id 07–13), в
    в enum отсутствует осознанно; bypass озвучивается только  
    при включении.  
 
+---  
+  
+## CHANGE-004: Перезапись хранилища банков — без EEPROM, без ребута  
+  
+**Статус:** внедрено (коммиты `fbcd8b5` … `1b7906d`, см. BUG-010).  
+  
+### Что изменено  
+  
+**1. Чтение — напрямую из XIP, EEPROM исключён.**  
+`af_store_init` читает сектор `AF_FLASH_OFF` в `s_sector_img`  
+через `memcpy` из `XIP_BASE`; `af_store_read`/`banks`/`load`  
+читают из `s_sector_img`. EEPROM-эмуляция больше не  
+используется — устранено расхождение секторов при сборке под  
+другой размер flash.  
+  
+**2. Запись — SDK-обёртки + жёсткий сброс Core 1.**  
+`do_flash_write` (`__not_in_flash_func`): `flash_range_erase` +  
+`flash_range_program`. Перед записью `multicore_reset_core1()`  
++ `set_sys_clock_khz(125000)` (как `vfo_clk_boost_exit` в  
+маяке), после — `af_set_clk()` (PLL + vreg + верификация) и  
+`rp2040.restartCore1()`. Ребут убран — `save N`/`banks clr`  
+возвращаются в CLI.  
+  
+**3. `af_store_init` — read-only.** Пустой/чужой сектор →  
+`[STORE] sector blank/foreign`, банки `empty`. Форматирование  
+только через `banks clr`. Boot-путь не пишет flash — нет  
+зависаний на старте.  
+  
+**4. `af_store_save` гарантирует magic.** Перед записью записи  
+проверяется заголовок сектора; при отсутствии magic сектор  
+инициализируется — `save` на пустом секторе больше не теряет  
+банк.  
+  
+### Подводные камни  
+  
+1. **`af_set_clk()` может откатить на 133 МГц** — при ошибке  
+   верификации >1%. После `save` проверять `stats`: `clk_sys`  
+   должен быть 250 MHz.  
+2. **`rp2040.restartCore1()`** — метод класса `RP2040` ядра  
+   Philhower; перезапускает `setup1`/`loop1` штатно. DSP на  
+   Core 1 встаёт на ~мс — короткий провал в аудио при `save`.  
+3. **`AF_FLASH_OFF = 0x1FF000`** — последний сектор 2 МБ,  
+   фиксированный (не от `PICO_FLASH_SIZE_BYTES`). На 4-МБ платах  
+   работает как обычный сектор внутри чипа.  
+4. **Мёртвый код парковки** (`park_core1`, `g_park_req`,  
+   `g_parked`, `af_store_core1_park_poll`) оставлен в файле —  
+   не используется, удалять аккуратно вместе с вызовом в  
+   `setup1`.  
+5. **`src/af_rec.cpp`** — `slot_erase_sector`/`slot_program`  
+   должны быть на тех же SDK-обёртках; прямые ROM-вызовы без  
+   `enter_cmd_xip` висят тем же образом (см. BUG-011).  
+
