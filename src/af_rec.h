@@ -33,8 +33,15 @@ void     af_rec_stop(void);        // стоп + финализация заго
 bool     af_rec_play(void);        // старт воспроизведения (false = пусто/занято)    
 void     af_rec_play_stop(void);    
   
-bool     af_rec_is_recording(void);    
-bool     af_rec_is_playing(void);    
+bool     af_rec_is_recording(void);  
+bool     af_rec_is_playing(void);  
+  
+// Флаг активности для горячего пути Core 1: 0=idle, 1=rec, 2=play.  
+// Читается в af_dsp_poll вместо вызовов af_rec_* в idle — экономия  
+// call-overhead на каждый выходной сэмпл. Пишется только из af_rec.c  
+// (Core 0), читается на Core 1.  
+extern volatile uint8_t af_rec_active;  
+
 uint32_t af_rec_len_samples(void); // длина записи в слоте (0 = пустой)    
 uint32_t af_rec_pos_samples(void); // текущая позиция rec/play    
   

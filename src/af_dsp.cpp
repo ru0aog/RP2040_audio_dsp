@@ -24,7 +24,7 @@
 #include "af_voice.h"     // подмес голосовых клипов в выход
 #include "af_tx.h"        // передающий тракт SSB    
 #include "af_pwm.h"       // af_pwm_set_tx_pin — выход GP0(RX)/GP1(TX) 
-#include "af_rec.h"       // запись/воспроизведение цифрового матнитофона
+#include "af_rec.h"       // запись/воспроизведение цифрового магнитофона
   
 // ---------------------------------------------------------------------------  
 // Half-band дециматоры — коэффициенты 1:1 из rx_dsp.cpp приёмника  
@@ -951,17 +951,20 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 // Обход: децимированный вход напрямую на выход,      
                 // без FIR/CW/NT/NR/АРУ/лимитера.  
                 // голос должен быть слышен и в обходе  
-                af_rec_push(sat16(y));                       // запись: чистый тракт    
-                out_emit(af_rec_mix(af_voice_mix(sat16(y))));    
+                if (af_rec_active == 1) af_rec_push(sat16(y));  
+                int16_t sb = af_voice_mix(sat16(y));  
+                if (af_rec_active == 2) sb = af_rec_mix(sb);  
+                out_emit(sb);  
                 //out_emit(sat16(y));      
                 continue;      
             }      
             if (tx_on) {    
                 // TX-тракт: FIR -> компрессор -> клиппер -> постфильтр.    
                 // RX-цепочка (FIR/CW/NT/NR/AGC) в TX не работает.    
-                int16_t t = af_tx_process(af_rec_src(y));    // play: запись вместо микрофона    
-                af_rec_push(t);                              // запись: выход TX-тракта    
-                out_emit(t);    
+                int32_t tx_in = (af_rec_active == 2) ? af_rec_src(y) : y;  
+                int16_t t = af_tx_process(tx_in);            // play: запись вместо микрофона  
+                if (af_rec_active == 1) af_rec_push(t);      // запись: выход TX-тракта  
+                out_emit(t);  
                 continue;    
             }    
             y = af_fir_push(y);    
@@ -981,9 +984,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             int16_t s = agc_limit(y);          
             if (rx_notch_on) s = (int16_t)rx_notch_push(s);  // гребёнка — после АРУ,    
                                                            // чтобы контур не «отменял» нотчи    
-            af_rec_push(s);               // запись: чистый тракт, до голоса    
-            s = af_voice_mix(s);          // голосовые сообщения          
-            s = af_rec_mix(s);            // подмес воспроизведения слота    
+            if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса    
+            s = af_voice_mix(s);                       // голосовые сообщения          
+            if (af_rec_active == 2) s = af_rec_mix(s); // подмес воспроизведения слота
+            
             if (ramp_on) {    
                 // Пила: +100 на отсчёт при 15.625 ksps → период ~21 мс,    
                 // амплитуда полная. Скачок ≠ +100 (mod 65536) = потеря/дубль.    
