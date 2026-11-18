@@ -24,6 +24,7 @@
 #include "src/af_store.h"
 #include "src/af_led.h"
 #include "src/af_voice.h"     // подмес голосовых клипов в выход
+#include "src/af_rec.h"           // цифровой магнитофон: 1 слот 25 с во flash 
   
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    
@@ -164,7 +165,8 @@ void setup()
   
     af_dsp_init();  
     af_cli_init();  
-    af_store_init();  
+    af_store_init();
+    af_rec_init();
     af_led_set(0, 0, 10);
     af_gpio_ctl_init();
     af_capture_start();
@@ -183,7 +185,8 @@ void loop()
   
     af_usb_poll();      // первым: TX-FIFO TinyUSB — самый мелкий буфер тракта  
     af_led_poll();    
-    af_cli_poll();    
+    af_cli_poll();
+    af_rec_poll();      // магнитофон: программирование буферов во flash 
     af_gpio_ctl_poll();    
     af_pwm_poll();      // ×3: заполняем duty-кольцо быстрее, чем один проход loop    
     af_pwm_poll();    

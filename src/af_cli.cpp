@@ -10,7 +10,7 @@
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
 //        txpres txpresmax txpresfreq txpresq txshelf txshelffreq txshelfq  
 //        txexc txexcmix txmode txclip txnotch txnotchf txsetdef txprof    
-//   SYS: stats dump save load banks pwm voice ramp help    
+//   SYS: stats dump save load banks pwm voice ramp rec play stop recs help      
 // ============================================================================  
 #include <Arduino.h>  
 #include <string.h>  
@@ -25,7 +25,8 @@
 #include "af_led.h"
 #include "af_voice.h"     // подмес голосовых клипов в выход
 #include "af_tx.h"        // TX-тракт: полоса/компрессия/клиппер  
-#include "af_gpio_ctl.h"  // af_gpio_bank_code — текущий банк с пинов  
+#include "af_gpio_ctl.h"  // af_gpio_bank_code — текущий банк с пинов
+#include "af_rec.h"       // цифровой магнитофон: 1 слот 25 с во flash    
   
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -101,10 +102,14 @@ static void cli_help(void) {
     Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)");  
     Serial.println("#   pwm on|off        — PWM-выход (off = несущая заглушена)");  
     Serial.println("#   voice [N|vol <0..400>] — голосовые сообщения");  
-    Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест потока)");  
-    Serial.println("#   help / h / ?      — эта справка");    
+    Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест потока)");    
+    Serial.println("#   rec               — запись в слот (25 с, источник = активный тракт)");    
+    Serial.println("#   play              — воспроизведение слота (RX — подмес, TX — вместо микрофона)");    
+    Serial.println("#   stop              — стоп записи/воспроизведения");    
+    Serial.println("#   recs              — состояние слота");    
+    Serial.println("#   help / h / ?      — эта справка");      
     Serial.println("# === GPIO ===");    
-    Serial.println("# GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT (LOW=on)");      
+    Serial.println("# GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT, GP9=rec, GP10=play (LOW=on)");
 }
   
 // ---------------------------------------------------------------------------  
@@ -1201,6 +1206,44 @@ static void cli_exec(char* line) {
         Serial.printf("# OK txagcmax=%lu\n", (unsigned long)af_tx_agcmax());    
     }    
 
+    else if (strcmp(cmd, "rec") == 0) {    
+        if (af_rec_start()) {    
+            Serial.printf("# OK rec: %s тракт, слот %lu с\n",    
+                          af_dsp_tx_on() ? "tx" : "rx",    
+                          (unsigned long)(AF_REC_MAX_SAMP / AF_FS_OUT_HZ));    
+        } else {    
+            Serial.println("# ERR rec: занято (play/rec активен) или tx/rx переключается");    
+        }    
+    }    
+    else if (strcmp(cmd, "play") == 0) {    
+        if (af_rec_play()) {    
+            Serial.printf("# OK play: %s тракт, %lu с\n",    
+                          af_dsp_tx_on() ? "tx" : "rx",    
+                          (unsigned long)(af_rec_len() / AF_FS_OUT_HZ));    
+        } else if (af_rec_len() == 0) {    
+            Serial.println("# ERR play: слот пуст");    
+        } else {    
+            Serial.println("# ERR play: занято (rec/play активен)");    
+        }    
+    }    
+    else if (strcmp(cmd, "stop") == 0) {    
+        af_rec_stop();    
+        Serial.println("# OK stop");    
+    }    
+    else if (strcmp(cmd, "recs") == 0) {    
+        const uint32_t len = af_rec_len();    
+        if (len == 0) {    
+            Serial.println("# rec: slot empty");    
+        } else {    
+            Serial.printf("# rec: slot used %lu samp (%lu.%lu s)  state=%s\n",    
+                          (unsigned long)len,    
+                          (unsigned long)(len / AF_FS_OUT_HZ),    
+                          (unsigned long)((len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),    
+                          af_rec_is_rec()  ? "REC" :    
+                          af_rec_is_play() ? "PLAY" : "idle");    
+        }    
+    }    
+    
     // вставлять сюда  
   
     else {    

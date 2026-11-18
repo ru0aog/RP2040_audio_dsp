@@ -326,9 +326,21 @@
 #define AF_PIN_NR               5           // GP5 — LOW -> NR on  
 #define AF_PIN_NT               6           // GP6 — LOW -> NT on  
 #define AF_PIN_BYPASS           7           // GP7 — LOW -> bypass (выход = вход)
-#define AF_PIN_PTT              8           // GP8 — LOW -> TX (передача), open -> RX  
-
-#define AF_BANK_COUNT           7           // ячеек настроек во flash
+#define AF_PIN_PTT              8           // GP8 — LOW -> TX (передача), open -> RX    
+#define AF_PIN_REC              9           // GP9 — LOW -> запись в слот    
+#define AF_PIN_PLAY             10          // GP10 — LOW -> воспроизведение слота    
+  
+#define AF_BANK_COUNT           7           // ячеек настроек во flash    
+  
+// ---------------------------------------------------------------------------    
+// Цифровой магнитофон: один слот во flash, 25 с @ 15.464 ksps int16.    
+// Слот: 0x140000 .. 0x1FEFFF (191 сектор по 4 КБ = 782336 байт).    
+// Банки занимают последний сектор 0x1FF000 — не пересекаются.    
+// Запас под рост прошивки до 0x140000: ~128 КБ (сейчас занято ~1.12 МБ).    
+// ---------------------------------------------------------------------------    
+#define AF_REC_FLASH_OFF        0x140000u    
+#define AF_REC_FLASH_LEN        0xBF000u    // 191 * 4096 = 782336 байт    
+#define AF_REC_SEC_COUNT        (AF_REC_FLASH_LEN / FLASH_SECTOR_SIZE)    
   
 // Дебаунс: период опроса и число стабильных чтений для смены состояния  
 #define AF_GPIO_POLL_MS         10u  
