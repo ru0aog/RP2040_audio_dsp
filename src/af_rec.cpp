@@ -62,16 +62,16 @@ static volatile uint32_t  flash_wr    = 0;           // байт в data-обл�
 static volatile uint32_t  erase_off   = 0;           // стёрто до этого смещения      
 static volatile uint32_t  rec_dropped = 0;           // блоки без свободного буфера      
   
-static const uint8_t* slot_base(void) {    
-    return (const uint8_t*)(XIP_BASE + AF_REC_FLASH_OFF);    
-}    
-  
-// --- чтение заголовка -------------------------------------------------------    
-static bool hdr_read(rec_hdr_t* h) {    
-    memcpy(h, slot_base(), sizeof(rec_hdr_t));    
-    return h->magic0 == AF_REC_MAGIC0 && h->magic1 == AF_REC_MAGIC1 &&    
-           h->ver == AF_REC_VER && h->len <= AF_REC_MAX_SAMP;    
-}    
+static const uint8_t* __not_in_flash_func(slot_base)(void) {      
+    return (const uint8_t*)(XIP_BASE + AF_REC_FLASH_OFF);      
+}      
+    
+// --- чтение заголовка -------------------------------------------------------      
+static bool __not_in_flash_func(hdr_read)(rec_hdr_t* h) {      
+    memcpy(h, slot_base(), sizeof(rec_hdr_t));      
+    return h->magic0 == AF_REC_MAGIC0 && h->magic1 == AF_REC_MAGIC1 &&      
+           h->ver == AF_REC_VER && h->len <= AF_REC_MAX_SAMP;      
+}      
   
 // --- flash I/O: SDK-обёртки, запрет прерываний только на Core 0 -------------  
 // flash_range_* сами делают connect/flush/enter_cmd_xip — ручной  
@@ -133,14 +133,20 @@ void af_rec_stop(void) {
             flash_wr += AF_REC_BUF_SAMP * 2;      
             buf_rdy[i] = 0;      
         }      
-    // Затем остаток текущего буфера (выравнивание на страницу 256 байт).      
-    uint32_t tail = buf_fill * 2;      
-    if (tail) {      
-        uint32_t pad = (256 - (tail & 255)) & 255;      
-        memset((uint8_t*)buf[buf_wr] + tail, 0xFF, pad);      
-        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[buf_wr], tail + pad);      
-        flash_wr += tail;      
-    }      
+    // Затем остаток текущего буфера (выравнивание на страницу 256 байт).        
+    uint32_t tail = buf_fill * 2;        
+    if (tail) {        
+        uint32_t pad = (256 - (tail & 255)) & 255;        
+        // Хвост может вылезти за erase_off — стираем сектора до конца записи.    
+        while (erase_off < AF_REC_HDR_BYTES + flash_wr + tail + pad &&    
+               erase_off < AF_REC_FLASH_LEN) {    
+            slot_erase_sector(erase_off);    
+            erase_off += 4096;    
+        }    
+        memset((uint8_t*)buf[buf_wr] + tail, 0xFF, pad);        
+        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[buf_wr], tail + pad);        
+        flash_wr += tail;        
+    }        
     rec_len = pos;    
     rec_hdr_t h;    
     memset(&h, 0xFF, sizeof(h));    
