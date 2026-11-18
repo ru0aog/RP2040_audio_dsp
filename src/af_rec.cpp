@@ -2,7 +2,7 @@
 // ============================================================================    
 // af_rec.cpp — цифровой магнитофон, один слот 25 с во flash.    
 //    
-// Раскладка слота (AF_REC_FLASH_OFF, 191 сектор):    
+// Раскладка слота (AF_REC_FLASH_OFF, 189 секторов = 774144 байт):      
 //   [0..255]    заголовок: magic 'R','C', ver, flags, len_samples    
 //   [256..]     данные int16, до AF_REC_MAX_SAMPLES отсчётов    
 // Заголовок пишется ПОСЛЕДНИМ при финализации — прерванная запись    
@@ -107,9 +107,10 @@ bool af_rec_start(void) {
     return true;    
 }    
   
-void af_rec_stop(void) {      
-    if (state != ST_REC) return;      
-    state = ST_IDLE;      
+void af_rec_stop(void) {        
+    if (state == ST_PLAY) { af_rec_play_stop(); return; }   // stop универсальный    
+    if (state != ST_REC) return;        
+    state = ST_IDLE;        
     for (int i = 0; i < 2; i++)             // сначала готовые буферы — они раньше в потоке    
         if (buf_rdy[i]) {      
             slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);      
@@ -183,9 +184,14 @@ int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {
 }    
   
 // --- Core 0: программирование готовых буферов ---------------------------------    
-void af_rec_poll(void) {      
-    if (state != ST_REC) return;      
-    for (int i = 0; i < 2; i++) {      
+void af_rec_poll(void) {        
+    if (state != ST_REC) return;        
+    if ((af_dsp_tx_on() ? 1 : 0) != rec_src_tx) {   // тракт сменился — финализируем    
+        Serial.println("# rec: src changed (rx<->tx) — stop");    
+        af_rec_stop();    
+        return;    
+    }    
+    for (int i = 0; i < 2; i++) {        
         if (!buf_rdy[i]) continue;      
         slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);      
         flash_wr += AF_REC_BUF_SAMP * 2;      
