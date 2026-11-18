@@ -83,9 +83,11 @@ static void slot_program(uint32_t off, const void* data, uint32_t len) {
 void af_rec_init(void) {    
     rec_hdr_t h;    
     rec_len = hdr_read(&h) ? h.len : 0;    
-    Serial.printf("# rec: slot %s, %lu samp (%.1f s)\n",    
-                  rec_len ? "used" : "empty",    
-                  (unsigned long)rec_len, rec_len / (float)AF_FS_OUT_HZ);    
+    Serial.printf("# rec: slot %s, %lu samp (%lu.%lu s)\n",      
+                  rec_len ? "used" : "empty",      
+                  (unsigned long)rec_len,      
+                  (unsigned long)(rec_len / AF_FS_OUT_HZ),      
+                  (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));      
 }    
   
 bool af_rec_start(void) {    
@@ -131,9 +133,11 @@ void af_rec_stop(void) {
     h.magic0 = AF_REC_MAGIC0; h.magic1 = AF_REC_MAGIC1;    
     h.ver = AF_REC_VER; h.flags = rec_src_tx; h.len = rec_len;    
     slot_program(0, &h, AF_REC_HDR_BYTES);  // заголовок — последним    
-    Serial.printf("# rec: saved %lu samp (%.1f s), dropped=%lu\n",    
-                  (unsigned long)rec_len, rec_len / (float)AF_FS_OUT_HZ,    
-                  (unsigned long)rec_dropped);    
+    Serial.printf("# rec: saved %lu samp (%lu.%lu s), dropped=%lu\n",      
+                  (unsigned long)rec_len,      
+                  (unsigned long)(rec_len / AF_FS_OUT_HZ),      
+                  (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),      
+                  (unsigned long)rec_dropped);      
 }    
   
 bool af_rec_play(void) {    
