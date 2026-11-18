@@ -52,7 +52,10 @@ struct PllConfig {
   
 // 250 МГц: VCO = 12М * 125 = 1500 МГц, p1=6, p2=1 → 250 МГц  
 // VSEL 1.30 В, BAUDR=7 → SCK флеша ~35.7 МГц  
-static const PllConfig pll_cfg = { 250000000UL, 1, 125, 6, 1, 7, 7 };  
+
+
+//static const PllConfig pll_cfg = { 250000000UL, 1, 125, 6, 1, 7, 7 };
+static const PllConfig pll_cfg = { 133000000UL, 1, 133, 6, 2, 1, 4 };
   
 static uint32_t current_clk_sys_hz = VFO_CLK_SYS_NOMINAL_HZ;  
   
@@ -109,9 +112,9 @@ static void __not_in_flash_func(reprogram_pll)(const PllConfig *cfg) {
 }  
   
 // ----------------------------------------------------------------------------  
-// Разгон до 250 МГц: VREG -> PLL -> верификация частотомером -> откат при сбое  
+// Разгон: VREG -> PLL -> верификация частотомером -> откат при сбое  
 // ----------------------------------------------------------------------------  
-static void af_set_clk_250(void) {  
+static void af_set_clk(void) {  
     // Напряжение ядра до разгона (1.30 В — обязательно для 250 МГц)  
     vreg_set_voltage(VREG_VOLTAGE_1_30);  
     busy_wait_us(500);  
@@ -145,7 +148,7 @@ static void af_set_clk_250(void) {
 // ============================================================================  
 void setup()  
 {  
-    //af_set_clk_250();          // разгон первым делом, до USB/Serial  
+    af_set_clk();              // разгон первым делом, до USB/Serial  
     af_usb_init();
 
     Serial.begin(115200);
