@@ -101,21 +101,23 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
 // ---------------------------------------------------------------------------  
 // Вся функция в RAM: во время erase/program XIP недоступен,    
 // вызов из flash-кода = зависание Core 0.    
-static void __not_in_flash_func(do_flash_erase)(void* p) {        
-    (void)p;        
-    rom_connect_internal_flash();   // SSI -> режим прямого доступа (как в SDK)  
-    flash_flush_cache();  
-    rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);        
-    flash_flush_cache();  
-}     
-    
-static void __not_in_flash_func(do_flash_program)(void* p) {          
-    (void)p;          
+static void __not_in_flash_func(do_flash_erase)(void* p) {  
+    (void)p;  
     rom_connect_internal_flash();  
     flash_flush_cache();  
-    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);          
-    flash_flush_cache();          
-}      
+    rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);  
+    flash_flush_cache();  
+    rom_flash_enter_cmd_xip();   // вернуть flash в XIP — без этого первое  
+}                                // обращение к flash после erase вешает шину  
+  
+static void __not_in_flash_func(do_flash_program)(void* p) {  
+    (void)p;  
+    rom_connect_internal_flash();  
+    flash_flush_cache();  
+    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);  
+    flash_flush_cache();  
+    rom_flash_enter_cmd_xip();  
+}  
   
 // ---------------------------------------------------------------------------  
 // API  
@@ -132,27 +134,30 @@ void af_store_init(void) {
         s_sector_img[2] = AF_STORE_VER;  
         // Паркуем Core 1 — во время erase/program flash недоступна,  
         // а af_dsp_poll исполняется из неё. Без парковки Core 1 виснет.  
-        if (!park_core1()) {  
-            Serial.println("[STORE] core1 park timeout, format skipped");  
-            return;   // не форматируем — чтение покажет мусор, но плата жива  
-        }  
-    // Прямой вызов: Core 1 припаркован в RAM, IRQ Core 0 заглушены.  
-    // flash_safe_execute не работает без multicore lockout (rc=-4).  
-    af_clk_flash_mode(true);  
-    noInterrupts();      
-    do_flash_erase(NULL);      
-    do_flash_program(NULL);      
-    interrupts();  
-    af_clk_flash_mode(false);  
-        g_park_req = false;   // отпустить Core 1    
-        __dmb();    
-        while (g_parked) { }    // дождаться выхода из spin    
-  
-        // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
-        for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);    
-        // Serial не используем — USB может быть мёртв после clk-переключения. 
-    }  
-}  
+        Serial.println("# init: parking core1...");    
+        if (!park_core1()) {    
+            Serial.println("[STORE] core1 park timeout, format skipped");    
+            return;   // не форматируем — чтение покажет мусор, но плата жива    
+        }    
+        Serial.println("# init: parked, clk->12MHz");    
+        af_clk_flash_mode(true);    
+        Serial.println("# init: clk 12MHz, erasing");    
+        noInterrupts();        
+        do_flash_erase(NULL);        
+        do_flash_program(NULL);        
+        interrupts();    
+        af_clk_flash_mode(false);    
+        Serial.println("# init: written, releasing core1");    
+        g_park_req = false;   // отпустить Core 1      
+        __dmb();      
+        while (g_parked) { }    // дождаться выхода из spin      
+        Serial.println("# init: core1 released");    
+    
+        // Синхронизируем RAM-буфер EEPROM с записанным сектором.    
+        for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);      
+        Serial.println("# init: format done");    
+    }    
+}    
   
 bool af_store_read(uint8_t idx, af_bank_t* out) {  
     if (idx < 1 || idx > AF_STORE_BANKS) return false;  
