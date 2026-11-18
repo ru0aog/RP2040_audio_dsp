@@ -167,10 +167,12 @@ void af_rec_play_stop(void) {
     if (state == ST_PLAY) { state = ST_IDLE; Serial.println("# rec: play stop"); }    
 }    
   
-bool     af_rec_is_recording(void)  { return state == ST_REC; }    
-bool     af_rec_is_playing(void)    { return state == ST_PLAY; }    
-uint32_t af_rec_len_samples(void)   { return rec_len; }    
-uint32_t af_rec_pos_samples(void)   { return pos; }    
+// Геттеры — в RAM: вызываются из af_voice_mix/af_dsp_poll (Core 1)  
+// во время erase/program, когда XIP выключен.  
+bool     __not_in_flash_func(af_rec_is_recording)(void)  { return state == ST_REC; }      
+bool     __not_in_flash_func(af_rec_is_playing)(void)    { return state == ST_PLAY; }      
+uint32_t __not_in_flash_func(af_rec_len_samples)(void)   { return rec_len; }      
+uint32_t __not_in_flash_func(af_rec_pos_samples)(void)   { return pos; }      
   
 // --- Core 1, горячий путь (RAM) ----------------------------------------------    
 void __not_in_flash_func(af_rec_push)(int16_t s) {      
