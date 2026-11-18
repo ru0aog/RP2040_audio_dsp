@@ -31,7 +31,8 @@
   
 #include "pico/stdlib.h"        
 #include "hardware/flash.h"        
-#include "hardware/sync.h"     // save_and_disable_interrupts        
+#include "hardware/sync.h"     // save_and_disable_interrupts
+#include "af_store.h"          // af_set_clk — объявлен там или в af_config.h 
 
   
 #define AF_REC_MAGIC0     'R'    
@@ -61,6 +62,14 @@ static volatile uint8_t   buf_rdy[2]  = { 0, 0 };    // готов к program
 static volatile uint32_t  flash_wr    = 0;           // байт в data-области      
 static volatile uint32_t  erase_off   = 0;           // стёрто до этого смещения      
 static volatile uint32_t  rec_dropped = 0;           // блоки без свободного буфера      
+
+// --- RAM-схема: запись в буфер, дамп во flash при stop ----------------------  
+// Во время записи flash не трогаем — инвариант «loop1() в RAM» не нужен.  
+// Дамп: reset Core 1 + даунклок 125 МГц + erase/program + af_set_clk +  
+// restartCore1 — та же безопасная последовательность, что в af_store.  
+#define AF_REC_RAM_SAMP   80000u          // 160 КБ ≈ 5.2 с @ 15464 Гц  
+static int16_t  ram_buf[AF_REC_RAM_SAMP];  
+static volatile uint32_t ram_pos = 0;     // отсчётов записано в RAM  
   
 static const uint8_t* __not_in_flash_func(slot_base)(void) {      
     return (const uint8_t*)(XIP_BASE + AF_REC_FLASH_OFF);      
@@ -107,59 +116,62 @@ void af_rec_init(void) {
                   (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));      
 }    
   
-bool af_rec_start(void) {    
-    if (state != ST_IDLE) return false;    
-    // Стираем сектор 0 (заголовок) и сектор 1 (первые данные) — ~90 мс.      
-    // Остальные сектора стирает erase_ahead() по мере записи.      
-    slot_erase_sector(0);      
-    slot_erase_sector(4096);      
-    erase_off = 8192;      
-    rec_len = 0;      
-    pos = 0; flash_wr = 0; buf_fill = 0; buf_wr = 0;
-    buf_rdy[0] = buf_rdy[1] = 0; rec_dropped = 0;
-    rec_src_tx = af_dsp_tx_on() ? 1 : 0;    
-    state = ST_REC;    
-    Serial.printf("# rec: recording (%s)\n", rec_src_tx ? "tx" : "rx");    
-    return true;    
-}    
+bool af_rec_start(void) {      
+    if (state != ST_IDLE) return false;      
+    // RAM-схема: flash не трогаем — стирание слота отложено до stop.    
+    rec_len = 0;        
+    pos = 0; ram_pos = 0; rec_dropped = 0;  
+    rec_src_tx = af_dsp_tx_on() ? 1 : 0;      
+    state = ST_REC;      
+    Serial.printf("# rec: recording (%s), ram buf %lu samp\n",  
+                  rec_src_tx ? "tx" : "rx", (unsigned long)AF_REC_RAM_SAMP);      
+    return true;      
+}      
   
-void af_rec_stop(void) {        
-    if (state == ST_PLAY) { af_rec_play_stop(); return; }   // stop универсальный    
-    if (state != ST_REC) return;        
-    state = ST_IDLE;        
-    for (int i = 0; i < 2; i++)             // сначала готовые буферы — они раньше в потоке    
-        if (buf_rdy[i]) {      
-            slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);      
-            flash_wr += AF_REC_BUF_SAMP * 2;      
-            buf_rdy[i] = 0;      
-        }      
-    // Затем остаток текущего буфера (выравнивание на страницу 256 байт).        
-    uint32_t tail = buf_fill * 2;        
-    if (tail) {        
-        uint32_t pad = (256 - (tail & 255)) & 255;        
-        // Хвост может вылезти за erase_off — стираем сектора до конца записи.    
-        while (erase_off < AF_REC_HDR_BYTES + flash_wr + tail + pad &&    
-               erase_off < AF_REC_FLASH_LEN) {    
-            slot_erase_sector(erase_off);    
-            erase_off += 4096;    
-        }    
-        memset((uint8_t*)buf[buf_wr] + tail, 0xFF, pad);        
-        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[buf_wr], tail + pad);        
-        flash_wr += tail;        
-    }        
-    rec_len = pos;    
-    rec_hdr_t h;    
-    memset(&h, 0xFF, sizeof(h));    
-    h.magic0 = AF_REC_MAGIC0; h.magic1 = AF_REC_MAGIC1;    
-    h.ver = AF_REC_VER; h.flags = rec_src_tx; h.len = rec_len;    
-    slot_program(0, &h, AF_REC_HDR_BYTES);  // заголовок — последним  
-    // flush/enter_xip уже сделаны внутри flash_range_program  
-    Serial.printf("# rec: saved %lu samp (%lu.%lu s), dropped=%lu\n",        
-                  (unsigned long)rec_len,      
-                  (unsigned long)(rec_len / AF_FS_OUT_HZ),      
-                  (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),      
-                  (unsigned long)rec_dropped);      
-}    
+void af_rec_stop(void) {          
+    if (state == ST_PLAY) { af_rec_play_stop(); return; }   // stop универсальный      
+    if (state != ST_REC) return;          
+    state = ST_IDLE;          
+    rec_len = ram_pos;      
+    if (rec_len == 0) { Serial.println("# rec: nothing recorded"); return; }      
+    
+    // Безопасный режим, как в af_store: Core 1 мёртв, clk 125 МГц.    
+    // Стирание всего слота ~2 с — плата «молчит», это нормально.    
+    multicore_reset_core1();    
+    busy_wait_us(100);    
+    set_sys_clock_khz(125000, false);    
+    
+    const uint32_t data_bytes = rec_len * 2;    
+    const uint32_t need = AF_REC_HDR_BYTES + data_bytes;    
+    for (uint32_t off = 0; off < need && off < AF_REC_FLASH_LEN; off += 4096)    
+        slot_erase_sector(off);    
+    
+    // Данные — кусками по 4 КБ (flash_range_program любого размера,    
+    // но порциями проще контролировать).    
+    for (uint32_t done = 0; done < data_bytes; ) {    
+        uint32_t chunk = data_bytes - done;    
+        if (chunk > 4096) chunk = 4096;    
+        slot_program(AF_REC_HDR_BYTES + done,    
+                     (const uint8_t*)ram_buf + done, chunk);    
+        done += chunk;    
+    }    
+    
+    // Заголовок — последним: прерванный дамп читается как пустой слот.    
+    rec_hdr_t h;      
+    memset(&h, 0xFF, sizeof(h));      
+    h.magic0 = AF_REC_MAGIC0; h.magic1 = AF_REC_MAGIC1;      
+    h.ver = AF_REC_VER; h.flags = rec_src_tx; h.len = rec_len;      
+    slot_program(0, &h, AF_REC_HDR_BYTES);    
+    
+    // Возврат: разгон + перезапуск Core 1 (как af_store_save).    
+    af_set_clk();    
+    rp2040.restartCore1();    
+    
+    Serial.printf("# rec: saved %lu samp (%lu.%lu s)\n",          
+                  (unsigned long)rec_len,        
+                  (unsigned long)(rec_len / AF_FS_OUT_HZ),        
+                  (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));        
+}      
   
 bool af_rec_play(void) {    
     if (state != ST_IDLE || rec_len == 0) return false;    
@@ -181,18 +193,12 @@ uint32_t __not_in_flash_func(af_rec_len_samples)(void)   { return rec_len; }
 uint32_t __not_in_flash_func(af_rec_pos_samples)(void)   { return pos; }      
   
 // --- Core 1, горячий путь (RAM) ----------------------------------------------    
-void __not_in_flash_func(af_rec_push)(int16_t s) {      
-    if (state != ST_REC) return;      
-    if (pos >= AF_REC_MAX_SAMP) return;   // слот полон — финализацию сделает af_rec_poll      
-    buf[buf_wr][buf_fill++] = s;    
-    ++pos;    
-    if (buf_fill >= AF_REC_BUF_SAMP) {    
-        if (buf_rdy[buf_wr]) { ++rec_dropped; }   // Core 0 не успел — блок теряется    
-        else buf_rdy[buf_wr] = 1;    
-        buf_wr ^= 1;    
-        buf_fill = 0;    
-    }    
-}    
+void __not_in_flash_func(af_rec_push)(int16_t s) {        
+    if (state != ST_REC) return;        
+    if (ram_pos >= AF_REC_RAM_SAMP) return;   // буфер полон — stop сделает af_rec_poll        
+    ram_buf[ram_pos++] = s;      
+    ++pos;      
+}      
   
 int16_t __not_in_flash_func(af_rec_mix)(int16_t s) {    
     if (state != ST_PLAY) return s;    
@@ -211,19 +217,15 @@ int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {
 }    
   
 // --- Core 0: программирование готовых буферов ---------------------------------    
-void af_rec_poll(void) {        
-    if (state != ST_REC) return;        
-    if ((af_dsp_tx_on() ? 1 : 0) != rec_src_tx) {   // тракт сменился — финализируем    
-        Serial.println("# rec: src changed (rx<->tx) — stop");    
+void af_rec_poll(void) {          
+    if (state != ST_REC) return;          
+    if ((af_dsp_tx_on() ? 1 : 0) != rec_src_tx) {   // тракт сменился — финализируем      
+        Serial.println("# rec: src changed (rx<->tx) — stop");      
+        af_rec_stop();      
+        return;      
+    }      
+    if (ram_pos >= AF_REC_RAM_SAMP) {       // RAM-буфер полон — дамп и стоп    
+        Serial.println("# rec: ram buf full — stop");    
         af_rec_stop();    
-        return;    
     }    
-    for (int i = 0; i < 2; i++) {          
-        if (!buf_rdy[i]) continue;        
-        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);        
-        flash_wr += AF_REC_BUF_SAMP * 2;        
-        buf_rdy[i] = 0;        
-    }        
-    erase_ahead();                          // стираем сектор N+1, пока пишется N      
-    if (pos >= AF_REC_MAX_SAMP) af_rec_stop();   // слот заполнен — дописать хвост и заголовок      
-}  
+}    
