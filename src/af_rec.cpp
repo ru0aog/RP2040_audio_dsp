@@ -82,32 +82,40 @@ static bool hdr_read(uint32_t* len_out) {
 // Весь дамп — одна RAM-функция под одним запретом IRQ (как do_flash_write    
 // в af_store): во время erase/program XIP выключен, код обязан быть в RAM.    
 // memset/memcpy не вызываем — они могут лежать во flash; копия — циклом.    
-static void __not_in_flash_func(do_rec_dump)(void* param) {    
-    (void)param;    
-    const uint32_t data_bytes = rec_len * 2u;    
-    const uint32_t nsec = (AF_REC_HDR_BYTES + data_bytes + 4095) / 4096;    
-    for (uint32_t i = 0; i < nsec; i++) {  
-        flash_range_erase(AF_REC_FLASH_OFF + i * 4096, 4096);  
-        watchdog_update();          // сектор до ~400 мс, IRQ off — кормим вручную  
-    }  
-    const uint8_t* p = (const uint8_t*)ram_buf;  
-    for (uint32_t off = 0; off < data_bytes; off += 256) {  
-        uint32_t chunk = data_bytes - off;  
-        if (chunk > 256) chunk = 256;  
-        uint8_t page[256];  
-        for (uint32_t i = 0; i < chunk; i++) page[i] = p[off + i];  
-        for (uint32_t i = chunk; i < 256; i++) page[i] = 0xFF;  
-        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + off, page, 256);  
-        watchdog_update();  
-    }  
+static void __not_in_flash_func(do_rec_dump)(void* param) {      
+    (void)param;      
+    const uint32_t data_bytes = rec_len * 2u;      
+    const uint32_t nsec = (AF_REC_HDR_BYTES + data_bytes + 4095) / 4096;      
   
-    rec_hdr_t h;    
-    uint8_t* hb = (uint8_t*)&h;    
-    for (uint32_t i = 0; i < sizeof(h); i++) hb[i] = 0xFF;    
-    h.magic[0] = 'R'; h.magic[1] = 'C'; h.ver = 1; h.flags = 0;    
-    h.len_samples = rec_len;    
-    flash_range_program(AF_REC_FLASH_OFF, hb, AF_REC_HDR_BYTES);    
-}    
+    // Стирание — ОДНИМ вызовом на весь диапазон (как af_store: один заход,    
+    // без повторных XIP-переходов между секторами).    
+    flash_range_erase(AF_REC_FLASH_OFF, nsec * 4096u);    
+  
+    // Данные — напрямую из ram_buf, без промежуточного буфера.    
+    // flash_range_program требует кратности 256: полные страницы пишем    
+    // прямо из буфера, хвост (<256) — через статический SRAM-буфер.    
+    const uint8_t* p = (const uint8_t*)ram_buf;    
+    const uint32_t full = data_bytes & ~255u;    
+    if (full)    
+        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES, p, full);    
+    const uint32_t tail = data_bytes - full;    
+    if (tail) {    
+        static uint8_t tail_page[256];            // статик — точно в SRAM    
+        const uint8_t* src = p + full;    
+        for (uint32_t i = 0; i < tail; i++) tail_page[i] = src[i];    
+        for (uint32_t i = tail; i < 256u; i++) tail_page[i] = 0xFF;    
+        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + full,    
+                            tail_page, 256u);    
+    }    
+  
+    // Заголовок — последним: прерванный дамп читается как пустой слот.    
+    rec_hdr_t h;      
+    uint8_t* hb = (uint8_t*)&h;      
+    for (uint32_t i = 0; i < sizeof(h); i++) hb[i] = 0xFF;      
+    h.magic[0] = 'R'; h.magic[1] = 'C'; h.ver = 1; h.flags = 0;      
+    h.len_samples = rec_len;      
+    flash_range_program(AF_REC_FLASH_OFF, hb, AF_REC_HDR_BYTES);      
+}      
 
 // --- API --------------------------------------------------------------------    
 void af_rec_init(void) {        
