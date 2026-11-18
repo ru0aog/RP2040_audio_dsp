@@ -161,7 +161,7 @@ void setup()
     // Как в радиомодеме: без USB-хоста ожидание не блокирует запуск.  
     while (!Serial && millis() < 3000) delay(1);  
 
-    watchdog_enable(3000, true);  // сторожевой 3 с
+    watchdog_enable(8000, true);  // сторожевой 8 с
     
     Serial.printf("# clk_sys=%lu Hz | FLASH=%lu kHz (BAUDR=%u)\n",  
                   (unsigned long)clock_get_hz(clk_sys),  
