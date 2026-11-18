@@ -14,7 +14,9 @@
 // ============================================================================  
 #include <Arduino.h>  
 #include <string.h>  
-#include <stdlib.h>  
+#include <stdlib.h>
+#include "hardware/clocks.h"          // clock_get_hz — фактическая clk_sys  
+#include "hardware/structs/ssi.h"     // ssi_hw->baudr — делитель SCK флеша  
 #include "af_cli.h"  
 #include "af_config.h"  
 #include "af_dsp.h"  
@@ -235,10 +237,15 @@ static void cli_stats(void) {
                   (unsigned)af_dsp_out_fill_max_usb(),      
                   (unsigned long)af_dsp_out_underruns_pwm(),      
                   (unsigned)af_dsp_out_fill_max_pwm());      
-    Serial.printf("#   fs      : out=%lu adc=%lu div=%lu\n",      
-                  (unsigned long)AF_FS_OUT_HZ,      
-                  (unsigned long)AF_FS_ADC_HZ,      
-                  (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));  
+    Serial.printf("#   fs      : out=%lu adc=%lu div=%lu\n",        
+                  (unsigned long)AF_FS_OUT_HZ,        
+                  (unsigned long)AF_FS_ADC_HZ,        
+                  (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));    
+    Serial.printf("#   clk_sys = %lu MHz  flash_sck=%lu.%lu MHz (BAUDR=%u)\n",  
+                  (unsigned long)(clock_get_hz(clk_sys) / 1000000u),  
+                  (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000000u),  
+                  (unsigned long)((clock_get_hz(clk_sys) / ssi_hw->baudr % 1000000u) / 100000u),  
+                  (unsigned)ssi_hw->baudr);  
 }  
 
 // Инженерный дамп: дельты счётчиков с прошлого вызова + ur-логи.  

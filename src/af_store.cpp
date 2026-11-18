@@ -97,11 +97,13 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
 // ---------------------------------------------------------------------------  
 // Вся функция в RAM: во время erase/program XIP недоступен,    
 // вызов из flash-кода = зависание Core 0.    
-static void __not_in_flash_func(do_flash_write)(void* param) {    
-    (void)param;    
-    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);    
-    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);    
-}    
+static void __not_in_flash_func(do_flash_write)(void* p) {  
+    (void)p;  
+    af_led_set(0, 0, 255);            // СИНИЙ: erase началось  
+    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
+    af_led_set(255, 128, 0);          // ОРАНЖЕВЫЙ: erase ок, program  
+    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);  
+}  
   
 // ---------------------------------------------------------------------------  
 // API  
@@ -222,7 +224,7 @@ bool af_store_save(uint8_t idx) {
         Serial.println("# save: core1 park timeout");      
         return false;      
     }      
-    af_led_set(0, 255, 255);   // М2: циан — flash-операция  
+    af_led_set(0, 255, 0);            // М2: ЗЕЛЁНЫЙ — Core 1 припаркован 
     // Прямой вызов: Core 1 припаркован в RAM, VTOR в RAM,  
     // IRQ Core 0 заглушены — flash_safe_execute не нужен  
     // (и не работает без multicore lockout: rc=-4).  

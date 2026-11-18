@@ -145,7 +145,7 @@ static void af_set_clk_250(void) {
 // ============================================================================  
 void setup()  
 {  
-    af_set_clk_250();          // разгон первым делом, до USB/Serial  
+    //af_set_clk_250();          // разгон первым делом, до USB/Serial  
     af_usb_init();
 
     Serial.begin(115200);
