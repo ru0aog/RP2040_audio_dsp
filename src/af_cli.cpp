@@ -1216,11 +1216,11 @@ static void cli_exec(char* line) {
         }    
     }    
     else if (strcmp(cmd, "play") == 0) {    
-        if (af_rec_play()) {    
-            Serial.printf("# OK play: %s тракт, %lu с\n",    
-                          af_dsp_tx_on() ? "tx" : "rx",    
-                          (unsigned long)(af_rec_len() / AF_FS_OUT_HZ));    
-        } else if (af_rec_len() == 0) {    
+        if (af_rec_play()) {      
+            Serial.printf("# OK play: %s тракт, %lu с\n",      
+                          af_dsp_tx_on() ? "tx" : "rx",      
+                          (unsigned long)(af_rec_len_samples() / AF_FS_OUT_HZ));      
+        } else if (af_rec_len_samples() == 0) {      
             Serial.println("# ERR play: слот пуст");    
         } else {    
             Serial.println("# ERR play: занято (rec/play активен)");    
@@ -1234,14 +1234,17 @@ static void cli_exec(char* line) {
         const uint32_t len = af_rec_len();    
         if (len == 0) {    
             Serial.println("# rec: slot empty");    
-        } else {    
-            Serial.printf("# rec: slot used %lu samp (%lu.%lu s)  state=%s\n",    
-                          (unsigned long)len,    
-                          (unsigned long)(len / AF_FS_OUT_HZ),    
-                          (unsigned long)((len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),    
-                          af_rec_is_rec()  ? "REC" :    
-                          af_rec_is_play() ? "PLAY" : "idle");    
-        }    
+        const uint32_t len = af_rec_len_samples();      
+        if (len == 0) {      
+            Serial.println("# rec: slot empty");      
+        } else {      
+            Serial.printf("# rec: slot used %lu samp (%lu.%lu s)  state=%s\n",      
+                          (unsigned long)len,      
+                          (unsigned long)(len / AF_FS_OUT_HZ),      
+                          (unsigned long)((len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),      
+                          af_rec_is_recording() ? "REC" :      
+                          af_rec_is_playing()   ? "PLAY" : "idle");      
+        }      
     }    
     
     // вставлять сюда  

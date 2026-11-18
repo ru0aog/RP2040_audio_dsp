@@ -10,6 +10,10 @@
 #pragma once    
   
 #include <Arduino.h>    
+
+// Геометрия слота — в af_config.h (AF_REC_FLASH_OFF/LEN).  
+// Максимум отсчётов int16 в слоте — нужен и CLI (recs/rec).  
+#define AF_REC_MAX_SAMP   (AF_REC_FLASH_LEN / 2)  
   
 void     af_rec_init(void);    
 void     af_rec_poll(void);        // Core 0: flash program/erase конвейер    

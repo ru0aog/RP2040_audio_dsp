@@ -28,7 +28,6 @@
 #define AF_REC_MAGIC1     'C'    
 #define AF_REC_VER        1    
 #define AF_REC_HDR_BYTES  256u                       // одна flash-страница    
-#define AF_REC_MAX_SAMP   ((AF_REC_FLASH_LEN - AF_REC_HDR_BYTES) / 2u)    
 #define AF_REC_BUF_SAMP   2048u                      // 4 КБ = один сектор    
   
 typedef struct {    
@@ -108,23 +107,23 @@ bool af_rec_start(void) {
     return true;    
 }    
   
-void af_rec_stop(void) {    
-    if (state != ST_REC) return;    
-    state = ST_IDLE;    
-    // Дописать остаток буфера (выравнивание на страницу 256 байт).    
-    uint32_t tail = buf_fill * 2;    
-    if (tail) {    
-        uint32_t pad = (256 - (tail & 255)) & 255;    
-        memset((uint8_t*)buf[buf_wr] + tail, 0xFF, pad);    
-        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[buf_wr], tail + pad);    
-        flash_wr += tail;    
-    }    
-    for (int i = 0; i < 2; i++)             // дописать готовые буферы    
-        if (buf_rdy[i]) {    
-            slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);    
-            flash_wr += AF_REC_BUF_SAMP * 2;    
-            buf_rdy[i] = 0;    
-        }    
+void af_rec_stop(void) {      
+    if (state != ST_REC) return;      
+    state = ST_IDLE;      
+    for (int i = 0; i < 2; i++)             // сначала готовые буферы — они раньше в потоке    
+        if (buf_rdy[i]) {      
+            slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);      
+            flash_wr += AF_REC_BUF_SAMP * 2;      
+            buf_rdy[i] = 0;      
+        }      
+    // Затем остаток текущего буфера (выравнивание на страницу 256 байт).      
+    uint32_t tail = buf_fill * 2;      
+    if (tail) {      
+        uint32_t pad = (256 - (tail & 255)) & 255;      
+        memset((uint8_t*)buf[buf_wr] + tail, 0xFF, pad);      
+        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[buf_wr], tail + pad);      
+        flash_wr += tail;      
+    }      
     rec_len = pos;    
     rec_hdr_t h;    
     memset(&h, 0xFF, sizeof(h));    
@@ -154,9 +153,9 @@ uint32_t af_rec_len_samples(void)   { return rec_len; }
 uint32_t af_rec_pos_samples(void)   { return pos; }    
   
 // --- Core 1, горячий путь (RAM) ----------------------------------------------    
-void __not_in_flash_func(af_rec_push)(int16_t s) {    
-    if (state != ST_REC) return;    
-    if (pos >= AF_REC_MAX_SAMP) { state = ST_IDLE; return; }  // слот полон — стоп    
+void __not_in_flash_func(af_rec_push)(int16_t s) {      
+    if (state != ST_REC) return;      
+    if (pos >= AF_REC_MAX_SAMP) return;   // слот полон — финализацию сделает af_rec_poll      
     buf[buf_wr][buf_fill++] = s;    
     ++pos;    
     if (buf_fill >= AF_REC_BUF_SAMP) {    
@@ -184,12 +183,13 @@ int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {
 }    
   
 // --- Core 0: программирование готовых буферов ---------------------------------    
-void af_rec_poll(void) {    
-    if (state != ST_REC) return;    
-    for (int i = 0; i < 2; i++) {    
-        if (!buf_rdy[i]) continue;    
-        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);    
-        flash_wr += AF_REC_BUF_SAMP * 2;    
-        buf_rdy[i] = 0;    
-    }    
-}    
+void af_rec_poll(void) {      
+    if (state != ST_REC) return;      
+    for (int i = 0; i < 2; i++) {      
+        if (!buf_rdy[i]) continue;      
+        slot_program(AF_REC_HDR_BYTES + flash_wr, buf[i], AF_REC_BUF_SAMP * 2);      
+        flash_wr += AF_REC_BUF_SAMP * 2;      
+        buf_rdy[i] = 0;      
+    }      
+    if (pos >= AF_REC_MAX_SAMP) af_rec_stop();   // слот заполнен — дописать хвост и заголовок    
+}  
