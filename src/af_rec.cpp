@@ -151,25 +151,30 @@ void af_rec_stop(void) {
                   (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ));            
   
     // --- Дамп ram_buf -> flash-слот (этап 2: с маркерами) -------------------      
-    Serial.println("# rec: dump: reset c1");      
-    multicore_reset_core1();      
-    
-    Serial.println("# rec: dump: downclock");      
-    set_sys_clock_khz(125000, false);      
+    Serial.println("# rec: dump: reset c1");          
+    Serial.flush();                 // маркер должен уйти до возможного зависания      
+    multicore_reset_core1();          
+    busy_wait_us(100);              // как в af_store: Core 1 должен реально встать      
+      
+    Serial.println("# rec: dump: downclock");          
+    Serial.flush();    
+    set_sys_clock_khz(125000, false);        
     
     // Весь дамп — одна RAM-функция под одним запретом IRQ (как af_store):    
     // во время erase/program XIP выключен, код обязан быть в RAM.    
     const uint32_t data_bytes = rec_len * 2u;    
     const uint32_t nsec = 1 + (data_bytes + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;    
-    Serial.printf("# rec: dump: erase+program %lu sec, irq off\n", (unsigned long)nsec);    
-    uint32_t ints = save_and_disable_interrupts();    
+    Serial.printf("# rec: dump: erase+program %lu sec, irq off\n", (unsigned long)nsec);      
+    Serial.flush();                 // без flush маркер может не дойти до хоста    
+    uint32_t ints = save_and_disable_interrupts();      
     do_rec_dump(NULL);    
     restore_interrupts(ints);    
     flash_flush_cache();            // сброс XIP-кэша после записи    
     
-    Serial.println("# rec: dump: restore clk + c1");      
-    af_set_clk();      
-    rp2040.restartCore1();      
+    Serial.println("# rec: dump: restore clk + c1");        
+    Serial.flush();    
+    af_set_clk();        
+    rp2040.restartCore1();        
     Serial.println("# rec: flash dump done");      
 }            
   
