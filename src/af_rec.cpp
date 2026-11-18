@@ -23,10 +23,10 @@
 #include "af_config.h"    
 #include "af_dsp.h"    
   
-#include "pico/stdlib.h"      
-#include "hardware/flash.h"      
-#include "hardware/sync.h"     // save_and_disable_interrupts      
-#include "pico/flash.h"      
+#include "pico/stdlib.h"        
+#include "hardware/flash.h"        
+#include "hardware/sync.h"     // save_and_disable_interrupts        
+#include "pico/bootrom.h"      // rom_flash_range_erase/program — прямые ROM-вызовы  
   
 #define AF_REC_MAGIC0     'R'    
 #define AF_REC_MAGIC1     'C'    
@@ -69,16 +69,16 @@ static bool hdr_read(rec_hdr_t* h) {
   
 // --- flash I/O: прямые вызовы, запрет прерываний только на Core 0 -----------      
 // Core 1 не паркуется — условие: вся цепочка loop1() в RAM (__not_in_flash_func).      
-static void slot_erase_sector(uint32_t off) {        // off кратно 4096, внутри слота      
-    uint32_t ints = save_and_disable_interrupts();      
-    flash_range_erase(AF_REC_FLASH_OFF + off, 4096);      
-    restore_interrupts(ints);      
-}      
-static void slot_program(uint32_t off, const void* data, uint32_t len) {      
-    uint32_t ints = save_and_disable_interrupts();      
-    flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);      
-    restore_interrupts(ints);      
-}      
+static void slot_erase_sector(uint32_t off) {        // off кратно 4096, внутри слота        
+    uint32_t ints = save_and_disable_interrupts();        
+    rom_flash_range_erase(AF_REC_FLASH_OFF + off, 4096, 4096, 0x20);        
+    restore_interrupts(ints);        
+}        
+static void slot_program(uint32_t off, const void* data, uint32_t len) {        
+    uint32_t ints = save_and_disable_interrupts();        
+    rom_flash_range_program(AF_REC_FLASH_OFF + off, (const uint8_t*)data, len);        
+    restore_interrupts(ints);        
+}        
 // Держим erase_off на сектор впереди следующей записи.      
 static void erase_ahead(void) {      
     const uint32_t need = AF_REC_HDR_BYTES + flash_wr + 4096;      
@@ -138,8 +138,9 @@ void af_rec_stop(void) {
     memset(&h, 0xFF, sizeof(h));    
     h.magic0 = AF_REC_MAGIC0; h.magic1 = AF_REC_MAGIC1;    
     h.ver = AF_REC_VER; h.flags = rec_src_tx; h.len = rec_len;    
-    slot_program(0, &h, AF_REC_HDR_BYTES);  // заголовок — последним    
-    Serial.printf("# rec: saved %lu samp (%lu.%lu s), dropped=%lu\n",      
+    slot_program(0, &h, AF_REC_HDR_BYTES);  // заголовок — последним      
+    flash_flush_cache();   // сброс XIP-кэша: play/recs увидят свежие данные  
+    Serial.printf("# rec: saved %lu samp (%lu.%lu s), dropped=%lu\n",        
                   (unsigned long)rec_len,      
                   (unsigned long)(rec_len / AF_FS_OUT_HZ),      
                   (unsigned long)((rec_len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),      
