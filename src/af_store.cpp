@@ -108,41 +108,56 @@ static void __not_in_flash_func(do_flash_write)(void* param) {
 // ---------------------------------------------------------------------------  
 // API  
 // ---------------------------------------------------------------------------  
-void af_store_init(void) {  
-    EEPROM.begin(AF_EEPROM_SIZE);  
-    // Если magic не совпал — форматируем: все ячейки пустые (0xFF).  
-    if (EEPROM.read(0) != AF_STORE_MAGIC0 ||  
-        EEPROM.read(1) != AF_STORE_MAGIC1 ||  
-        EEPROM.read(2) != AF_STORE_VER) {  
-        memset(s_sector_img, 0xFF, sizeof(s_sector_img));  
-        s_sector_img[0] = AF_STORE_MAGIC0;  
-        s_sector_img[1] = AF_STORE_MAGIC1;  
-        s_sector_img[2] = AF_STORE_VER;  
-        // Паркуем Core 1 — во время erase/program flash недоступна,  
-        // а af_dsp_poll исполняется из неё. Без парковки Core 1 виснет.  
-        if (!park_core1()) {  
-            Serial.println("[STORE] core1 park timeout, format skipped");  
-            return;   // не форматируем — чтение покажет мусор, но плата жива  
-        }  
-        noInterrupts();    
-        do_flash_write(NULL);   // RAM: erase+program, XIP off    
-        interrupts();    
-        g_park_req = false;   // отпустить Core 1  
-  
-        // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
-        for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
-        Serial.println("[STORE] flash formatted (7 banks empty)");
-    }  
+void af_store_init(void) {      
+    // Читаем НАШ сектор напрямую из XIP — не через EEPROM.    
+    memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), FLASH_SECTOR_SIZE);    
+    
+    // Диагностика: что лежит в секторе и куда смотрим.    
+    Serial.printf("# store: off=0x%x img=%02x %02x %02x %02x | rec[1]=%02x %02x\n",    
+        (unsigned)AF_FLASH_OFF,    
+        s_sector_img[0], s_sector_img[1], s_sector_img[2], s_sector_img[3],    
+        s_sector_img[rec_addr(1)], s_sector_img[rec_addr(1) + 1]);    
+    Serial.printf("# store: PICO_FLASH_SIZE_BYTES=0x%x\n",    
+        (unsigned)PICO_FLASH_SIZE_BYTES);    
+    
+    if (s_sector_img[0] != AF_STORE_MAGIC0 ||      
+        s_sector_img[1] != AF_STORE_MAGIC1 ||      
+        s_sector_img[2] != AF_STORE_VER) {      
+        memset(s_sector_img, 0xFF, sizeof(s_sector_img));      
+        s_sector_img[0] = AF_STORE_MAGIC0;      
+        s_sector_img[1] = AF_STORE_MAGIC1;      
+        s_sector_img[2] = AF_STORE_VER;      
+        if (!park_core1()) {      
+            Serial.println("[STORE] core1 park timeout, format skipped");      
+            return;    
+        }      
+        noInterrupts();        
+        do_flash_write(NULL);   // RAM: erase+program, XIP off        
+        interrupts();        
+        g_park_req = false;   // отпустить Core 1      
+        __dmb();    
+        while (g_parked) { }  // дождаться выхода из spin    
+    
+        // Verify: перечитываем сектор из XIP — записалось ли реально.    
+        uint8_t v[4];    
+        memcpy(v, (const void*)(XIP_BASE + AF_FLASH_OFF), 4);    
+        Serial.printf("[STORE] flash formatted, verify=%02x %02x %02x %02x\n",    
+            v[0], v[1], v[2], v[3]);    
+    }      
 }  
   
-bool af_store_read(uint8_t idx, af_bank_t* out) {  
-    if (idx < 1 || idx > AF_STORE_BANKS) return false;  
-    af_bank_rec_t r;  
-    EEPROM.get(rec_addr(idx), r);  
-    if (r.crc == 0xFF) return false;                       // пустая  
-    if (r.crc != crc8(&r.d, sizeof(r.d))) return false;    // битая  
-    *out = r.d;  
-    return true;  
+bool af_store_read(uint8_t idx, af_bank_t* out) {    
+    if (idx < 1 || idx > AF_STORE_BANKS) return false;    
+    // Читаем из s_sector_img — наш сектор AF_FLASH_OFF, заполнен    
+    // af_store_init напрямую из XIP. EEPROM.get читал бы чужой    
+    // сектор (PICO_FLASH_SIZE_BYTES - 4096) — на 2-МБ плате он    
+    // не совпадает с AF_FLASH_OFF, и банки всегда "empty".    
+    af_bank_rec_t r;    
+    memcpy(&r, &s_sector_img[rec_addr(idx)], sizeof(r));    
+    if (r.crc == 0xFF) return false;                       // пустая    
+    if (r.crc != crc8(&r.d, sizeof(r.d))) return false;    // битая    
+    *out = r.d;    
+    return true;    
 }  
   
 bool af_store_save(uint8_t idx) {  
