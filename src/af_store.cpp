@@ -35,8 +35,12 @@
 #define AF_STORE_VER      4   // было 3: банк = полный снимок RX+TX  
 #define AF_EEPROM_SIZE    1024  // 7 записей по ~90 байт + заголовок  
   
-// Смещение сектора EEPROM от начала flash (последний сектор).  
-#define AF_FLASH_OFF      (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)  
+// Смещение сектора EEPROM от начала flash (последний сектор).
+// #define AF_FLASH_OFF      (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)  
+// Фиксированный адрес: последний сектор 2-МБ flash. Работает и на 4-МБ  
+// платах (сектор внутри чипа). НЕ привязывать к PICO_FLASH_SIZE_BYTES —  
+// при сборке под 4 МБ адрес уедет за пределы 2-МБ чипа.  
+#define AF_FLASH_OFF      0x1FF000u  
 
 // Кооперативная парковка Core 1: idleOtherCore не работает, т.к. loop1  
 // не возвращается в Arduino-обёртку и не обрабатывает FIFO-handshake.  
@@ -213,10 +217,11 @@ bool af_store_save(uint8_t idx) {
         Serial.println("# save: core1 park timeout");  
         return false;  
     }  
-    noInterrupts();    
-    do_flash_write(NULL);   // RAM: erase+program, XIP off    
-    
-    Serial.printf("# OK save=%d, rebooting...\n", idx);  
+    noInterrupts();      
+    do_flash_write(NULL);   // RAM: erase+program, XIP off      
+    interrupts();           // вернуть IRQ — иначе Serial.flush виснет  
+      
+    Serial.printf("# OK save=%d, rebooting...\n", idx);    
     Serial.flush(); 
     
     // Сюда доходим только если запись завершилась.    
