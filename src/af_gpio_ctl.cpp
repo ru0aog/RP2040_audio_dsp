@@ -4,7 +4,10 @@
 //  
 //   GP2..GP4 — селектор банка настроек, 3 бита (LOW=1):  
 //     000 = ручной режим (консоль), 001..111 = ячейки 1..7 (af_store_load).  
-//   GP5 — LOW -> NR on,  GP6 — LOW -> NT on.  GP7 — LOW -> bypass on
+//   GP5 — LOW -> NR on,  GP6 — LOW -> NT on.  GP7 — LOW -> bypass on  
+//   GP8 — LOW -> TX (PTT).  GP9 — LOW -> запись магнитофона (af_rec),  
+//   GP10 — LOW -> воспроизведение. Уровневая логика: LOW = активно,  
+//   open = стоп. Смена тракта (PTT) во время записи — авто-стоп в af_rec.  
 //  
 // Опрос каждые AF_GPIO_POLL_MS мс, дебаунс AF_GPIO_STABLE чтений.  
 // Консольные команды имеют приоритет, но только до следующего изменения  
@@ -17,6 +20,7 @@
 #include "af_store.h"
 #include "af_led.h"
 #include "af_voice.h"
+#include "af_rec.h"        // af_rec_start/stop/play/play_stop — GP9/GP10
   
 struct gpio_ctl_t {  
     uint8_t  pin;  
@@ -29,7 +33,9 @@ static gpio_ctl_t ctl_bank[3];   // GP2,GP3,GP4 — биты 0,1,2
 static gpio_ctl_t ctl_nr;        // GP5  
 static gpio_ctl_t ctl_nt;        // GP6
 static gpio_ctl_t ctl_bypass;    // GP7
-static gpio_ctl_t ctl_ptt;       // GP8 — LOW -> TX  
+static gpio_ctl_t ctl_ptt;       // GP8 — LOW -> TX    
+static gpio_ctl_t ctl_rec;       // GP9 — LOW -> запись магнитофона  
+static gpio_ctl_t ctl_play;      // GP10 — LOW -> воспроизведение  
   
 static uint32_t t_next_poll = 0;  
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7  
@@ -76,11 +82,37 @@ static void apply_bypass(bool grounded) {
     if (grounded) af_voice_play(VOICE_BYPASS_ON);   // "режим обхода включен"  
 }
 
-static void apply_ptt(bool grounded) {  
-    af_dsp_set_tx(grounded);  
-    Serial.printf("[GPIO] GP%u %s -> tx=%s\n",  
-                  ctl_ptt.pin, grounded ? "GND" : "open",  
-                  grounded ? "on" : "off");  
+static void apply_ptt(bool grounded) {    
+    af_dsp_set_tx(grounded);    
+    Serial.printf("[GPIO] GP%u %s -> tx=%s\n",    
+                  ctl_ptt.pin, grounded ? "GND" : "open",    
+                  grounded ? "on" : "off");    
+}    
+  
+// Уровневая логика: LOW = запись идёт, open = стоп.  
+// af_rec_start вернёт false, если уже пишет/играет — молча игнорируем.  
+static void apply_rec(bool grounded) {  
+    if (grounded) {  
+        if (af_rec_start())  
+            Serial.printf("[GPIO] GP%u GND -> rec on\n", ctl_rec.pin);  
+    } else {  
+        if (af_rec_is_recording()) {  
+            af_rec_stop();  
+            Serial.printf("[GPIO] GP%u open -> rec off\n", ctl_rec.pin);  
+        }  
+    }  
+}  
+  
+static void apply_play(bool grounded) {  
+    if (grounded) {  
+        if (af_rec_play())  
+            Serial.printf("[GPIO] GP%u GND -> play on\n", ctl_play.pin);  
+    } else {  
+        if (af_rec_is_playing()) {  
+            af_rec_play_stop();  
+            Serial.printf("[GPIO] GP%u open -> play off\n", ctl_play.pin);  
+        }  
+    }  
 }  
   
 static void apply_bank(uint8_t code) {  
@@ -117,8 +149,10 @@ static void poll_pin(gpio_ctl_t* c) {
                 if (c == &ctl_nr)          apply_nr(raw);  
                 else if (c == &ctl_nt)     apply_nt(raw);  
                 else if (c == &ctl_bypass) apply_bypass(raw);
-                else if (c == &ctl_ptt)    apply_ptt(raw);  
-                else {  // банковый пин — пересчитать код и применить  
+                else if (c == &ctl_ptt)    apply_ptt(raw);    
+                else if (c == &ctl_rec)    apply_rec(raw);  
+                else if (c == &ctl_play)   apply_play(raw);  
+                else {  // банковый пин — пересчитать код и применить    
                     uint8_t code = 0;  
                     for (int i = 0; i < 3; i++)  
                         if (ctl_bank[i].stable) code |= (1 << i);  
@@ -140,9 +174,13 @@ void af_gpio_ctl_init(void) {
     ctl_nr      = { AF_PIN_NR,    false, false, 0 };  
     ctl_nt      = { AF_PIN_NT,    false, false, 0 };
     ctl_bypass  = { AF_PIN_BYPASS, false, false, 0 };
-    ctl_ptt     = { AF_PIN_PTT,   false, false, 0 };  
-    pinMode(ctl_ptt.pin, INPUT_PULLUP);  
-    ctl_ptt.stable = ctl_ptt.last_raw = (digitalRead(ctl_ptt.pin) == LOW);  
+    ctl_ptt     = { AF_PIN_PTT,   false, false, 0 };    
+    ctl_rec     = { AF_PIN_REC,   false, false, 0 };  
+    ctl_play    = { AF_PIN_PLAY,  false, false, 0 };  
+    pinMode(ctl_ptt.pin, INPUT_PULLUP);    
+    ctl_ptt.stable = ctl_ptt.last_raw = (digitalRead(ctl_ptt.pin) == LOW);    
+    pinMode(ctl_rec.pin, INPUT_PULLUP);  
+    pinMode(ctl_play.pin, INPUT_PULLUP);  
     pinMode(ctl_bypass.pin, INPUT_PULLUP);  
     ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);  
   
@@ -166,7 +204,9 @@ void af_gpio_ctl_init(void) {
     ctl_nr.stable     = ctl_nr.last_raw     = (digitalRead(ctl_nr.pin) == LOW);  
     ctl_nt.stable     = ctl_nt.last_raw     = (digitalRead(ctl_nt.pin) == LOW);  
     ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);
-    ctl_ptt.stable    = ctl_ptt.last_raw    = (digitalRead(ctl_ptt.pin) == LOW);  
+    ctl_ptt.stable    = ctl_ptt.last_raw    = (digitalRead(ctl_ptt.pin) == LOW);    
+    ctl_rec.stable    = ctl_rec.last_raw    = (digitalRead(ctl_rec.pin) == LOW);  
+    ctl_play.stable   = ctl_play.last_raw   = (digitalRead(ctl_play.pin) == LOW);  
     
     // Прогон дебаунса: stable отразит установившиеся уровни,  
     // а не переходку при старте (медленный подъём pull-up, дребезг).  
@@ -175,34 +215,41 @@ void af_gpio_ctl_init(void) {
         poll_pin(&ctl_nr);  
         poll_pin(&ctl_nt);  
         poll_pin(&ctl_bypass);
-        poll_pin(&ctl_ptt);
-        delay(AF_GPIO_POLL_MS);  
+        poll_pin(&ctl_ptt);  
+        poll_pin(&ctl_rec);  
+        poll_pin(&ctl_play);  
+        delay(AF_GPIO_POLL_MS);    
     }  
   
     // Теперь читаем реальное состояние пинов и применяем.  
     apply_nt(ctl_nt.stable);  
     apply_nr(ctl_nr.stable);  
     apply_bypass(ctl_bypass.stable);
-    apply_ptt(ctl_ptt.stable);
+    apply_ptt(ctl_ptt.stable);  
+    // rec/play при старте не применяем: запись с замкнутого GP9 при boot  
+    // не нужна, а play всё равно вернёт false — слот пуст.  
     uint8_t code = 0;  
     for (int i = 0; i < 3; i++)  
         if (ctl_bank[i].stable) code |= (1 << i);  
     apply_bank(code);
   
-    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u ptt=GP%u (LOW=1/on)\n",  
-                  AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS, AF_PIN_PTT);  
+    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u ptt=GP%u rec=GP%u play=GP%u (LOW=1/on)\n",    
+                  AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS, AF_PIN_PTT,  
+                  AF_PIN_REC, AF_PIN_PLAY);    
   
     t_next_poll = millis() + AF_GPIO_POLL_MS;  
 }  
   
-void af_gpio_ctl_poll(void) {  
-    const uint32_t now = millis();  
-    if ((int32_t)(now - t_next_poll) < 0) return;  
-    t_next_poll = now + AF_GPIO_POLL_MS;  
-  
-    for (int i = 0; i < 3; i++) poll_pin(&ctl_bank[i]);  
-    poll_pin(&ctl_nr);  
-    poll_pin(&ctl_nt);
-    poll_pin(&ctl_bypass);
-    poll_pin(&ctl_ptt);
-}
+void af_gpio_ctl_poll(void) {    
+    const uint32_t now = millis();    
+    if ((int32_t)(now - t_next_poll) < 0) return;    
+    t_next_poll = now + AF_GPIO_POLL_MS;    
+    
+    for (int i = 0; i < 3; i++) poll_pin(&ctl_bank[i]);    
+    poll_pin(&ctl_nr);    
+    poll_pin(&ctl_nt);  
+    poll_pin(&ctl_bypass);  
+    poll_pin(&ctl_ptt);  
+    poll_pin(&ctl_rec);  
+    poll_pin(&ctl_play);  
+}  
