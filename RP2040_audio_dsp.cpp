@@ -142,28 +142,6 @@ void af_set_clk(void) {
   
     current_clk_sys_hz = meas_hz;  
 }
-
-// Переключение clk_sys для flash-операций: on=true -> XOSC 12 МГц  
-// (номинал, на котором erase/program гарантированно работают — как  
-// vfo_clk_boost_exit в маяке), on=false -> обратно на PLL_SYS.  
-// Вызывать ТОЛЬКО при припаркованном Core 1.  
-void af_clk_flash_mode(bool on) {  
-    uint32_t ints = save_and_disable_interrupts();  
-    if (on) {  
-        clock_configure(clk_sys,  
-            CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLKSRC_CLK_SYS_AUX,  
-            CLOCKS_CLK_SYS_CTRL_AUXSRC_VALUE_XOSC_CLKSRC,  
-            VFO_XOSC_NOMINAL_HZ,  
-            VFO_XOSC_NOMINAL_HZ);  
-    } else {  
-        clock_configure(clk_sys,  
-            CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLKSRC_CLK_SYS_AUX,  
-            CLOCKS_CLK_SYS_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,  
-            current_clk_sys_hz,  
-            current_clk_sys_hz);  
-    }  
-    restore_interrupts(ints);  
-}  
   
 // ============================================================================  
 // Arduino  
