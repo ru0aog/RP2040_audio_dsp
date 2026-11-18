@@ -101,10 +101,13 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
 // вызов из flash-кода = зависание Core 0.    
 static void __not_in_flash_func(do_flash_erase)(void* p) {        
     (void)p;        
-    flash_flush_cache();   // сбросить грязные линии XIP до отключения flash  
+    af_led_set(64, 0, 64);            // тускло-пурпурный: вошли в erase-функцию  
+    flash_flush_cache();  
+    af_led_set(0, 64, 64);            // тускло-циан: flush#1 прошёл, стартует erase  
     rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);        
-    flash_flush_cache();   // инвалидировать кэш — свежие данные при чтении  
-}        
+    af_led_set(64, 64, 0);            // тускло-жёлтый: erase вернулся, flush#2  
+    flash_flush_cache();  
+}     
     
 static void __not_in_flash_func(do_flash_program)(void* p) {        
     (void)p;        
@@ -236,11 +239,13 @@ bool af_store_save(uint8_t idx) {
         return false;  
     }  
     Serial.println("# save: parked"); Serial.flush();  
-    af_led_set(0, 255, 255);          // циан: перед erase  
-    noInterrupts();    
-    do_flash_erase(NULL);    
-    interrupts();    
-    af_led_set(0, 0, 255);            // синий: erase прошёл, перед program  
+    
+af_led_set(255, 0, 0);                    // красный: перед окном IRQ-off  
+__asm volatile("cpsid i" ::: "memory");  
+do_flash_erase(NULL);  
+__asm volatile("cpsie i" ::: "memory");  
+af_led_set(0, 0, 255);                    // синий: erase прошёл  
+
     noInterrupts();    
     do_flash_program(NULL);    
     interrupts();    

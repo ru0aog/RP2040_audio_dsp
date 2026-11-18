@@ -66,22 +66,16 @@ static void __time_critical_func(send_raw_byte_parallel)(uint8_t v) {
 // интервала с прошлой посылки — если прошло <100 мкс, вызов  
 // пропускается (heartbeat повторит на следующем цикле).  
 // timer_hw->timerawl читается напрямую — time_us_32 может быть во flash.  
-void __not_in_flash_func(af_led_set)(uint8_t r, uint8_t g, uint8_t b) {    
-    static uint32_t last_us = 0;    
-    uint32_t now = timer_hw->timerawl;    
-    if ((uint32_t)(now - last_us) < 100u) return;   // latch ещё не выдержан    
-    last_us = now;    
-  
-    uint32_t ints = save_and_disable_interrupts();    
-    send_raw_byte_parallel(g);   // WS2812B: порядок G-R-B    
-    send_raw_byte_parallel(r);    
-    send_raw_byte_parallel(b);    
-    restore_interrupts(ints);    
-    sio_hw->gpio_clr = RGB_PINS_MASK;    
-  
-    if (r || g || b) sio_hw->gpio_set = (1u << PIN_PICO);    
-    else             sio_hw->gpio_clr = (1u << PIN_PICO);    
-}    
+void __not_in_flash_func(af_led_set)(uint8_t r, uint8_t g, uint8_t b) {  
+    uint32_t irq = save_and_disable_interrupts();  
+    send_raw_byte_parallel(g);   // WS2812B: порядок GRB  
+    send_raw_byte_parallel(r);  
+    send_raw_byte_parallel(b);  
+    restore_interrupts(irq);  
+    // latch >=600 мкс — spin по таймеру, RAM-безопасно  
+    uint32_t t0 = timer_hw->timerawl;  
+    while ((uint32_t)(timer_hw->timerawl - t0) < 600u) { }  
+}  
   
 void __not_in_flash_func(af_led_off)(void) { af_led_set(0, 0, 0); } 
   
