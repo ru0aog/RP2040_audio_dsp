@@ -950,3 +950,135 @@ rp2040.restartCore1(); // Core 1: setup1 -> loop1
    восстанавливать baudr; при появлении третьего — проверять  
    то же место.  
 
+# af_rec: дамп магнитофона во flash — статус, баги, дневник  
+  
+## Статус  
+  
+Рабочая точка: коммит `e455b2a` — парковка Core 1 + прямой вызов  
+`do_rec_dump` под `save_and_disable_interrupts`, одно IRQ-off окно:  
+1 erase + 1–2 program + заголовок последним.  
+На 2500 отсчётов (2 сектора) дамп проходил и был персистентен  
+(`recs` после ребута = 2500). Поведение недетерминированное:  
+тот же код позже вис на том же объёме — см. баг 4.  
+  
+## Архитектура дампа (рабочая схема)  
+  
+af_rec_stop (Core 0):  
+  af_store_core1_park(500)        // Core 1 -> spin в RAM, IRQ off  
+  set_sys_clock_khz(125000)       // downclock под flash  
+  save_and_disable_interrupts()  
+  do_rec_dump(NULL)               // __not_in_flash_func, RAM  
+      flash_range_erase(OFF, nsec*4096)          // ОДНИМ вызовом  
+      flash_range_program(OFF+256, ram_buf, full)// ОДНИМ вызовом  
+      flash_range_program(..., tail_page, 256)   // хвост <256  
+      flash_range_program(OFF, hdr, 256)         // заголовок ПОСЛЕДНИМ  
+  restore_interrupts()  
+  flash_flush_cache()  
+  af_set_clk()                    // clk_sys 250 МГц + BAUDR=6  
+  af_store_core1_unpark()  
+  
+Раскладка слота: [0..255] rec_hdr_t (magic 'R','C', ver, len_samples),  
+[256..] данные int16. Заголовок пишется последним — прерванный дамп  
+читается как пустой слот.  
+  
+## Баги  
+  
+### Баг 1 — flash_safe_execute молча не выполняет дамп (rc=-4)  
+  
+`flash_safe_execute(do_rec_dump, NULL, 5000)` возвращает -4  
+(PICO_ERROR_NOT_PERMITTED): multicore lockout не может выполниться,  
+когда Core 1 припаркована с выключенными IRQ (spin в RAM не отвечает  
+на lockout-протокол). Ошибка не проверялась — дамп «проходил»,  
+но во flash ничего не писалось. Симптом: `recs` после ребута  
+показывал СТАРУЮ запись (1500 вместо 2500/8000).  
+Фикс: прямой вызов do_rec_dump под save_and_disable_interrupts  
+(как af_store_save). Урок: всегда проверять rc у safe_execute.  
+  
+### Баг 2 — повторные flash_range_program в одном IRQ-off окне висят  
+  
+Цикл program по 256 байт (63 вызова на 16 КБ) в одном окне —  
+зависание. Один вызов на весь массив — проходит. Предположение:  
+каждый вызов делает XIP-выход/вход через boot2, повторные заходы  
+при остановленной Core 1 нестабильны. То же касается посекторного  
+стирания в цикле — стирать ОДНИМ вызовом flash_range_erase(OFF, nsec*4096).  
+  
+### Баг 3 — multicore_reset_core1 перед flash-операцией нестабилен  
+  
+Схема af_store (reset Core 1 + IRQ-off + erase/program) у магнитофона  
+давала недетерминированные зависания даже на 1 секторе — вероятно,  
+reset прерывает Core 1 в произвольной точке XIP. Парковка  
+(af_store_core1_park: Core 1 сам доходит до safe-точки и спинит  
+в RAM) стабильнее. af_store_save пока оставлен на reset — работает,  
+но кандидат на перевод на park.  
+  
+### Баг 4 — недетерминированное зависание (ОТКРЫТ)  
+  
+Один и тот же код (e455b2a, 2500 отсчётов): сначала дамп прошёл  
+и персистентен, позже на том же объёме — зависание внутри  
+do_rec_dump (после маркера "erase+program", до "restore clk").  
+Гипотезы:  
+  a) таймаут парковки 500 мс не всегда успевает — Core 1  
+     припаркована не всегда в момент IRQ-off;  
+  b) do_rec_dump или flash_range_* не полностью в RAM —  
+     проверить nm/map (адреса 0x2xxxxxxx = RAM, 0x1xxxxxxx = flash);  
+  c) состояние XIP-кэша/flash-контроллера на момент окна.  
+НЕ проверено: вывод arm-none-eabi-nm по do_rec_dump/flash_range_*.  
+  
+### Баг 5 — ложная локализация по маркерам без Serial.flush()  
+  
+Serial.println кладёт в буфер TinyUSB; при зависании маркер теряется  
+и точка зависания выглядит раньше реальной. Все маркеры в af_rec_stop  
+должны идти с Serial.flush().  
+  
+## Что проверено и НЕ является причиной  
+  
+- Адрес слота: 0x140000 vs 0x1F0000 — поведение одинаковое,  
+  адрес ни при чём (прошивка ~1.12 МБ < 0x140000).  
+- Erase-only (без program) на 2 секторах — проходит.  
+- Watchdog: таймаут поднят до 8 с; корм в циклах убран  
+  (watchdog_update внутри IRQ-off окна сам мог быть во flash).  
+- busy_wait_us(100) после reset — есть в af_store, в park-схеме  
+  не нужен.  
+- Переполнение слота: nsec*4096 в пределах AF_REC_FLASH_LEN.  
+  
+## Открытые шаги (план доводки)  
+  
+1. nm/map: проверить размещение do_rec_dump и flash_range_*  
+   в RAM (баг 4b).  
+2. Увеличить таймаут парковки / проверять ret af_store_core1_park  
+   (уже проверяется — abort при false; но 500 мс может не хватать  
+   при длинном блоке Core 1 ~3 мс — запас есть, гипотеза слабая).  
+3. Если program нестабилен — rom_flash_range_erase /  
+   rom_flash_range_program из pico/bootrom.h напрямую  
+   (bootrom всегда доступен, минуя SDK-обёртки).  
+4. После стабилизации: наращивание AF_REC_RAM_SAMP  
+   8000 -> 16000 -> 32000 -> 60000; слот 0x140000 (2 МБ) или  
+   0x300000 (4 МБ); убрать маркеры; поправить шапку; убрать  
+   неиспользуемые include (pico/multicore.h, hardware/watchdog.h,  
+   string.h); вернуть watchdog 3-4 с; регрессия (перезапись слота,  
+   авто-стоп по смене тракта, play во время записи, обе платы).  
+  
+## DEV-дневник (хронология)  
+  
+- fa30dbe: RAM-запись/воспроизведение стабильны (базовая точка).  
+- Дамп через reset+IRQ-off: зависания на >1 секторе.  
+- 3247b17: 1 сектор (1500 samp) — дамп + персистентность OK.  
+- Переход на 4-МБ плату, слот 0x1F0000 — те же зависания,  
+  адрес исключён.  
+- 07b3e93: park + flash_safe_execute — не виснет, но НЕ пишет  
+  (rc=-4, баг 1).  
+- e455b2a: park + прямой вызов, одно окно, program одним вызовом —  
+  2 сектора прошли, персистентность OK. Позже — зависание на том  
+  же коде (баг 4, открыт).  
+- Тест «только erase» на 2 секторах — проходит; висит program.  
+- Чанки program по 256 байт — висят; один вызов — проходит (баг 2).  
+  
+## Файлы  
+  
+- src/af_rec.cpp — af_rec_stop, do_rec_dump (зависание здесь)  
+- src/af_store.cpp — af_store_save, do_flash_write, park_core1  
+  (рабочий эталон + API парковки)  
+- src/af_store.h — af_store_core1_park/unpark/park_poll  
+- src/RP2040_audio_dsp.cpp — af_set_clk, reprogram_pll, watchdog_enable  
+- src/af_config.h — AF_REC_FLASH_OFF=0x140000, AF_REC_FLASH_LEN=0xBF000  
+- src/af_rec.h — AF_REC_RAM_SAMP (тест 2500, целевое 60000)  
