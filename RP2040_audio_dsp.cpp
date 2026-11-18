@@ -13,7 +13,6 @@
 #include "hardware/structs/sio.h"
 #include "hardware/structs/ssi.h"
 #include "hardware/structs/pll.h"
-#include "pico/multicore.h"
   
 #include "src/af_config.h"  
 #include "src/af_capture.h"  
@@ -147,7 +146,8 @@ static void af_set_clk(void) {
 // ============================================================================  
 // Arduino  
 // ============================================================================  
-void setup() {  
+void setup()  
+{  
     af_set_clk();              // разгон первым делом, до USB/Serial  
     af_usb_init();
 
@@ -182,7 +182,8 @@ void setup() {
     core0_ready = true;  
 }  
   
-void loop() {  
+void loop()  
+{  
     const uint32_t t0 = micros();  
   
     af_usb_poll();      // первым: TX-FIFO TinyUSB — самый мелкий буфер тракта  
@@ -208,8 +209,8 @@ void loop() {
     // Периодическая сводка убрана — диагностика по команде 'stats'.  
 }
   
-void setup1() {  
-    multicore_lockout_victim_init();   // разрешает flash_safe_execute на Core 0 
+void setup1()  
+{  
     const uint32_t t0 = millis();  
     while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {  
         af_store_core1_park_poll();  
@@ -217,7 +218,8 @@ void setup1() {
     }  
 }
   
-void loop1() {  
+void loop1()  
+{  
     // Core 1: пустой поллинг — просто крутится  
     tight_loop_contents();
     af_dsp_poll();

@@ -99,12 +99,16 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
 // ---------------------------------------------------------------------------  
 // Вся функция в RAM: во время erase/program XIP недоступен,    
 // вызов из flash-кода = зависание Core 0.    
-static void __not_in_flash_func(do_flash_write)(void* p) {        
-    (void)p;        
-    rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);        
-    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);        
-    flash_flush_cache();   // сброс XIP-кэша — чтение увидит свежие данные        
-}        
+static void __not_in_flash_func(do_flash_erase)(void* p) {      
+    (void)p;      
+    rom_flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE, 4096, 0x20);      
+}      
+  
+static void __not_in_flash_func(do_flash_program)(void* p) {      
+    (void)p;      
+    rom_flash_range_program(AF_FLASH_OFF, (const uint8_t*)s_sector_img, FLASH_SECTOR_SIZE);      
+    flash_flush_cache();   // сброс XIP-кэша — чтение увидит свежие данные      
+}      
   
 // ---------------------------------------------------------------------------  
 // API  
@@ -119,14 +123,24 @@ void af_store_init(void) {
         s_sector_img[0] = AF_STORE_MAGIC0;  
         s_sector_img[1] = AF_STORE_MAGIC1;  
         s_sector_img[2] = AF_STORE_VER;  
-        // flash_safe_execute: lockout паркует Core 1 в RAM-обработчике,    
-        // глушит IRQ Core 0, исполняет fn из RAM. Требует    
-        // multicore_lockout_victim_init() на Core 1 (см. setup1).    
-        int rc = flash_safe_execute(do_flash_write, NULL, 1000);    
-        if (rc != PICO_OK) {    
-            Serial.printf("[STORE] format failed rc=%d\n", rc);    
-            return;    
-        }
+        // Паркуем Core 1 — во время erase/program flash недоступна,  
+        // а af_dsp_poll исполняется из неё. Без парковки Core 1 виснет.  
+        if (!park_core1()) {  
+            Serial.println("[STORE] core1 park timeout, format skipped");  
+            return;   // не форматируем — чтение покажет мусор, но плата жива  
+        }  
+    // Прямой вызов: Core 1 припаркован в RAM, IRQ Core 0 заглушены.  
+    // flash_safe_execute не работает без multicore lockout (rc=-4).  
+    noInterrupts();    
+    do_flash_erase(NULL);    
+    interrupts();    
+    noInterrupts();    
+    do_flash_program(NULL);    
+    interrupts();
+        g_park_req = false;   // отпустить Core 1    
+        __dmb();    
+        while (g_parked) { }    // дождаться выхода из spin    
+  
         // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
         for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
         Serial.println("[STORE] flash formatted (7 banks empty)");
@@ -213,11 +227,28 @@ bool af_store_save(uint8_t idx) {
     // (__not_in_flash_func на всей DSP-цепочке) — после записи    
     // отпускаем его и возвращаемся, ребут не нужен.    
     
-    int rc = flash_safe_execute(do_flash_write, NULL, 1000);    
-    if (rc != PICO_OK) {    
-        Serial.printf("# save: flash write failed rc=%d\n", rc);    
-        return false;    
-    }    
+    af_led_set(255, 255, 0);  
+    Serial.println("# save: parking..."); Serial.flush();  
+    if (!park_core1()) {  
+        Serial.println("# save: core1 park timeout");  
+        return false;  
+    }  
+    Serial.println("# save: parked"); Serial.flush();  
+    af_led_set(0, 255, 255);          // циан: перед erase  
+    noInterrupts();    
+    do_flash_erase(NULL);    
+    interrupts();    
+    af_led_set(0, 0, 255);            // синий: erase прошёл, перед program  
+    noInterrupts();    
+    do_flash_program(NULL);    
+    interrupts();    
+    af_led_set(0, 255, 0);            // зелёный: записано  
+    Serial.println("# save: write done, releasing core1"); Serial.flush();  
+    g_park_req = false;  
+    __dmb();  
+    while (g_parked) { }  
+    af_led_set(255, 255, 255);  
+    Serial.println("# save: core1 released"); Serial.flush();  
   
     // Синхронизируем RAM-буфер EEPROM с записанным сектором —    
     // иначе af_store_read (через EEPROM.get) вернёт старые данные.    
@@ -309,11 +340,20 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));  
     }  
   
-    int rc = flash_safe_execute(do_flash_write, NULL, 1000);    
-    if (rc != PICO_OK) {    
-        Serial.printf("# banks write failed rc=%d\n", rc);    
+    if (!park_core1()) {    
+        Serial.println("# bank clr: core1 park timeout");    
         return;    
     }    
+    // Прямой вызов: Core 1 припаркован в RAM, IRQ Core 0 заглушены.  
+    noInterrupts();    
+    do_flash_erase(NULL);    
+    interrupts();    
+    noInterrupts();    
+    do_flash_program(NULL);    
+    interrupts();
+    g_park_req = false;     // отпустить Core 1    
+    __dmb();    
+    while (g_parked) { }    // дождаться выхода из spin    
     
     // Синхронизируем RAM-буфер EEPROM с записанным сектором.    
     for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);    
