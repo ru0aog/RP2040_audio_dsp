@@ -97,18 +97,18 @@ static void __not_in_flash_func(reprogram_pll)(const PllConfig *cfg) {
         if (time_us_32() - t0 > 10000) break;  
         tight_loop_contents();  
     }  
-  
-    // 5. Делитель флеша: SSI off -> BAUDR -> SSI on  
-    ssi_hw->ssienr = 0;  
-    ssi_hw->baudr  = cfg->baudr;  
-    ssi_hw->ssienr = 1;  
-  
-    // 6. clk_sys -> PLL_SYS  
+
+    // 5. clk_sys -> PLL_SYS  
     clock_configure(clk_sys,  
         CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLKSRC_CLK_SYS_AUX,  
         CLOCKS_CLK_SYS_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,  
         cfg->clk_hz,  
         cfg->clk_hz);  
+
+    // 6. Делитель флеша: SSI off -> BAUDR -> SSI on  
+    ssi_hw->ssienr = 0;  
+    ssi_hw->baudr  = cfg->baudr;  
+    ssi_hw->ssienr = 1;  
 }  
   
 // ----------------------------------------------------------------------------  
