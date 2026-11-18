@@ -14,8 +14,10 @@
 //   [3]      резерв  
 //   [4..]    7 записей по sizeof(af_bank_rec_t)  
 //  
-// Запись — только по команде 'save x' (flash ~100к циклов стирания,  
-// автосохранения нет). Чтение — по 'load x' и при смене кода на GP2..GP4.  
+// Запись — только по команде 'save x' (flash ~100к циклов стирания,    
+// автосохранения нет). Чтение — по 'load x' и при смене кода на GP2..GP4.    
+// Ребут после записи не нужен: Core 1 исполняется из RAM, парковка    
+// и отпускание работают штатно.    
 // ============================================================================  
 #include <Arduino.h>  
 #include <EEPROM.h>  
@@ -119,10 +121,12 @@ void af_store_init(void) {
             Serial.println("[STORE] core1 park timeout, format skipped");  
             return;   // не форматируем — чтение покажет мусор, но плата жива  
         }  
-        noInterrupts();    
-        do_flash_write(NULL);   // RAM: erase+program, XIP off    
-        interrupts();    
-        g_park_req = false;   // отпустить Core 1  
+        noInterrupts();      
+        do_flash_write(NULL);   // RAM: erase+program, XIP off      
+        interrupts();      
+        g_park_req = false;   // отпустить Core 1    
+        __dmb();    
+        while (g_parked) { }    // дождаться выхода из spin    
   
         // Синхронизируем RAM-буфер EEPROM с записанным сектором.  
         for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);  
@@ -206,22 +210,26 @@ bool af_store_save(uint8_t idx) {
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));  
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));  
   
-    // Паркуем Core 1 и пишем сектор. После записи — ребут:  
-    // возврат на 220 МГц и выход из парковки ненадёжны,  
-    // а данные уже во flash — после ребута всё поднимется чисто.  
-    if (!park_core1()) {  
-        Serial.println("# save: core1 park timeout");  
-        return false;  
-    }  
-    noInterrupts();    
-    do_flash_write(NULL);   // RAM: erase+program, XIP off    
+    // Паркуем Core 1 и пишем сектор. Core 1 исполняется из RAM    
+    // (__not_in_flash_func на всей DSP-цепочке) — после записи    
+    // отпускаем его и возвращаемся, ребут не нужен.    
+    if (!park_core1()) {    
+        Serial.println("# save: core1 park timeout");    
+        return false;    
+    }    
+    noInterrupts();      
+    do_flash_write(NULL);   // RAM: erase+program, XIP off      
+    interrupts();      
+    g_park_req = false;     // отпустить Core 1    
+    __dmb();    
+    while (g_parked) { }    // дождаться выхода из spin    
     
-    Serial.printf("# OK save=%d, rebooting...\n", idx);  
-    Serial.flush(); 
+    // Синхронизируем RAM-буфер EEPROM с записанным сектором —    
+    // иначе EEPROM.commit() при следующем save затрёт наши данные.    
+    for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);    
     
-    // Сюда доходим только если запись завершилась.    
-    watchdog_reboot(0, 0, 0);    
-    while (true) { tight_loop_contents(); }   // на случай задержки ребута
+    Serial.printf("# OK save=%d\n", idx);    
+    return true;  
 }  
   
 bool af_store_load(uint8_t idx) {  
@@ -305,14 +313,19 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));  
     }  
   
-    if (!park_core1()) {  
-        Serial.println("# bank clr: core1 park timeout");  
-        return;  
-    }  
-    noInterrupts();    
-    do_flash_write(NULL);   // RAM: erase+program, XIP off    
-    interrupts();    
-  
-    Serial.flush();  
-    watchdog_reboot(0, 0, 0);   // не возвращается  
-}
+    if (!park_core1()) {    
+        Serial.println("# bank clr: core1 park timeout");    
+        return;    
+    }    
+    noInterrupts();      
+    do_flash_write(NULL);   // RAM: erase+program, XIP off      
+    interrupts();      
+    g_park_req = false;     // отпустить Core 1    
+    __dmb();    
+    while (g_parked) { }    // дождаться выхода из spin    
+    
+    // Синхронизируем RAM-буфер EEPROM с записанным сектором.    
+    for (int i = 0; i < AF_EEPROM_SIZE; i++) EEPROM.write(i, s_sector_img[i]);    
+    
+    Serial.println("# OK banks written");    
+}  
