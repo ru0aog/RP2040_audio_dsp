@@ -23,7 +23,7 @@
     
 // RAM-буфер записи при 15464 Гц.    
 // Ограничение — свободная RAM    
-#define AF_REC_RAM_SAMP  1500u    // ОТЛАДКА: 3840 B + 256 hdr = 1 сектор (~0.12 с)  
+#define AF_REC_RAM_SAMP  2500u    // ОТЛАДКА: 3840 B + 256 hdr = 1 сектор (~0.12 с)  
   
 void     af_rec_init(void);    
 void     af_rec_poll(void);        // Core 0: контроль записи (src change, buf full)      
@@ -49,3 +49,8 @@ uint32_t af_rec_pos_samples(void); // текущая позиция rec/play
 void    af_rec_push(int16_t s);    // tap записи (no-op если не пишем)    
 int16_t af_rec_mix(int16_t s);     // подмес воспроизведения в RX    
 int32_t af_rec_src(int32_t mic);   // источник для TX: запись вместо микрофона    
+
+// Кооперативная парковка Core 1 для flash-операций.  
+// af_store_core1_park_poll вызывается из af_dsp_poll на Core 1.  
+bool af_store_core1_park(uint32_t timeout_ms);   // Core 0: запросить парковку  
+void af_store_core1_unpark(void);                // Core 0: отпустить Core 1  

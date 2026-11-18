@@ -92,3 +92,11 @@ void af_store_core1_park_poll(void);
 void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]);
 
 void af_set_clk(void);   // разгон clk_sys по pll_cfg (RP2040_audio_dsp.cpp)  
+
+  
+// Core 0: припарковать Core 1 (spin в RAM, IRQ off) перед flash-операцией.    
+// false = таймаут, Core 1 не припаркован — flash трогать нельзя.    
+bool af_store_core1_park(uint32_t timeout_ms);    
+  
+// Core 0: отпустить Core 1 после flash-операции.    
+void af_store_core1_unpark(void);  

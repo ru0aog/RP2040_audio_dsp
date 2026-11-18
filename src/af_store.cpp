@@ -62,16 +62,35 @@ void __not_in_flash_func(af_store_core1_park_poll)(void) {
     restore_interrupts(irq);    
 }
   
-// Core 0: запросить парковку, ждать ack с таймаутом.  
-static bool park_core1(void) {    
+// Core 0: запросить парковку, ждать ack с таймаутом.    
+static bool park_core1(void) {      
+    g_park_req = true;      
+    __dmb();      
+    uint32_t t0 = millis();      
+    while (!g_parked) {      
+        if (millis() - t0 > 500) { g_park_req = false; return false; }      
+    }      
+    return true;      
+}    
+  
+// Экспорт для af_rec: припарковать Core 1 перед flash-операцией.    
+// Возвращает false по таймауту — Core 1 продолжает работать.    
+bool af_store_core1_park(uint32_t timeout_ms) {    
     g_park_req = true;    
     __dmb();    
     uint32_t t0 = millis();    
     while (!g_parked) {    
-        if (millis() - t0 > 500) { g_park_req = false; return false; }    
+        if (millis() - t0 > timeout_ms) { g_park_req = false; return false; }    
     }    
     return true;    
-}
+}    
+  
+// Отпустить Core 1 — spin в af_store_core1_park_poll завершится,    
+// Core 1 вернётся в af_dsp_poll.    
+void af_store_core1_unpark(void) {    
+    g_park_req = false;    
+    __dmb();    
+}    
   
 #pragma pack(push, 1)  
 struct af_bank_rec_t {  
