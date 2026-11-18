@@ -59,7 +59,6 @@ void __not_in_flash_func(af_store_core1_park_poll)(void) {
     g_parked = true;      
     __dmb();      
     while (g_park_req) { /* spin в RAM, без IRQ */ }      
-    af_led_set(255, 0, 0);   // М5: Core 1 вышла из spin — жива      
     g_parked = false;      
     restore_interrupts(irq);      
 }  
@@ -233,7 +232,6 @@ bool af_store_save(uint8_t idx) {
     // (__not_in_flash_func на всей DSP-цепочке) — после записи    
     // отпускаем его и возвращаемся, ребут не нужен.    
     
-    af_led_set(255, 255, 0);  
     Serial.println("# save: parking..."); Serial.flush();  
     if (!park_core1()) {  
         Serial.println("# save: core1 park timeout");  
