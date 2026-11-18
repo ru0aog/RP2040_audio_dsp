@@ -37,6 +37,7 @@
 #include "hardware/flash.h"    // flash_range_erase/program  
 #include "hardware/sync.h"     // save_and_disable_interrupts  
 #include "pico/multicore.h"    // multicore_reset_core1  
+#include "hardware/watchdog.h"  // watchdog_update в do_rec_dump 
 
 typedef enum { ST_IDLE = 0, ST_REC, ST_PLAY } rec_state_t;    
   
@@ -83,24 +84,22 @@ static bool hdr_read(uint32_t* len_out) {
 // memset/memcpy не вызываем — они могут лежать во flash; копия — циклом.    
 static void __not_in_flash_func(do_rec_dump)(void* param) {    
     (void)param;    
-    const uint32_t data_bytes = rec_len * 2;    
-    const uint32_t need = AF_REC_HDR_BYTES + data_bytes;    
-    const uint32_t secs = (need + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;    
-  
-    for (uint32_t i = 0; i < secs; i++)    
-        flash_range_erase(AF_REC_FLASH_OFF + i * FLASH_SECTOR_SIZE,    
-                          FLASH_SECTOR_SIZE);    
-  
-    const uint8_t* p = (const uint8_t*)ram_buf;    
-    for (uint32_t off = 0; off < data_bytes; off += 256) {    
-        uint8_t page[256];    
-        uint32_t chunk = data_bytes - off;    
-        if (chunk > 256) chunk = 256;    
-        for (uint32_t i = 0; i < 256; i++)    
-            page[i] = (i < chunk) ? p[off + i] : 0xFF;    
-        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + off,    
-                            page, 256);    
-    }    
+    const uint32_t data_bytes = rec_len * 2u;    
+    const uint32_t nsec = (AF_REC_HDR_BYTES + data_bytes + 4095) / 4096;    
+    for (uint32_t i = 0; i < nsec; i++) {  
+        flash_range_erase(AF_REC_FLASH_OFF + i * 4096, 4096);  
+        watchdog_update();          // сектор до ~400 мс, IRQ off — кормим вручную  
+    }  
+    const uint8_t* p = (const uint8_t*)ram_buf;  
+    for (uint32_t off = 0; off < data_bytes; off += 256) {  
+        uint32_t chunk = data_bytes - off;  
+        if (chunk > 256) chunk = 256;  
+        uint8_t page[256];  
+        for (uint32_t i = 0; i < chunk; i++) page[i] = p[off + i];  
+        for (uint32_t i = chunk; i < 256; i++) page[i] = 0xFF;  
+        flash_range_program(AF_REC_FLASH_OFF + AF_REC_HDR_BYTES + off, page, 256);  
+        watchdog_update();  
+    }  
   
     rec_hdr_t h;    
     uint8_t* hb = (uint8_t*)&h;    
