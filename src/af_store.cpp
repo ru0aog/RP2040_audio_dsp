@@ -171,67 +171,72 @@ bool af_store_read(uint8_t idx, af_bank_t* out) {
     return true;    
 }  
   
-bool af_store_save(uint8_t idx) {  
-    if (idx < 1 || idx > AF_STORE_BANKS) return false;  
-  
-    // Текущие настройки DSP -> запись (полный снимок RX+TX).    
-    af_bank_rec_t r;    
-    // RX    
-    r.d.lo_hz    = (uint16_t)af_dsp_band_lo_hz();    
-    r.d.hi_hz    = (uint16_t)af_dsp_band_hi_hz();    
-    r.d.cw_on    = af_dsp_cw_on() ? 1 : 0;    
-    r.d.cw_f0    = (uint16_t)af_dsp_cw_freq();    
-    r.d.cw_bw    = (uint16_t)af_dsp_cw_bw();    
-    r.d.cw_noise = (uint16_t)af_dsp_cw_noise();  
-    r.d.agc_on   = af_dsp_agc_on() ? 1 : 0;    
-    r.d.gain_pct = (uint16_t)(af_dsp_gain() * 256.0f + 0.5f);  
-    r.d.voice_vol = af_voice_volume();  
-    r.d.agc_ref      = (uint16_t)af_dsp_agcref();    
-    r.d.agc_max_x100 = (uint16_t)(af_dsp_agcmax() * 100.0f + 0.5f);    
-    r.d.agc_min_x100 = (uint16_t)(af_dsp_agcmin() * 100.0f + 0.5f);    
-    r.d.lim_ceil     = (uint16_t)af_dsp_limceil();    
-    r.d.nr_depth     = (uint16_t)af_dsp_nrdepth();    
-    r.d.nr_makeup    = (uint32_t)af_dsp_nrmakeup();    
-    r.d.nt_mu        = (uint16_t)af_dsp_ntmu();    
-    r.d.nr_mu        = (uint16_t)af_dsp_nrmu();    
-    // TX    
-    r.d.tx_lo_hz      = (uint16_t)af_tx_lo_hz();      
-    r.d.tx_hi_hz      = (uint16_t)af_tx_hi_hz();      
-    r.d.tx_ratio_x10  = (uint16_t)af_tx_ratio();    
-    r.d.tx_clip       = (uint16_t)af_tx_clip();    
-    r.d.tx_agc_target = (uint16_t)af_tx_agc();    
-    r.d.tx_agc_max_x10= (uint16_t)af_tx_agcmax();    
-    r.d.tx_gate_thr   = (uint16_t)af_tx_gate();    
-    r.d.tx_gate_hold_ms  = (uint16_t)af_tx_gatehold();    
-    r.d.tx_gate_hyst_x10 = (uint8_t)af_tx_gatehyst();    
-    r.d.tx_gfloor     = (uint16_t)af_tx_gfloor();    
-    r.d.tx_ap_on      = af_tx_ap() ? 1 : 0;    
-    r.d.tx_softclip   = af_tx_softclip() ? 1 : 0;    
-    r.d.tx_2band_on   = af_tx_2band() ? 1 : 0;    
-    r.d.tx_split_hz   = (uint16_t)af_tx_split();    
-    r.d.tx_lr2_on     = af_tx_lr2() ? 1 : 0;    
-    r.d.tx_comp_thr    = (uint16_t)af_tx_compthr();    
-    r.d.tx_comp_thr_lo = (uint16_t)af_tx_compthrlo();    
-    r.d.tx_comp_thr_hi = (uint16_t)af_tx_compthrhi();    
-    r.d.tx_duck_on    = af_tx_duck() ? 1 : 0;    
-    r.d.tx_duckmax    = (uint16_t)af_tx_duckmax();    
-    r.d.tx_intel_on   = af_tx_intel() ? 1 : 0;    
-    r.d.tx_intel_tgt   = (uint16_t)af_tx_inteltgt();    
-    r.d.tx_intel_cut   = (uint16_t)af_tx_intelcut();    
-    r.d.tx_intel_boost = (uint16_t)af_tx_intelboost();    
-    r.d.tx_pres_on    = af_tx_pres() ? 1 : 0;    
-    r.d.tx_presmax    = (uint16_t)af_tx_presmax();    
-    r.d.tx_pres_freq  = (uint16_t)af_tx_presfreq();    
-    r.d.tx_pres_q     = (uint16_t)af_tx_presq();    
-    r.d.tx_shelf_db   = (uint16_t)af_tx_shelf();    
-    r.d.tx_shelf_freq = (uint16_t)af_tx_shelffreq();    
-    r.d.tx_shelf_q    = (uint16_t)af_tx_shelfq();    
-    r.d.tx_exc_on     = af_tx_exc() ? 1 : 0;    
-    r.d.tx_excmix     = (uint16_t)af_tx_excmix();    
-    r.d.tx_notch_on   = af_tx_notch() ? 1 : 0;    
-    r.d.tx_notch1_hz  = (uint16_t)af_tx_notch1();    
-    r.d.tx_notch2_hz  = (uint16_t)af_tx_notch2();    
-    r.crc = crc8(&r.d, sizeof(r.d));    
+// Снимок текущих настроек DSP в af_bank_t (полный снимок RX+TX).    
+// Используется af_store_save и таблицей banks (столбец "cur").    
+void af_store_snapshot(af_bank_t* out) {    
+    // RX      
+    out->lo_hz    = (uint16_t)af_dsp_band_lo_hz();      
+    out->hi_hz    = (uint16_t)af_dsp_band_hi_hz();      
+    out->cw_on    = af_dsp_cw_on() ? 1 : 0;      
+    out->cw_f0    = (uint16_t)af_dsp_cw_freq();      
+    out->cw_bw    = (uint16_t)af_dsp_cw_bw();      
+    out->cw_noise = (uint16_t)af_dsp_cw_noise();    
+    out->agc_on   = af_dsp_agc_on() ? 1 : 0;      
+    out->gain_pct = (uint16_t)(af_dsp_gain() * 256.0f + 0.5f);    
+    out->voice_vol = af_voice_volume();    
+    out->agc_ref      = (uint16_t)af_dsp_agcref();      
+    out->agc_max_x100 = (uint16_t)(af_dsp_agcmax() * 100.0f + 0.5f);      
+    out->agc_min_x100 = (uint16_t)(af_dsp_agcmin() * 100.0f + 0.5f);      
+    out->lim_ceil     = (uint16_t)af_dsp_limceil();      
+    out->nr_depth     = (uint16_t)af_dsp_nrdepth();      
+    out->nr_makeup    = (uint32_t)af_dsp_nrmakeup();      
+    out->nt_mu        = (uint16_t)af_dsp_ntmu();      
+    out->nr_mu        = (uint16_t)af_dsp_nrmu();      
+    // TX      
+    out->tx_lo_hz      = (uint16_t)af_tx_lo_hz();        
+    out->tx_hi_hz      = (uint16_t)af_tx_hi_hz();        
+    out->tx_ratio_x10  = (uint16_t)af_tx_ratio();      
+    out->tx_clip       = (uint16_t)af_tx_clip();      
+    out->tx_agc_target = (uint16_t)af_tx_agc();      
+    out->tx_agc_max_x10= (uint16_t)af_tx_agcmax();      
+    out->tx_gate_thr   = (uint16_t)af_tx_gate();      
+    out->tx_gate_hold_ms  = (uint16_t)af_tx_gatehold();      
+    out->tx_gate_hyst_x10 = (uint8_t)af_tx_gatehyst();      
+    out->tx_gfloor     = (uint16_t)af_tx_gfloor();      
+    out->tx_ap_on      = af_tx_ap() ? 1 : 0;      
+    out->tx_softclip   = af_tx_softclip() ? 1 : 0;      
+    out->tx_2band_on   = af_tx_2band() ? 1 : 0;      
+    out->tx_split_hz   = (uint16_t)af_tx_split();      
+    out->tx_lr2_on     = af_tx_lr2() ? 1 : 0;      
+    out->tx_comp_thr    = (uint16_t)af_tx_compthr();      
+    out->tx_comp_thr_lo = (uint16_t)af_tx_compthrlo();      
+    out->tx_comp_thr_hi = (uint16_t)af_tx_compthrhi();      
+    out->tx_duck_on    = af_tx_duck() ? 1 : 0;      
+    out->tx_duckmax    = (uint16_t)af_tx_duckmax();      
+    out->tx_intel_on   = af_tx_intel() ? 1 : 0;      
+    out->tx_intel_tgt   = (uint16_t)af_tx_inteltgt();      
+    out->tx_intel_cut   = (uint16_t)af_tx_intelcut();      
+    out->tx_intel_boost = (uint16_t)af_tx_intelboost();      
+    out->tx_pres_on    = af_tx_pres() ? 1 : 0;      
+    out->tx_presmax    = (uint16_t)af_tx_presmax();      
+    out->tx_pres_freq  = (uint16_t)af_tx_presfreq();      
+    out->tx_pres_q     = (uint16_t)af_tx_presq();      
+    out->tx_shelf_db   = (uint16_t)af_tx_shelf();      
+    out->tx_shelf_freq = (uint16_t)af_tx_shelffreq();      
+    out->tx_shelf_q    = (uint16_t)af_tx_shelfq();      
+    out->tx_exc_on     = af_tx_exc() ? 1 : 0;      
+    out->tx_excmix     = (uint16_t)af_tx_excmix();      
+    out->tx_notch_on   = af_tx_notch() ? 1 : 0;      
+    out->tx_notch1_hz  = (uint16_t)af_tx_notch1();      
+    out->tx_notch2_hz  = (uint16_t)af_tx_notch2();      
+}    
+    
+bool af_store_save(uint8_t idx) {    
+    if (idx < 1 || idx > AF_STORE_BANKS) return false;    
+    
+    af_bank_rec_t r;      
+    af_store_snapshot(&r.d);          // текущие настройки -> запись    
+    r.crc = crc8(&r.d, sizeof(r.d));      
   
     // Читаем текущий сектор из flash напрямую (XIP), патчим запись.    
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));    

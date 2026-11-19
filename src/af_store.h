@@ -77,8 +77,11 @@ void af_store_init(void);
 // Возвращает false при неверном idx.  
 bool af_store_save(uint8_t idx);  
   
-// Прочитать ячейку idx в out. Возвращает false, если ячейка пустая/битая.  
-bool af_store_read(uint8_t idx, af_bank_t* out);  
+// Прочитать ячейку idx в out. Возвращает false, если ячейка пустая/битая.    
+bool af_store_read(uint8_t idx, af_bank_t* out);    
+    
+// Снимок текущих настроек DSP в out (столбец "cur" таблицы banks).    
+void af_store_snapshot(af_bank_t* out);    
   
 // Применить ячейку idx к DSP. Возвращает false, если ячейка пустая.    
 bool af_store_load(uint8_t idx);  

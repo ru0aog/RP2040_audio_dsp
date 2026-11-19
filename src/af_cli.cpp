@@ -773,48 +773,51 @@ static void cli_exec(char* line) {
             Serial.flush();    
             af_store_write_all(preset);   // reset Core1 + erase/program + restartCore1    
         }    
-        // Без аргументов — транспонированная таблица: строки = параметры,  
-        // столбцы = банки 1..7. Пустая ячейка — "empty" во всех строках.  
-        af_bank_t bk[AF_STORE_BANKS];  
-        bool      bv[AF_STORE_BANKS];  
-        for (uint8_t i = 0; i < AF_STORE_BANKS; i++)  
-            bv[i] = af_store_read(i + 1, &bk[i]);  
+        // Без аргументов — транспонированная таблица: строки = параметры,      
+        // столбцы = cur (текущее состояние DSP) + банки 1..7.      
+        // Пустая ячейка — "-----" во всех строках.      
+        af_bank_t bk[AF_STORE_BANKS + 1];    
+        bool      bv[AF_STORE_BANKS + 1];    
+        af_store_snapshot(&bk[0]);            // bk[0] = текущее состояние    
+        bv[0] = true;    
+        for (uint8_t i = 0; i < AF_STORE_BANKS; i++)      
+            bv[i + 1] = af_store_read(i + 1, &bk[i + 1]);      
+    
+        Serial.println("# === BANKS (столбцы = cur + ячейки 1..7) ===");    
+        Serial.printf("# %-14s %6s", "param", "cur");    
+        for (uint8_t i = 0; i < AF_STORE_BANKS; i++) Serial.printf(" %6u", i + 1);      
+        Serial.println();    
   
-        Serial.println("# === BANKS (столбцы = ячейки 1..7) ===");  
-        Serial.printf("# %-14s", "param");  
-        for (uint8_t i = 0; i < AF_STORE_BANKS; i++) Serial.printf(" %6u", i + 1);  
-        Serial.println();  
-  
-        // Макрос строки: числовое поле, "empty" для пустых банков.  
+        // Макрос строки: числовое поле, "-----" для пустых банков.    
         #define BANK_ROW(name, fmt, field) do {                                  \
             Serial.printf("# %-14s", name);                                      \
-            for (uint8_t i = 0; i < AF_STORE_BANKS; i++) {                       \
+            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {                      \
                 if (bv[i]) Serial.printf(" %6" fmt, bk[i].field);                \
-                else       Serial.printf(" %6s", "empty");                       \
+                else       Serial.printf(" %6s", "-----");                       \
             }                                                                    \
             Serial.println();                                                    \
-        } while (0)  
-  
-        // Макрос строки on/off.  
+        } while (0)    
+    
+        // Макрос строки on/off.    
         #define BANK_ROW_ONOFF(name, field) do {                                 \
             Serial.printf("# %-14s", name);                                      \
-            for (uint8_t i = 0; i < AF_STORE_BANKS; i++) {                       \
+            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {                      \
                 if (bv[i]) Serial.printf(" %6s", bk[i].field ? "on" : "off");    \
-                else       Serial.printf(" %6s", "empty");                       \
+                else       Serial.printf(" %6s", "-----");                       \
             }                                                                    \
             Serial.println();                                                    \
-        } while (0)  
-  
-        // Макрос строки x100 -> "d.dd" (agcmax/agcmin/gain).  
+        } while (0)    
+    
+        // Макрос строки x100 -> "d.dd" (agcmax/agcmin/gain).    
         #define BANK_ROW_X100(name, field) do {                                  \
             Serial.printf("# %-14s", name);                                      \
-            for (uint8_t i = 0; i < AF_STORE_BANKS; i++) {                       \
+            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {                      \
                 if (bv[i]) Serial.printf(" %3u.%02u",                            \
                     (unsigned)(bk[i].field / 100), (unsigned)(bk[i].field % 100)); \
-                else       Serial.printf(" %6s", "empty");                       \
+                else       Serial.printf(" %6s", "-----");                       \
             }                                                                    \
             Serial.println();                                                    \
-        } while (0)  
+        } while (0)    
   
         Serial.println("# --- RX ---");  
         BANK_ROW("band lo",    "u", lo_hz);  
@@ -827,11 +830,11 @@ static void cli_exec(char* line) {
         // Макрос строки Q8 -> "d.dd" (gain: 256 = 1.00).      
         #define BANK_ROW_GAIN(name, field) do {                                  \
             Serial.printf("# %-14s", name);                                      \
-            for (uint8_t i = 0; i < AF_STORE_BANKS; i++) {                       \
+            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {                      \
                 if (bv[i]) {                                                     \
                     unsigned g100 = (unsigned)bk[i].field * 100u / 256u;         \
                     Serial.printf(" %3u.%02u", g100 / 100u, g100 % 100u);        \
-                } else Serial.printf(" %6s", "empty");                           \
+                } else Serial.printf(" %6s", "-----");                           \
             }                                                                    \
             Serial.println();                                                    \
             } while (0)      
