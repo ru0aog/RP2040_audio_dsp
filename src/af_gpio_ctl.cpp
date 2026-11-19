@@ -5,9 +5,11 @@
 //   GP2..GP4 — селектор банка настроек, 3 бита (LOW=1):  
 //     000 = ручной режим (консоль), 001..111 = ячейки 1..7 (af_store_load).  
 //   GP5 — LOW -> NR on,  GP6 — LOW -> NT on.  GP7 — LOW -> bypass on  
-//   GP8 — LOW -> TX (PTT).  GP9 — LOW -> запись магнитофона (af_rec),  
-//   GP10 — LOW -> воспроизведение. Уровневая логика: LOW = активно,  
-//   open = стоп. Смена тракта (PTT) во время записи — авто-стоп в af_rec.  
+//   GP8 — LOW -> TX (PTT); при playback магнитофона — выход PTT (LOW).    
+//   GP9 — LOW -> запись: тракт -> TX (микрофон), без PTT.    
+//   GP10 — LOW -> воспроизведение: тракт -> TX + PTT на GP8, звук в TX.    
+//   Уровневая логика: LOW = активно, open = стоп.    
+//   sw_ptt_active: GP8 занят как выход — входная ветка PTT отсечена.    
 //  
 // Опрос каждые AF_GPIO_POLL_MS мс, дебаунс AF_GPIO_STABLE чтений.  
 // Консольные команды имеют приоритет, но только до следующего изменения  
@@ -37,8 +39,9 @@ static gpio_ctl_t ctl_ptt;       // GP8 — LOW -> TX
 static gpio_ctl_t ctl_rec;       // GP9 — LOW -> запись магнитофона  
 static gpio_ctl_t ctl_play;      // GP10 — LOW -> воспроизведение  
   
-static uint32_t t_next_poll = 0;  
-static uint8_t  bank_code   = 0; // текущий применённый код 0..7  
+static uint32_t t_next_poll = 0;    
+static uint8_t  bank_code   = 0; // текущий применённый код 0..7    
+static bool     sw_ptt_active = false;  // GP8 — выход PTT (playback магнитофона)    
   
 // Текущий код банка с GP2..GP4 (0 = ручной режим). Для cli_stats.  
 uint8_t af_gpio_bank_code(void) { return bank_code; }  
@@ -82,38 +85,59 @@ static void apply_bypass(bool grounded) {
     if (grounded) af_voice_play(VOICE_BYPASS_ON);   // "режим обхода включен"  
 }
 
-static void apply_ptt(bool grounded) {    
-    af_dsp_set_tx(grounded);    
-    Serial.printf("[GPIO] GP%u %s -> tx=%s\n",    
-                  ctl_ptt.pin, grounded ? "GND" : "open",    
-                  grounded ? "on" : "off");    
-}    
+static void apply_ptt(bool grounded) {      
+    if (sw_ptt_active) return;   // GP8 — выход PTT при playback, вход игнорируем    
+    af_dsp_set_tx(grounded);      
+    Serial.printf("[GPIO] GP%u %s -> tx=%s\n",      
+                  ctl_ptt.pin, grounded ? "GND" : "open",      
+                  grounded ? "on" : "off");      
+}      
   
 // Уровневая логика: LOW = запись идёт, open = стоп.  
 // af_rec_start вернёт false, если уже пишет/играет — молча игнорируем.  
-static void apply_rec(bool grounded) {  
-    if (grounded) {  
-        if (af_rec_start())  
-            Serial.printf("[GPIO] GP%u GND -> rec on\n", ctl_rec.pin);  
-    } else {  
-        if (af_rec_is_recording()) {  
-            af_rec_stop();  
-            Serial.printf("[GPIO] GP%u open -> rec off\n", ctl_rec.pin);  
-        }  
-    }  
-}  
+static void apply_rec(bool grounded) {    
+    if (grounded) {    
+        if (af_rec_is_playing()) return;          // play приоритетнее    
+        af_dsp_set_tx(1);                          // тракт -> TX (микрофон), без PTT    
+        if (af_rec_start())    
+            Serial.printf("[GPIO] GP%u GND -> rec on (tx path)\n", ctl_rec.pin);    
+        else    
+            af_dsp_set_tx(0);                      // не записали — тракт обратно    
+    } else {    
+        if (af_rec_is_recording()) {    
+            af_rec_stop();    
+            af_dsp_set_tx(0);                      // тракт -> RX    
+            Serial.printf("[GPIO] GP%u open -> rec off\n", ctl_rec.pin);    
+        }    
+    }    
+}    
   
-static void apply_play(bool grounded) {  
-    if (grounded) {  
-        if (af_rec_play())  
-            Serial.printf("[GPIO] GP%u GND -> play on\n", ctl_play.pin);  
-    } else {  
-        if (af_rec_is_playing()) {  
-            af_rec_play_stop();  
-            Serial.printf("[GPIO] GP%u open -> play off\n", ctl_play.pin);  
-        }  
-    }  
-}  
+static void apply_play(bool grounded) {    
+    if (grounded) {    
+        if (af_rec_is_recording()) af_rec_stop();  // play приоритетнее записи    
+        af_dsp_set_tx(1);                           // тракт -> TX    
+        sw_ptt_active = true;                       // GP8 -> выход PTT    
+        pinMode(ctl_ptt.pin, OUTPUT);    
+        digitalWrite(ctl_ptt.pin, LOW);             // PTT активен (LOW)    
+        if (af_rec_play())    
+            Serial.printf("[GPIO] GP%u GND -> play on (tx+ptt)\n", ctl_play.pin);    
+        else {                                      // нечего играть — всё вернуть    
+            digitalWrite(ctl_ptt.pin, HIGH);    
+            pinMode(ctl_ptt.pin, INPUT_PULLUP);    
+            sw_ptt_active = false;    
+            af_dsp_set_tx(0);    
+        }    
+    } else {    
+        if (af_rec_is_playing()) {    
+            af_rec_play_stop();    
+            digitalWrite(ctl_ptt.pin, HIGH);    
+            pinMode(ctl_ptt.pin, INPUT_PULLUP);     // GP8 обратно на вход PTT    
+            sw_ptt_active = false;    
+            af_dsp_set_tx(0);                       // тракт -> RX    
+            Serial.printf("[GPIO] GP%u open -> play off\n", ctl_play.pin);    
+        }    
+    }    
+}    
   
 static void apply_bank(uint8_t code) {  
     bank_code = code;  
@@ -249,7 +273,21 @@ void af_gpio_ctl_poll(void) {
     poll_pin(&ctl_nr);    
     poll_pin(&ctl_nt);  
     poll_pin(&ctl_bypass);  
-    poll_pin(&ctl_ptt);  
-    poll_pin(&ctl_rec);  
-    poll_pin(&ctl_play);  
+    poll_pin(&ctl_ptt);    
+    poll_pin(&ctl_rec);    
+    poll_pin(&ctl_play);    
+  
+    // Playback закончился по буферу, а GP10 ещё нажат — отпускаем PTT/TX      
+    if (sw_ptt_active && !af_rec_is_playing()) {      
+        digitalWrite(ctl_ptt.pin, HIGH);      
+        pinMode(ctl_ptt.pin, INPUT_PULLUP);      
+        sw_ptt_active = false;      
+        af_dsp_set_tx(0);      
+        Serial.println("[GPIO] play end -> ptt/tx released");      
+    }      
+    // Запись закончилась по буферу (авто-стоп), а GP9 ещё нажат — тракт в RX      
+    if (ctl_rec.stable && !af_rec_is_recording() && !sw_ptt_active && af_dsp_tx_on()) {      
+        af_dsp_set_tx(0);      
+        Serial.println("[GPIO] rec end (buf full) -> tx released");      
+    }      
 }  
