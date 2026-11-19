@@ -101,7 +101,7 @@ static void cli_help(void) {
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");    
     Serial.println("#   banks             — показать все ячейки");  
-    Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами (ребут)");  
+    Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами");    
     Serial.println("#   pwm on|off        — PWM-выход (off = несущая заглушена)");  
     Serial.println("#   voice [N|vol <0..400>] — голосовые сообщения");  
     Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест потока)");    
@@ -742,8 +742,8 @@ static void cli_exec(char* line) {
     }  
     else if (strcmp(cmd, "banks") == 0) {  
         char* sub = strtok(NULL, " \t");  
-        if (sub && strcmp(sub, "clr") == 0) {    
-            // Перезаписать все 7 ячеек заводскими пресетами (ребут).  
+        if (sub && strcmp(sub, "clr") == 0) {      
+            // Перезаписать все 7 ячеек заводскими пресетами.    
             // Банк = полный снимок RX+TX: сначала дефолты из af_config.h  
             // и рабочая точка tx_apply_profile, затем per-банк отличия  
             // (полоса ПФ, CW, АРУ/gain — как раньше).  
@@ -771,7 +771,7 @@ static void cli_exec(char* line) {
   
             Serial.println("# banks clr: writing 7 banks...");    
             Serial.flush();    
-            af_store_write_all(preset);   // не возвращается — ребут    
+            af_store_write_all(preset);   // reset Core1 + erase/program + restartCore1    
         }    
         // Без аргументов — список ячеек, как раньше.  
         for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {    
@@ -1459,18 +1459,17 @@ void af_cli_poll(void) {
         Serial.println("# rec end -> tx released (rx)");      
     }      
   
-    // CLI play завершился по буферу — отпустить PTT/TX, OK после проигрывания      
-    if (cli_play_pending && !af_rec_is_playing()) {      
-        cli_play_pending = false;      
-        if (cli_play_ptt) {    
-            af_gpio_ptt_tx_off();    
-            cli_play_ptt = false;    
-            Serial.println("# rec end -> ptt/tx released (rx)");    
-        }    
-        Serial.printf("# OK play: %s тракт, %lu с\n",      
-                      af_dsp_tx_on() ? "tx" : "rx",      
-                      (unsigned long)(af_rec_len_samples() * AF_REC_DECIM / AF_FS_OUT_HZ));      
-    }      
+    // CLI play завершился по буферу — OK после проигрывания, затем отпуск PTT/TX        
+    if (cli_play_pending && !af_rec_is_playing()) {        
+        cli_play_pending = false;        
+        Serial.printf("# OK play: %s тракт, %lu с\n",        
+                      af_dsp_tx_on() ? "tx" : "rx",        
+                      (unsigned long)(af_rec_len_samples() * AF_REC_DECIM / AF_FS_OUT_HZ));        
+        if (cli_play_ptt) {      
+            af_gpio_ptt_tx_off();      
+            cli_play_ptt = false;      
+        }      
+    }        
       
     if (dump_period_ms != 0 && (int32_t)(millis() - dump_next_ms) >= 0) {      
         dump_next_ms = millis() + dump_period_ms;      
