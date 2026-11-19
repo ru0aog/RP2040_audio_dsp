@@ -49,6 +49,8 @@
 // не возвращается в Arduino-обёртку и не обрабатывает FIFO-handshake.  
 static volatile bool g_park_req = false;  
 static volatile bool g_parked   = false;  
+
+static uint8_t s_save_done = 0;   // idx успешного save — OK из poll 
   
 // Вызывается с Core 1 из af_dsp_poll. Вся функция в RAM — во время  
 // erase/program flash недоступен, spin-цикл обязан быть не во flash.  
@@ -255,26 +257,26 @@ bool af_store_save(uint8_t idx) {
     multicore_reset_core1();    
     busy_wait_us(100);    
     
-    af_led_set(100, 0, 0);
     Serial.println("# w2"); Serial.flush();   // ДИАГ  
     af_set_clk_nominal();               // 125 МГц, самодельный путь reprogram_pll      
 
-    af_led_set(0, 0, 100);
-    Serial.println("# w3"); Serial.flush();   // ДИАГ  
-    uint32_t ints = save_and_disable_interrupts();      
-    do_flash_write(NULL);               // RAM: erase+program, XIP off      
-    restore_interrupts(ints);      
-    flash_flush_cache();                // сброс XIP-кэша после записи      
-    
-    af_led_set(100, 0, 100);
-    // Возврат без ребута: разгон + перезапуск Core 1.      
-    Serial.println("# w4"); Serial.flush();   // ДИАГ  
-    af_set_clk();                       // обратно на 250 МГц (PLL + vreg + verify)      
-    Serial.println("# w5"); Serial.flush();   // ДИАГ  
-    rp2040.restartCore1();              // Core 1: setup1 -> loop1   
-    
-    Serial.printf("# OK save=%d\n", idx);        
-    return true;    
+
+    Serial.println("# w3"); Serial.flush();   // ДИАГ    
+    uint32_t ints = save_and_disable_interrupts();        
+    do_flash_write(NULL);               // RAM: erase+program, XIP off        
+    restore_interrupts(ints);        
+    flash_flush_cache();                // сброс XIP-кэша после записи        
+      
+    // После flash-окна USB может быть в re-enumeration — Serial.println      
+    // блокируется. Только LED-маркеры, печать отложена в af_store_poll.      
+    af_led_set(100, 0, 100);            // синий: flash записан    
+    af_set_clk();                       // обратно на 250 МГц    
+    af_led_set(0, 100, 0);              // зелёный: clk поднят    
+    rp2040.restartCore1();              // Core 1: setup1 -> loop1     
+    af_led_set(100, 100, 100);          // белый: Core 1 перезапущен    
+      
+    s_save_done = idx;                  // OK напечатает af_store_poll    
+    return true;      
 }  
   
 bool af_store_load(uint8_t idx) {  
@@ -443,8 +445,12 @@ static void af_store_write_defaults(void) {
 }    
   
 // Core 0, из loop(): отложенная запись дефолтных банков при пустом секторе.    
-void af_store_poll(void) {    
-    if (!s_need_defaults) return;    
-    s_need_defaults = false;    
-    af_store_write_defaults();    
-}  
+void af_store_poll(void) {      
+    if (s_save_done) {      
+        Serial.printf("# OK save=%d\n", s_save_done);      
+        s_save_done = 0;      
+    }      
+    if (!s_need_defaults) return;      
+    s_need_defaults = false;      
+    af_store_write_defaults();      
+}    
