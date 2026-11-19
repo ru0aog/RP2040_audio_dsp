@@ -1117,3 +1117,19 @@ af_store: park_core1 (кооперативная парковка в RAM-спи�
 save_and_disable_interrupts + прямой вызов RAM-функции +  
 restore_interrupts + flash_flush_cache. Одна flash-операция за окно.  
 
+## af_rec: мелкие баги CLI-обвязки play (закрыто, 2026-11)  
+  
+1. **`OK play` показывал 0 с для voice_14.** Секунды считались от  
+   `af_rec_len_samples()` (= rec_len = 0 при пустом буфере).  
+   Фикс: `af_rec_play_len()` — возвращает clip_voice_14_len при  
+   play_src=voice14. Коммит 28e6da5.  
+2. **`OK play` показывал rx вместо tx.** `af_gpio_ptt_tx_off()`  
+   вызывался до printf — тракт уже отпущен. Фикс: печать до  
+   отпуска PTT/TX. Коммит a4217b2.  
+3. **`tx off` во время записи портил запись** — источник менялся  
+   на лету. Фикс: reject `tx off` при af_rec_is_recording() ||  
+   af_rec_is_playing().  
+4. **Авто-стоп CLI rec не возвращал RX.** `cli_rec_tx` сбрасывался  
+   только в `stop`. Фикс: добиватель в `af_cli_poll` —  
+   `cli_rec_tx && !af_rec_is_recording()` -> set_tx(0).  
+

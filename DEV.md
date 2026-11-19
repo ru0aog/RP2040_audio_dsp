@@ -293,3 +293,43 @@ enum расширен `VOICE_PROF_1..VOICE_PROF_7` (id 07–13), в
 GP9: запись 7.7 с, авто-стоп -> RX. GP10: TX+PTT+звук -> RX.  
 CLI rec/play/stop/recs/tx off — все сценарии, перезапись буфера.  
 
+## af_rec: voice_14-заглушка при пустом буфере (2026-11)  
+  
+### Поведение  
+Если с момента старта платы записи в RAM-магнитофон не было  
+(rec_len == 0), воспроизведение (GP10 или CLI `play`) играет  
+клип-заглушку `clip_voice_14` из `src/voice/voice_14.inc`  
+(84447 отсчётов @ 15464 Гц ≈ 10.9 с, полная частота, без  
+интерполяции). После первой записи — переключается на RAM-буфер  
+навсегда (до ребута; RAM не персистентна).  
+  
+### Реализация (src/af_rec.cpp)  
+- `play_src` (0=ram, 1=voice14) и `play_len` — выбираются в  
+  `af_rec_play()`: `rec_len > 0` → ram_buf с интерполяцией ×2,  
+  иначе → clip_voice_14 1:1.  
+- `af_rec_mix`/`af_rec_src` — ветка voice14 читает `clip_voice_14[pos++]`  
+  напрямую (клип уже на выходной частоте, децимация не нужна).  
+- `af_rec_play_len()` — длина текущего воспроизведения  
+  (clip_voice_14_len или rec_len); используется в CLI для  
+  корректных секунд в `OK play`.  
+- `clip_voice_14` — const во flash, читается с Core 1 через XIP.  
+  Безопасно: flash-записи во время play не бывает (дамп удалён;  
+  af_store пишет только при остановленной Core 1).  
+  
+### CLI play voice_14 — через TX+PTT (src/af_cli.cpp, af_gpio_ctl.cpp)  
+- `play` при пустом буфере: `af_gpio_ptt_tx_on()` (GP8 -> OUTPUT LOW,  
+  af_dsp_set_tx(1)) + `af_rec_play()` — клип идёт через весь TX-тракт  
+  (компрессор/клиппер/АРУ) на GP1, как при GP10.  
+- Флаг `cli_play_ptt` — добиватель в `af_cli_poll`: `OK play` печатается  
+  ДО `af_gpio_ptt_tx_off()` (иначе тракт показывался бы rx).  
+- `stop` во время voice_14-play: `af_rec_stop()` + `af_gpio_ptt_tx_off()`.  
+- `af_gpio_ptt_tx_on/off` — экспортированы из af_gpio_ctl; общий  
+  `sw_ptt_active` отсекает входную ветку GP8 и GP10-ветку на время  
+  CLI play. Добиватель в `af_gpio_ctl_poll` (`sw_ptt_active &&  
+  !af_rec_is_playing()`) покрывает и CLI-случай.  
+  
+### Проверено на железе  
+Ребут -> `play`: `play 84447 samp (voice14)` -> `OK play: tx тракт, 10 с`.  
+GP10: `play on (tx+ptt)` -> `play end -> ptt/tx released`.  
+После `rec`: `play NNNNN samp (ram)` — и пин, и CLI играют запись.  
+
