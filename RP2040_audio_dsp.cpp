@@ -24,7 +24,7 @@
 #include "src/af_store.h"
 #include "src/af_led.h"
 #include "src/af_voice.h"     // подмес голосовых клипов в выход
-#include "src/af_rec.h"           // цифровой магнитофон: 1 слот 25 с во flash 
+#include "src/af_rec.h"           // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)  
   
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    
@@ -192,9 +192,10 @@ void loop()
   
     af_usb_poll();      // первым: TX-FIFO TinyUSB — самый мелкий буфер тракта  
     af_led_poll();    
-    af_cli_poll();
-    af_rec_poll();      // магнитофон: программирование буферов во flash 
-    af_gpio_ctl_poll();    
+    af_cli_poll();  
+    af_store_poll();    // запись дефолтных банков при пустом секторе (одноразово)  
+    af_rec_poll();      // магнитофон: контроль записи (авто-стоп по буферу)  
+    af_gpio_ctl_poll();      
     af_pwm_poll();      // ×3: заполняем duty-кольцо быстрее, чем один проход loop    
     af_pwm_poll();    
     af_pwm_poll();    
@@ -220,16 +221,16 @@ void setup1()
         af_store_core1_park_poll();    
         tight_loop_contents();    
     }    
-    // Весь рабочий цикл Core 1 — в RAM. Инвариант магнитофона: во время  
-    // flash erase/program (af_rec, ~45 мс, XIP off) Core 1 не должна  
-    // обращаться к flash — ни кодом, ни данными. loop1() Arduino-ядра  
-    // лежит во flash, поэтому крутим свой цикл из RAM-функции.  
+    // Весь рабочий цикл Core 1 — в RAM. Инвариант: во время flash    
+    // erase/program (af_store, ~45 мс, XIP off) Core 1 не должна    
+    // обращаться к flash — ни кодом, ни данными. loop1() Arduino-ядра    
+    // лежит во flash, поэтому крутим свой цикл из RAM-функции.    
     core1_main();   // не возвращается  
 }  
   
-// Рабочий цикл Core 1 — строго в RAM. Запрещено вызывать отсюда  
-// (и из af_dsp_poll) любые функции без __not_in_flash_func и читать  
-// const-данные/XIP-указатели — иначе зависание во время записи af_rec.  
+// Рабочий цикл Core 1 — строго в RAM. Запрещено вызывать отсюда    
+// (и из af_dsp_poll) любые функции без __not_in_flash_func и читать    
+// const-данные/XIP-указатели — иначе зависание во время записи af_store.    
 static void __not_in_flash_func(core1_main)(void)  
 {  
     for (;;) {  

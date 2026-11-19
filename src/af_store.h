@@ -1,6 +1,6 @@
 // src/af_store.h  
 //  
-// Хранилище банков настроек во flash (EEPROM-эмуляция, Core 0).    
+// Хранилище банков настроек во flash (последний сектор, Core 0).      
 // 7 ячеек; каждая — полный снимок настраиваемых параметров RX и TX.    
 // NT/NR/rxnotch on/off в банке не хранятся — включаются по обстановке    
 // (пины GP5/GP6 и консоль); их параметры настройки (mu, depth) — хранятся.    
@@ -80,16 +80,21 @@ bool af_store_save(uint8_t idx);
 // Прочитать ячейку idx в out. Возвращает false, если ячейка пустая/битая.  
 bool af_store_read(uint8_t idx, af_bank_t* out);  
   
-// Применить ячейку idx к DSP. Возвращает false, если ячейка пустая.  
-bool af_store_load(uint8_t idx);
+// Применить ячейку idx к DSP. Возвращает false, если ячейка пустая.    
+bool af_store_load(uint8_t idx);  
+  
+// Вызывать из loop() (Core 0): при пустом/чужом секторе — отложенная    
+// запись дефолтных банков (аналог 'banks clr'). Одноразовая.    
+void af_store_poll(void);  
 
 // Вызывать из af_dsp_poll (Core 1) каждую итерацию — обработка запроса  
 // на парковку перед записью flash.  
 void af_store_core1_park_poll(void);
 
-// Записать массив из AF_STORE_BANKS записей разом (команда 'bank clr').  
-// После записи — watchdog_reboot, функция не возвращается.  
-void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]);
+// Записать массив из AF_STORE_BANKS записей разом ('banks clr',    
+// дефолтные банки при пустом секторе). Возвращается: reset Core 1 +    
+// IRQ-off + erase/program + af_set_clk + restartCore1 — без ребута.    
+void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]);  
 
 void af_set_clk(void);   // разгон clk_sys по pll_cfg (RP2040_audio_dsp.cpp)  
 
@@ -100,3 +105,7 @@ bool af_store_core1_park(uint32_t timeout_ms);
   
 // Core 0: отпустить Core 1 после flash-операции.    
 void af_store_core1_unpark(void);  
+
+// Заполнить массив банков дефолтными пресетами (общая таблица для    
+// af_store_poll и 'banks clr').    
+void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]);  

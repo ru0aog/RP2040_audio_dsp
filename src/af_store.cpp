@@ -4,9 +4,9 @@
 //  
 // Хранилище — последний сектор flash (4 КБ), тот же, что использует  
 // EEPROM-эмуляция ядра Philhower. Чтение — через EEPROM (RAM-буфер),  
-// запись — напрямую flash_range_erase/flash_range_program через  
-// flash_safe_execute(): он сам паркует Core 1 и исполняет запись из RAM.  
-// Это устраняет зависания EEPROM.commit() при разгоне clk_sys до 220 МГц.  
+// запись — напрямую flash_range_erase/flash_range_program из RAM-функции    
+// do_flash_write: multicore_reset_core1 + clk 125 МГц + IRQ off,    
+// затем af_set_clk + restartCore1 (без ребута).    
 //  
 // Раскладка сектора:  
 //   [0..1]   magic 'A','F'  
@@ -14,8 +14,10 @@
 //   [3]      резерв  
 //   [4..]    7 записей по sizeof(af_bank_rec_t)  
 //  
-// Запись — только по команде 'save x' (flash ~100к циклов стирания,  
-// автосохранения нет). Чтение — по 'load x' и при смене кода на GP2..GP4.  
+// Запись — по 'save x' / 'banks clr' и один раз при старте, если сектор    
+// пустой/чужой: af_store_poll пишет дефолтные банки (аналог banks clr).    
+// Запись отложена в loop() — в boot-пути af_store_init она висла (BUGS.MD).    
+// Чтение — по 'load x' и при смене кода на GP2..GP4.    
 // ============================================================================  
 #include <Arduino.h>  
 #include <EEPROM.h>  
@@ -26,10 +28,8 @@
 #include "af_voice.h"  
   
 #include "pico/stdlib.h"
-#include "hardware/flash.h"
-#include "pico/flash.h"
-#include "hardware/watchdog.h"
-#include "hardware/flash.h"
+#include "hardware/flash.h"  
+#include "pico/flash.h"  
 #include "pico/multicore.h"
   
 #define AF_STORE_MAGIC0   'A'    
@@ -99,8 +99,12 @@ struct af_bank_rec_t {
 };  
 #pragma pack(pop)  
   
-// Образ всего сектора — читаем, патчим, пишем целиком.  
-static uint8_t s_sector_img[FLASH_SECTOR_SIZE];  
+// Образ всего сектора — читаем, патчим, пишем целиком.    
+static uint8_t s_sector_img[FLASH_SECTOR_SIZE];    
+  
+// Сектор пустой/чужой — af_store_poll запишет дефолтные банки    
+// на первой итерации loop (не в init: там запись висла).    
+static bool s_need_defaults = false;    
   
 static uint8_t crc8(const void* p, size_t n) {  
     const uint8_t* b = (const uint8_t*)p;  
@@ -145,10 +149,12 @@ void af_store_init(void) {
         s_sector_img[2] != AF_STORE_VER) {      
         // Boot-путь — только чтение. Никакой записи во flash здесь:  
         // park/erase на этапе init периодически вешает плату.  
-        // Пустой/битый сектор = пустые банки; формат — через 'banks clr'.  
-        memset(s_sector_img, 0xFF, sizeof(s_sector_img));      
-        Serial.println("[STORE] sector blank/foreign — banks empty (use 'banks clr')");    
-    }      
+        // Пустой/битый сектор — af_store_poll запишет дефолтные банки    
+        // на первой итерации loop (в boot-пути запись висла — BUGS.MD).    
+        memset(s_sector_img, 0xFF, sizeof(s_sector_img));        
+        s_need_defaults = true;    
+        Serial.println("[STORE] sector blank/foreign — will write defaults");      
+    }        
 }  
   
 bool af_store_read(uint8_t idx, af_bank_t* out) {    
@@ -237,8 +243,8 @@ bool af_store_save(uint8_t idx) {
     s_sector_img[3] = 0xFF;    
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));     
 
-    // Как в af_store_write_all: жёсткий reset Core 1 — детерминированно,  
-    // без гонки с флаговой парковкой. Восстанавливать не нужно — дальше reboot.
+    // Как в af_store_write_all: жёсткий reset Core 1 — детерминированно,    
+    // без гонки с флаговой парковкой. Далее — возврат clk + restartCore1.  
     multicore_reset_core1();  
     busy_wait_us(100);  
   
@@ -356,3 +362,75 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
     
     Serial.println("# OK banks written");    
 }
+
+// ---------------------------------------------------------------------------    
+// Дефолтные банки — те же пресеты, что в 'banks clr' (af_cli.cpp).    
+// ---------------------------------------------------------------------------    
+// Единая таблица дефолтов — используется и af_store_poll (пустой сектор),    
+// и 'banks clr' в af_cli.cpp. Все поля af_bank_t заполняются явно.    
+void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {        
+    memset(b, 0, sizeof(af_bank_t) * AF_STORE_BANKS);        
+    for (int i = 0; i < AF_STORE_BANKS; i++) {        
+        // RX — из af_config.h      
+        b[i].lo_hz = 300;  b[i].hi_hz = 3000;      
+        b[i].cw_on = 0;  b[i].cw_f0 = 700;  b[i].cw_bw = 150;  b[i].cw_noise = 400;      
+        b[i].agc_on = 1;  b[i].gain_pct = 256;  b[i].voice_vol = 300;      
+        b[i].agc_ref = AGC_REF;      
+        b[i].agc_max_x100 = (uint16_t)(AGC_MAX_GAIN * 100.0f + 0.5f);      
+        b[i].agc_min_x100 = (uint16_t)(AGC_MIN_GAIN * 100.0f + 0.5f);      
+        b[i].lim_ceil = LIMIT_CEIL;      
+        b[i].nr_depth = NR_DEPTH_Q15;  b[i].nr_makeup = NR_MAKEUP_Q15;      
+        b[i].nt_mu = NOTCH_MU_Q;  b[i].nr_mu = NR_MU_Q;      
+        // TX — рабочая точка (как базис tx_apply_profile)      
+        b[i].tx_lo_hz = 300;  b[i].tx_hi_hz = 2700;      
+        b[i].tx_ratio_x10 = 40;  b[i].tx_clip = 26000;      
+        b[i].tx_agc_target = 18000;  b[i].tx_agc_max_x10 = AF_TX_AGC_MAX_X10;      
+        b[i].tx_gate_thr = AF_TX_GATE_THR;      
+        b[i].tx_gate_hold_ms = AF_TX_GATE_HOLD_MS;      
+        b[i].tx_gate_hyst_x10 = AF_TX_GATE_HYST_X10;      
+        b[i].tx_gfloor = AF_TX_GATE_FLOOR_Q16;      
+        b[i].tx_ap_on = 1;  b[i].tx_softclip = 1;  b[i].tx_2band_on = 1;      
+        b[i].tx_split_hz = AF_TX_SPLIT_HZ;  b[i].tx_lr2_on = 1;      
+        b[i].tx_comp_thr = 8192;      
+        b[i].tx_comp_thr_lo = AF_TX_COMP_THR_LO;      
+        b[i].tx_comp_thr_hi = AF_TX_COMP_THR_HI;      
+        b[i].tx_duck_on = 1;  b[i].tx_duckmax = 30;      
+        b[i].tx_intel_on = 1;      
+        b[i].tx_intel_tgt = AF_TX_INTEL_TGT_Q15;      
+        b[i].tx_intel_cut = AF_TX_INTEL_CUT_Q15;      
+        b[i].tx_intel_boost = AF_TX_INTEL_BOOST_Q15;      
+        b[i].tx_pres_on = 1;  b[i].tx_presmax = 15;      
+        b[i].tx_pres_freq = AF_TX_PRES_FREQ_HZ;  b[i].tx_pres_q = AF_TX_PRES_Q_X100;      
+        b[i].tx_shelf_db = 0;      
+        b[i].tx_shelf_freq = AF_TX_SHELF_FREQ_HZ;  b[i].tx_shelf_q = AF_TX_SHELF_Q_X100;      
+        b[i].tx_exc_on = 1;  b[i].tx_excmix = 3277;      
+        b[i].tx_notch_on = 1;      
+        b[i].tx_notch1_hz = AF_TX_NOTCH1_HZ;  b[i].tx_notch2_hz = AF_TX_NOTCH2_HZ;      
+    }        
+    // Пресеты полос RX — как в 'banks clr':        
+    b[0].lo_hz = 100;  b[0].hi_hz = 3100;   // 1: SSB широкая        
+    b[1].lo_hz = 300;  b[1].hi_hz = 2200;   // 2: SSB узкая        
+    b[2].lo_hz = 100;  b[2].hi_hz = 4000;   // 3: широкая        
+    b[3].lo_hz = 450;  b[3].hi_hz = 950;        
+    b[3].cw_on = 1;                         // 4: CW 700 Гц        
+    b[4].lo_hz = 300;  b[4].hi_hz = 900;    // 5: резерв узкая        
+    b[5].lo_hz = 300;  b[5].hi_hz = 3000;   // 6: AM, АРУ off        
+    b[5].agc_on = 0;   b[5].gain_pct = 384;        
+    b[6].lo_hz = 200;  b[6].hi_hz = 3500;   // 7: резерв        
+}        
+  
+// Записать дефолтные банки — вызывается из af_store_poll при пустом секторе.    
+static void af_store_write_defaults(void) {    
+    af_bank_t preset[AF_STORE_BANKS];    
+    af_store_fill_defaults(preset);      
+    Serial.println("# store: no banks — writing defaults");    
+    Serial.flush();    
+    af_store_write_all(preset);   // reset Core1 + erase/program + restartCore1    
+}    
+  
+// Core 0, из loop(): отложенная запись дефолтных банков при пустом секторе.    
+void af_store_poll(void) {    
+    if (!s_need_defaults) return;    
+    s_need_defaults = false;    
+    af_store_write_defaults();    
+}  
