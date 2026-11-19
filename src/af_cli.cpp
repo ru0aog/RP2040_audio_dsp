@@ -559,7 +559,7 @@ static void bank_fill_defaults(af_bank_t* b) {
 // off — смещение поля в af_bank_t (для печати колонок cur/1..7).  
 // set — сеттер DSP (для команд вида "<метка> <значение>").  
 // ---------------------------------------------------------------------------  
-typedef enum { PT_U16, PT_I16, PT_ONOFF, PT_X100, PT_GAIN, PT_SEP } ptype_t;  
+typedef enum { PT_U16, PT_U8, PT_I16, PT_ONOFF, PT_X100, PT_GAIN, PT_SEP } ptype_t;    
   
 typedef struct {  
     const char* label;                 // "band lo", "tx pres f" — и команда  
@@ -610,7 +610,7 @@ static const af_param_t AF_PARAMS[] = {
     { "tx agc max",  PT_U16,   offsetof(af_bank_t, tx_agc_max_x10), P_SET(af_tx_set_agcmax) },  
     { "tx gate",     PT_U16,   offsetof(af_bank_t, tx_gate_thr),    P_SET(af_tx_set_gate) },  
     { "tx gate hld", PT_U16,   offsetof(af_bank_t, tx_gate_hold_ms),P_SET(af_tx_set_gatehold) },  
-    { "tx gate hys", PT_U16,   offsetof(af_bank_t, tx_gate_hyst_x10),P_SET(af_tx_set_gatehyst) },  
+    { "tx gate hys", PT_U8,    offsetof(af_bank_t, tx_gate_hyst_x10),P_SET(af_tx_set_gatehyst) },    
     { "tx gfloor",   PT_U16,   offsetof(af_bank_t, tx_gfloor),      P_SET(af_tx_set_gfloor) },  
     { "tx ap",       PT_ONOFF, offsetof(af_bank_t, tx_ap_on),       P_SET(af_tx_set_ap) },  
     { "tx soft",     PT_ONOFF, offsetof(af_bank_t, tx_softclip),    P_SET(af_tx_set_softclip) },  
@@ -630,7 +630,7 @@ static const af_param_t AF_PARAMS[] = {
     { "tx presmax",  PT_U16,   offsetof(af_bank_t, tx_presmax),     P_SET(af_tx_set_presmax) },  
     { "tx pres f",   PT_U16,   offsetof(af_bank_t, tx_pres_freq),   P_SET(af_tx_set_presfreq) },  
     { "tx pres q",   PT_U16,   offsetof(af_bank_t, tx_pres_q),      P_SET(af_tx_set_presq) },  
-    { "tx shelf",    PT_I16,   offsetof(af_bank_t, tx_shelf_db),    P_SET(af_tx_set_shelf) },  
+    { "tx shelf",    PT_U16,   offsetof(af_bank_t, tx_shelf_db),   P_SET(af_tx_set_shelf) },    
     { "tx shelf f",  PT_U16,   offsetof(af_bank_t, tx_shelf_freq),  P_SET(af_tx_set_shelffreq) },  
     { "tx shelf q",  PT_U16,   offsetof(af_bank_t, tx_shelf_q),     P_SET(af_tx_set_shelfq) },  
     { "tx exc",      PT_ONOFF, offsetof(af_bank_t, tx_exc_on),      P_SET(af_tx_set_exc) },  
@@ -644,11 +644,12 @@ static const af_param_t AF_PARAMS[] = {
 // Чтение поля банка по смещению (тип задаёт размер: u8/i16/u16).  
 static int32_t bank_field(const af_bank_t* b, const af_param_t* p) {  
     const uint8_t* base = (const uint8_t*)b;  
-    switch (p->type) {  
-        case PT_ONOFF: return (int32_t)*(const uint8_t*)(base + p->off);  
-        case PT_I16:   return (int32_t)*(const int16_t*)(base + p->off);  
-        default:       return (int32_t)*(const uint16_t*)(base + p->off);  
-    }  
+    switch (p->type) {    
+        case PT_ONOFF:    
+        case PT_U8:    return (int32_t)*(const uint8_t*)(base + p->off);    
+        case PT_I16:   return (int32_t)*(const int16_t*)(base + p->off);    
+        default:       return (int32_t)*(const uint16_t*)(base + p->off);    
+    }    
 }  
   
 // Диспетчер команд-меток: "<label> <value>" — longest match по таблице.  
