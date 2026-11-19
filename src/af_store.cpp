@@ -367,25 +367,25 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         r.crc = crc8((const uint8_t*)&r.d, sizeof(r.d));  
         memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));  
     }  
-  
-    // Как в маяке: жёсткий сброс Core 1 вместо флаговой парковки —  
-    // 100% гарантия, что Core 1 не трогает flash во время erase.  
-    multicore_reset_core1();    
-    busy_wait_us(100);    
-    
-    af_set_clk_nominal();               // reprogram_pll: 125 МГц + BAUDR=4  
-                                        // (31.25 МГц SCK). НЕ set_sys_clock_khz —  
-                                        // SDK ставит BAUDR=2 -> 62.5 МГц -> вис  
-    
-    uint32_t ints = save_and_disable_interrupts();     
+
+
+    // ЭТАП 1 (диагностика): стоп Core 1 -> 1 с -> рестарт. Без flash, без клоков.  
+    Serial.println("# save: park core1"); Serial.flush();  
+    //af_store_core1_park(5000);  
+    multicore_reset_core1(); 
+    Serial.println("# save: core1 parked"); Serial.flush();  
+
+    Serial.println("# save: clk -> nominal"); Serial.flush();    
+    af_set_clk_nominal();    
+
+    uint32_t ints = save_and_disable_interrupts();    
     do_flash_write(NULL);               // RAM: erase+program, XIP off    
     restore_interrupts(ints);    
-    flash_flush_cache();                // сброс XIP-кэша после записи    
+    flash_flush_cache();                // сброс XIP-кэша после записи 
     
-    // Возврат без ребута: разгон + перезапуск Core 1.    
-    af_set_clk();                       // обратно на 250 МГц (PLL + vreg + verify)    
-    rp2040.restartCore1();              // Core 1: setup1 -> loop1 
-    
+    af_set_clk();
+
+    rp2040.restartCore1();  
     Serial.println("# OK banks written");    
 }
 
