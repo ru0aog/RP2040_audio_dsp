@@ -28,7 +28,7 @@
 #include "af_voice.h"     // подмес голосовых клипов в выход
 #include "af_tx.h"        // TX-тракт: полоса/компрессия/клиппер  
 #include "af_gpio_ctl.h"  // af_gpio_bank_code — текущий банк с пинов
-#include "af_rec.h"       // цифровой магнитофон: 1 слот 25 с во flash    
+#include "af_rec.h"       // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)  
   
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -105,8 +105,8 @@ static void cli_help(void) {
     Serial.println("#   pwm on|off        — PWM-выход (off = несущая заглушена)");  
     Serial.println("#   voice [N|vol <0..400>] — голосовые сообщения");  
     Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест потока)");    
-    Serial.println("#   rec               — запись в слот (25 с, источник = активный тракт)");    
-    Serial.println("#   play              — воспроизведение слота (RX — подмес, TX — вместо микрофона)");    
+    Serial.println("#   rec               — запись в RAM (~7.8 с, источник = активный тракт)");      
+    Serial.println("#   play              — воспроизведение (RX — подмес, TX — вместо микрофона)");      
     Serial.println("#   stop              — стоп записи/воспроизведения");    
     Serial.println("#   recs              — состояние слота");    
     Serial.println("#   help / h / ?      — эта справка");      
@@ -120,7 +120,8 @@ static void cli_help(void) {
 
 // Периодический дамп: dump <N> — каждые N сек, dump 0/off — стоп.  
 static uint32_t dump_period_ms = 0;  
-static uint32_t dump_next_ms   = 0;  
+static uint32_t dump_next_ms   = 0;
+static bool cli_rec_tx = false;   // CLI rec включил TX — stop вернёт RX  
 
 static void cli_stats(void) {      
     uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);      
@@ -869,12 +870,18 @@ static void cli_exec(char* line) {
         else Serial.println("# ERR: ramp on|off");  
     }  
 
-    else if (strcmp(cmd, "tx") == 0) {  
-        char* a = strtok(NULL, " \t");  
-        if (a && strcmp(a, "on") == 0)       { af_dsp_set_tx(true);  Serial.println("# OK tx=on"); }  
-        else if (a && strcmp(a, "off") == 0) { af_dsp_set_tx(false); Serial.println("# OK tx=off"); }  
-        else Serial.println("# ERR: tx on|off");  
-    }  
+    else if (strcmp(cmd, "tx") == 0) {    
+        char* a = strtok(NULL, " \t");    
+        if (a && strcmp(a, "on") == 0)       { af_dsp_set_tx(true);  Serial.println("# OK tx=on"); }    
+        else if (a && strcmp(a, "off") == 0) {    
+            if (af_rec_is_recording() || af_rec_is_playing()) {    
+                Serial.println("# ERR: tx off — rec/play active (stop сначала)");    
+                return;    
+            }    
+            af_dsp_set_tx(false); Serial.println("# OK tx=off");    
+        }    
+        else Serial.println("# ERR: tx on|off");    
+    }    
 
     else if (strcmp(cmd, "txband") == 0) {  
         char* s_lo = strtok(NULL, " \t");  
@@ -1215,39 +1222,44 @@ static void cli_exec(char* line) {
         Serial.printf("# OK txagcmax=%lu\n", (unsigned long)af_tx_agcmax());    
     }    
 
-    else if (strcmp(cmd, "rec") == 0) {    
-        if (af_rec_start()) {    
-            Serial.printf("# OK rec: %s тракт, слот %lu с\n",    
-                          af_dsp_tx_on() ? "tx" : "rx",    
-                          (unsigned long)(AF_REC_MAX_SAMP / AF_FS_OUT_HZ));    
-        } else {    
-            Serial.println("# ERR rec: занято (play/rec активен) или tx/rx переключается");    
-        }    
-    }    
+    else if (strcmp(cmd, "rec") == 0) {      
+        // Как GP9: тракт -> TX (микрофон), без PTT. Флаг — чтобы stop вернул RX.    
+        if (af_rec_is_playing()) { Serial.println("# ERR rec: play активен"); return; }    
+        cli_rec_tx = !af_dsp_tx_on();          // TX включили мы — мы и вернём    
+        if (cli_rec_tx) af_dsp_set_tx(1);    
+        if (af_rec_start()) {      
+            Serial.printf("# OK rec: tx тракт (микрофон), буфер %lu с\n",        
+                          (unsigned long)(AF_REC_RAM_SAMP * AF_REC_DECIM / AF_FS_OUT_HZ));        
+        } else {      
+            if (cli_rec_tx) { af_dsp_set_tx(0); cli_rec_tx = false; }    
+            Serial.println("# ERR rec: занято или tx/rx переключается");      
+        }      
+    }      
     else if (strcmp(cmd, "play") == 0) {    
         if (af_rec_play()) {      
-            Serial.printf("# OK play: %s тракт, %lu с\n",      
-                          af_dsp_tx_on() ? "tx" : "rx",      
-                          (unsigned long)(af_rec_len_samples() / AF_FS_OUT_HZ));      
+            Serial.printf("# OK play: %s тракт, %lu с\n",        
+                          af_dsp_tx_on() ? "tx" : "rx",        
+                          (unsigned long)(af_rec_len_samples() * AF_REC_DECIM / AF_FS_OUT_HZ));        
         } else if (af_rec_len_samples() == 0) {      
             Serial.println("# ERR play: слот пуст");    
         } else {    
             Serial.println("# ERR play: занято (rec/play активен)");    
         }    
     }    
-    else if (strcmp(cmd, "stop") == 0) {    
-        af_rec_stop();    
-        Serial.println("# OK stop");    
-    }    
+    else if (strcmp(cmd, "stop") == 0) {      
+        af_rec_stop();      
+        if (cli_rec_tx) { af_dsp_set_tx(0); cli_rec_tx = false; }    
+        Serial.println("# OK stop");      
+    }      
     else if (strcmp(cmd, "recs") == 0) {      
         const uint32_t len = af_rec_len_samples();        
         if (len == 0) {        
             Serial.println("# rec: slot empty");        
         } else {        
-            Serial.printf("# rec: slot used %lu samp (%lu.%lu s)  state=%s\n",        
-                          (unsigned long)len,        
-                          (unsigned long)(len / AF_FS_OUT_HZ),        
-                          (unsigned long)((len % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),        
+            Serial.printf("# rec: slot used %lu samp (%lu.%lu s)  state=%s\n",          
+                          (unsigned long)len,          
+                          (unsigned long)(len * AF_REC_DECIM / AF_FS_OUT_HZ),          
+                          (unsigned long)((len * AF_REC_DECIM % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),             
                           af_rec_is_recording() ? "REC" :        
                           af_rec_is_playing()   ? "PLAY" : "idle");        
         }        
@@ -1420,14 +1432,22 @@ void af_cli_init(void) {
     Serial.println("# CLI ready. 'help' — список команд.");  
 }  
   
-void af_cli_poll(void) {    
-    static char line[64];    
-    static uint8_t pos = 0;    
-    
-    if (dump_period_ms != 0 && (int32_t)(millis() - dump_next_ms) >= 0) {    
-        dump_next_ms = millis() + dump_period_ms;    
-        cli_dump();    
+void af_cli_poll(void) {
+    static char line[64];
+    static uint8_t pos = 0;
+
+    // CLI rec включил TX, а запись кончилась без команды stop
+    // (авто-стоп по переполнению буфера в af_rec_poll) — вернуть RX.
+    if (cli_rec_tx && !af_rec_is_recording()) {    
+        af_dsp_set_tx(0);    
+        cli_rec_tx = false;    
+        Serial.println("# rec end -> tx released (rx)");    
     }    
+      
+    if (dump_period_ms != 0 && (int32_t)(millis() - dump_next_ms) >= 0) {      
+        dump_next_ms = millis() + dump_period_ms;      
+        cli_dump();      
+    }      
     
     while (Serial.available() > 0) {    
         char c = (char)Serial.read();  
