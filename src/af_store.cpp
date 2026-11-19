@@ -273,15 +273,15 @@ bool af_store_save(uint8_t idx) {
     }  
     Serial.println("# save: core1 parked"); Serial.flush(); 
 
-    Serial.println("# save: clk -> nominal"); Serial.flush();    
-    af_set_clk_nominal();    
+    //Serial.println("# save: clk -> nominal"); Serial.flush();    
+    //af_set_clk_nominal();    
 
     uint32_t ints = save_and_disable_interrupts();    
     do_flash_write(NULL);               // RAM: erase+program, XIP off    
     restore_interrupts(ints);    
     flash_flush_cache();                // сброс XIP-кэша после записи 
     
-    af_set_clk();  
+    //af_set_clk();  
     af_store_core1_unpark();
     return true;    
 }  
