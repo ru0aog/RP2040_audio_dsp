@@ -1,3 +1,4 @@
+# DEV.md — RP2040_audio_dsp  
 
 ---  
   
@@ -252,4 +253,43 @@ enum расширен `VOICE_PROF_1..VOICE_PROF_7` (id 07–13), в
    `clock_configure` (коммит `d08ebcd`, см. BUG-012). Симптом  
    регрессии: `stats` → `flash_sck=1.5 MHz (BAUDR=162)`,  
    `core1 load` ~100%, `cap dropped` растёт.  
+
+## af_rec: RAM-магнитофон с децимацией ×2 (2026-11)  
+  
+### Архитектура  
+- Запись только в RAM: ram_buf[AF_REC_RAM_SAMP=60000], ~117 КБ.  
+- Децимация ×2 при записи (AF_REC_DECIM=2): каждый 2-й отсчёт,  
+  15464 -> 7732 Гц, ~7.8 с в буфере.  
+- Воспроизведение: линейная интерполяция ×2 (midpoint между  
+  соседними отсчётами) обратно в 15464 Гц.  
+- Flash не используется — запись не персистентна.  
+- Источник записи — активный тракт после всех обработок.  
+  
+### Пины (af_gpio_ctl.cpp)  
+- GP9 (LOW) -> запись: тракт в TX (микрофон), БЕЗ PTT; open -> стоп+RX.  
+- GP10 (LOW) -> воспроизведение: тракт в TX + PTT на GP8 (как выход,  
+  LOW) + звук в TX-тракт; open/конец буфера -> стоп+RX.  
+- GP8 — двойная роль: вход PTT / выход PTT при playback.  
+  Флаг sw_ptt_active отсекает входную ветку GP8 на время play.  
+- Добиватели в af_gpio_ctl_poll: авто-стоп по буферу при нажатом  
+  GP9/GP10 возвращает тракт в RX и отпускает PTT.  
+- Приоритет: play > rec; ручной PTT во время play игнорируется.  
+  
+### CLI (af_cli.cpp)  
+- rec: включает TX-тракт (микрофон) сам — флаг cli_rec_tx,  
+  возврат в RX по stop/авто-стопу (добиватель в af_cli_poll).  
+- play: OK печатается ПОСЛЕ окончания — флаг cli_play_pending.  
+- tx off: заблокирован во время rec/play (ERR ... active).  
+- Секунды везде: len * AF_REC_DECIM / AF_FS_OUT_HZ.  
+  
+### Файлы  
+- src/af_rec.h — AF_REC_RAM_SAMP, AF_REC_DECIM, AF_REC_MAX_SAMP  
+  (теперь = AF_REC_RAM_SAMP, не от flash-слота).  
+- src/af_rec.cpp — RAM-only, без flash/af_store/park-кода.  
+- src/af_gpio_ctl.cpp — apply_rec/apply_play, sw_ptt_active.  
+- src/af_cli.cpp — cli_rec_tx, cli_play_pending, tx off guard.  
+  
+### Проверено на железе  
+GP9: запись 7.7 с, авто-стоп -> RX. GP10: TX+PTT+звук -> RX.  
+CLI rec/play/stop/recs/tx off — все сценарии, перезапись буфера.  
 
