@@ -253,7 +253,7 @@ bool af_store_save(uint8_t idx) {
     multicore_reset_core1();  
     busy_wait_us(100);  
   
-    set_sys_clock_khz(125000, false);   // номинал, как vfo_clk_boost_exit  
+    af_set_clk_nominal();               // 125 МГц, самодельный путь reprogram_pll    
 
     uint32_t ints = save_and_disable_interrupts();    
     do_flash_write(NULL);               // RAM: erase+program, XIP off    

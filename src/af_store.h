@@ -99,8 +99,8 @@ void af_store_core1_park_poll(void);
 // IRQ-off + erase/program + af_set_clk + restartCore1 — без ребута.    
 void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]);  
 
-void af_set_clk(void);   // разгон clk_sys по pll_cfg (RP2040_audio_dsp.cpp)  
-
+void af_set_clk(void);          // разгон clk_sys по pll_cfg (RP2040_audio_dsp.cpp)    
+void af_set_clk_nominal(void);  // номинал 125 МГц перед flash-записью (тот же reprogram_pll)    
   
 // Core 0: припарковать Core 1 (spin в RAM, IRQ off) перед flash-операцией.    
 // false = таймаут, Core 1 не припаркован — flash трогать нельзя.    

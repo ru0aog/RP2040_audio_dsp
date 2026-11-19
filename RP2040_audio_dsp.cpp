@@ -52,11 +52,11 @@ struct PllConfig {
   
 // 250 МГц: VCO = 12М * 125 = 1500 МГц, p1=6, p2=1 → 250 МГц  
 // VSEL 1.30 В, BAUDR=7 → SCK флеша ~35.7 МГц  
-
-
 static const PllConfig pll_cfg = { 250000000UL, 1, 125, 6, 1, 7, 7 };
-//static const PllConfig pll_cfg = { 133000000UL, 1, 133, 6, 2, 1, 4 };
-  
+// Номинал для flash-операций: VCO = 12М * 125 = 1500 МГц, p1=6, p2=2 → 125 МГц    
+// BAUDR=4 → SCK флеша 31.25 МГц. Тот же путь reprogram_pll, что и разгон.    
+static const PllConfig pll_cfg_nominal = { 125000000UL, 1, 125, 6, 2, 1, 4 };
+
 static uint32_t current_clk_sys_hz = VFO_CLK_SYS_NOMINAL_HZ;  
   
 // ----------------------------------------------------------------------------  
@@ -142,6 +142,17 @@ void af_set_clk(void) {
   
     current_clk_sys_hz = meas_hz;  
 }
+
+// Переход на номинал 125 МГц перед flash-записью — тем же самодельным    
+// путём reprogram_pll (XOSC -> pll_deinit/init -> LOCK -> PLL -> BAUDR).    
+// НЕ использовать set_sys_clock_khz: SDK-путь переконфигурирует clk_peri/    
+// usb/adc и PLL по своей логике, ломая состояние для обратного af_set_clk.    
+void __not_in_flash_func(af_set_clk_nominal)(void) {    
+    uint32_t ints = save_and_disable_interrupts();    
+    reprogram_pll(&pll_cfg_nominal);    
+    restore_interrupts(ints);    
+    current_clk_sys_hz = pll_cfg_nominal.clk_hz;    
+}    
   
 // ============================================================================  
 // Arduino  
