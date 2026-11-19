@@ -121,7 +121,8 @@ static void cli_help(void) {
 // Периодический дамп: dump <N> — каждые N сек, dump 0/off — стоп.  
 static uint32_t dump_period_ms = 0;  
 static uint32_t dump_next_ms   = 0;
-static bool cli_rec_tx = false;   // CLI rec включил TX — stop вернёт RX  
+static bool cli_rec_tx = false;        // CLI rec включил TX — stop вернёт RX    
+static bool cli_play_pending = false;  // CLI play запущен — OK после окончания    
 
 static void cli_stats(void) {      
     uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);      
@@ -1235,22 +1236,21 @@ static void cli_exec(char* line) {
             Serial.println("# ERR rec: занято или tx/rx переключается");      
         }      
     }      
-    else if (strcmp(cmd, "play") == 0) {    
-        if (af_rec_play()) {      
-            Serial.printf("# OK play: %s тракт, %lu с\n",        
-                          af_dsp_tx_on() ? "tx" : "rx",        
-                          (unsigned long)(af_rec_len_samples() * AF_REC_DECIM / AF_FS_OUT_HZ));        
-        } else if (af_rec_len_samples() == 0) {      
-            Serial.println("# ERR play: слот пуст");    
-        } else {    
-            Serial.println("# ERR play: занято (rec/play активен)");    
-        }    
-    }    
-    else if (strcmp(cmd, "stop") == 0) {      
-        af_rec_stop();      
-        if (cli_rec_tx) { af_dsp_set_tx(0); cli_rec_tx = false; }    
-        Serial.println("# OK stop");      
+    else if (strcmp(cmd, "play") == 0) {      
+        if (af_rec_play()) {        
+            cli_play_pending = true;   // OK — после окончания (af_cli_poll)    
+        } else if (af_rec_len_samples() == 0) {        
+            Serial.println("# ERR play: слот пуст");      
+        } else {      
+            Serial.println("# ERR play: занято (rec/play активен)");      
+        }      
     }      
+    else if (strcmp(cmd, "stop") == 0) {        
+        af_rec_stop();        
+        if (cli_rec_tx) { af_dsp_set_tx(0); cli_rec_tx = false; }      
+        cli_play_pending = false;   // прерывание — OK play не печатаем    
+        Serial.println("# OK stop");        
+    }        
     else if (strcmp(cmd, "recs") == 0) {      
         const uint32_t len = af_rec_len_samples();        
         if (len == 0) {        
@@ -1438,10 +1438,18 @@ void af_cli_poll(void) {
 
     // CLI rec включил TX, а запись кончилась без команды stop
     // (авто-стоп по переполнению буфера в af_rec_poll) — вернуть RX.
-    if (cli_rec_tx && !af_rec_is_recording()) {    
-        af_dsp_set_tx(0);    
-        cli_rec_tx = false;    
-        Serial.println("# rec end -> tx released (rx)");    
+    if (cli_rec_tx && !af_rec_is_recording()) {      
+        af_dsp_set_tx(0);      
+        cli_rec_tx = false;      
+        Serial.println("# rec end -> tx released (rx)");      
+    }      
+  
+    // CLI play завершился по буферу — OK после проигрывания    
+    if (cli_play_pending && !af_rec_is_playing()) {    
+        cli_play_pending = false;    
+        Serial.printf("# OK play: %s тракт, %lu с\n",    
+                      af_dsp_tx_on() ? "tx" : "rx",    
+                      (unsigned long)(af_rec_len_samples() * AF_REC_DECIM / AF_FS_OUT_HZ));    
     }    
       
     if (dump_period_ms != 0 && (int32_t)(millis() - dump_next_ms) >= 0) {      
