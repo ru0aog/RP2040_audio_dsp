@@ -654,22 +654,40 @@ static int32_t bank_field(const af_bank_t* b, const af_param_t* p) {
   
 // Диспетчер команд-меток: "<label> <value>" — longest match по таблице.  
 // Вызывается до strtok (строка ещё целая). true = команда обработана.  
-static bool cli_param_try(char* line) {  
-    const af_param_t* best = NULL;  
-    size_t best_len = 0;  
-    for (size_t i = 0; i < AF_PARAMS_COUNT; i++) {  
-        const af_param_t* p = &AF_PARAMS[i];  
-        if (p->type == PT_SEP) continue;  
-        size_t l = strlen(p->label);  
-        if (l > best_len && strncmp(line, p->label, l) == 0 && line[l] == ' ') {  
-            best = p; best_len = l;  
-        }  
-    }  
-    if (best == NULL) return false;  
-  
-    char* v = line + best_len;  
-    while (*v == ' ') v++;  
-    if (*v == '\0') { Serial.printf("# ERR: %s <value>\n", best->label); return true; }  
+static bool cli_param_try(char* line) {    
+    const af_param_t* best = NULL;    
+    size_t best_len = 0;    
+    for (size_t i = 0; i < AF_PARAMS_COUNT; i++) {    
+        const af_param_t* p = &AF_PARAMS[i];    
+        if (p->type == PT_SEP) continue;    
+        size_t l = strlen(p->label);    
+        // Метка + пробел (значение) или метка + конец строки (чтение).    
+        if (l > best_len && strncmp(line, p->label, l) == 0 &&    
+            (line[l] == ' ' || line[l] == '\0')) {    
+            best = p; best_len = l;    
+        }    
+    }    
+    if (best == NULL) return false;    
+    
+    char* v = line + best_len;    
+    while (*v == ' ') v++;    
+    if (*v == '\0') {    
+        // Голая метка — чтение текущего значения (снимок DSP = столбец cur).    
+        af_bank_t cur;    
+        af_store_snapshot(&cur);    
+        int32_t f = bank_field(&cur, best);    
+        switch (best->type) {    
+            case PT_ONOFF: Serial.printf("# %s = %s\n", best->label, f ? "on" : "off"); break;    
+            case PT_X100:  Serial.printf("# %s = %ld.%02ld\n", best->label,    
+                                         (long)(f / 100), (long)(f % 100)); break;    
+            case PT_GAIN: {    
+                unsigned g100 = (unsigned)f * 100u / 256u;    
+                Serial.printf("# %s = %u.%02u\n", best->label, g100 / 100u, g100 % 100u); break;    
+            }    
+            default:       Serial.printf("# %s = %ld\n", best->label, (long)f); break;    
+        }    
+        return true;    
+    }    
   
     int32_t val;  
     if (best->type == PT_ONOFF) {  
