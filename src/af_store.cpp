@@ -266,11 +266,12 @@ bool af_store_save(uint8_t idx) {
     s_sector_img[3] = 0xFF;    
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));     
 
-    // ЭТАП 1 (диагностика): стоп Core 1 -> 1 с -> рестарт. Без flash, без клоков.  
-    Serial.println("# save: park core1"); Serial.flush();  
-    //af_store_core1_park(5000);  
-    multicore_reset_core1(); 
-    Serial.println("# save: core1 parked"); Serial.flush();  
+    Serial.println("# save: park core1"); Serial.flush();    
+    if (!af_store_core1_park(5000)) {  
+        Serial.println("# save: park TIMEOUT — abort");  
+        return false;  
+    }  
+    Serial.println("# save: core1 parked"); Serial.flush(); 
 
     Serial.println("# save: clk -> nominal"); Serial.flush();    
     af_set_clk_nominal();    
@@ -280,10 +281,8 @@ bool af_store_save(uint8_t idx) {
     restore_interrupts(ints);    
     flash_flush_cache();                // сброс XIP-кэша после записи 
     
-    af_set_clk();
-
-    rp2040.restartCore1();  
-    Serial.println("# save: done"); Serial.flush();   
+    af_set_clk();  
+    af_store_core1_unpark();
     return true;    
 }  
   
@@ -369,11 +368,12 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
     }  
 
 
-    // ЭТАП 1 (диагностика): стоп Core 1 -> 1 с -> рестарт. Без flash, без клоков.  
-    Serial.println("# save: park core1"); Serial.flush();  
-    //af_store_core1_park(5000);  
-    multicore_reset_core1(); 
-    Serial.println("# save: core1 parked"); Serial.flush();  
+    Serial.println("# save: park core1"); Serial.flush();    
+    if (!af_store_core1_park(5000)) {  
+        Serial.println("# save: park TIMEOUT — abort");  
+        return;  
+    }  
+    Serial.println("# save: core1 parked"); Serial.flush(); 
 
     Serial.println("# save: clk -> nominal"); Serial.flush();    
     af_set_clk_nominal();    
@@ -383,9 +383,8 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
     restore_interrupts(ints);    
     flash_flush_cache();                // сброс XIP-кэша после записи 
     
-    af_set_clk();
-
-    rp2040.restartCore1();  
+    af_set_clk();  
+    af_store_core1_unpark();
     Serial.println("# OK banks written");    
 }
 
