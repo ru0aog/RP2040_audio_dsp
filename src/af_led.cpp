@@ -94,6 +94,8 @@ void af_led_init(void) {
 // ----------------------------------------------------------------------------  
 // Heartbeat: цвет вспышки = цвет банка; NR подмешивает синий, NT — красный.  
 void af_led_poll(void) {  
+    //return;
+
     static uint32_t t0     = 0;  
     static uint8_t  last_g = 0xFF, last_r = 0xFF, last_b = 0xFF;  
   

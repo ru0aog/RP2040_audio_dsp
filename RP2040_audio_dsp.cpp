@@ -184,7 +184,8 @@ void setup()
     af_led_set(0, 10, 0);
 
     __dmb();  
-    core0_ready = true;  
+    core0_ready = true;
+    af_led_set(0, 0, 0);
 }  
   
 void loop()  

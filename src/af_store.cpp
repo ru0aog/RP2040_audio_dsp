@@ -253,13 +253,24 @@ bool af_store_save(uint8_t idx) {
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));     
 
     // ЭТАП 1 (диагностика): стоп Core 1 -> 1 с -> рестарт. Без flash, без клоков.  
-    Serial.println("# save: reset core1"); Serial.flush();  
-    multicore_reset_core1();  
-    busy_wait_us(100);  
+    Serial.println("# save: park core1"); Serial.flush();  
+    //af_store_core1_park(5000);  
+    multicore_reset_core1(); 
+    Serial.println("# save: core1 parked"); Serial.flush();  
 
     Serial.println("# save: clk -> nominal"); Serial.flush();    
     af_set_clk_nominal();    
-    Serial.println("# save: nominal ok, wait 1s"); Serial.flush(); 
+    Serial.println("# save: nominal ok"); Serial.flush();    
+  
+    // ЭТАП 3: IRQ-off окно, внутри — только пауза, без flash    
+    Serial.println("# save: irq off"); Serial.flush();
+    
+    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
+    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);   
+
+    //af_led_set(100, 0, 0);    
+    
+    Serial.println("# save: irq on"); Serial.flush();    
   
     // Дамп параметров записи    
     Serial.printf("# AF_FLASH_OFF      = 0x%08lX (%lu)\n",    
@@ -271,17 +282,17 @@ bool af_store_save(uint8_t idx) {
     Serial.printf("# rec_addr(%d)       = %lu\n", idx, (unsigned long)rec_addr(idx));    
     Serial.printf("# sizeof(rec)       = %u  sizeof(d)=%u\n",    
                   (unsigned)sizeof(r), (unsigned)sizeof(r.d));    
-    Serial.printf("# hdr: %02X %02X %02X %02X\n",    
-                  s_sector_img[0], s_sector_img[1], s_sector_img[2], s_sector_img[3]);    
-    Serial.printf("# crc               = 0x%02X\n", r.crc);    
-    Serial.flush();    
+    Serial.printf("# hdr: %02X %02X %02X %02X\n",
+                  s_sector_img[0], s_sector_img[1], s_sector_img[2], s_sector_img[3]);
+    Serial.printf("# crc               = 0x%02X\n", r.crc);
+    Serial.flush();
   
-    delay(1000);    
-    Serial.println("# save: clk -> 250"); Serial.flush();    
-    af_set_clk();    
-    Serial.println("# save: restart core1"); Serial.flush();    
-    rp2040.restartCore1();    
-    Serial.println("# save: done"); Serial.flush();    
+    Serial.println("# save: clk -> 250"); Serial.flush();  
+    af_set_clk();  
+    Serial.println("# save: unpark core1"); Serial.flush();  
+    //af_store_core1_unpark();  
+    rp2040.restartCore1();  
+    Serial.println("# save: done"); Serial.flush();   
     return true;    
 }  
   

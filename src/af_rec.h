@@ -19,7 +19,7 @@
 #include <Arduino.h>
 // RAM-буфер записи — ограничение свободная RAM.    
 // AF_REC_MAX_SAMP = размер буфера (нужен CLI: recs/rec).    
-#define AF_REC_RAM_SAMP   60000u          // 117 КБ    
+#define AF_REC_RAM_SAMP   50000u          // 117 КБ    
 #define AF_REC_DECIM      2u              // децимация ×2: запись 7732 Гц ≈ 7.8 с    
 #define AF_REC_MAX_SAMP   AF_REC_RAM_SAMP    
   
