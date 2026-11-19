@@ -17,3 +17,7 @@ void af_gpio_ctl_poll(void);
   
 // Текущий код банка с GP2..GP4 (0 = ручной режим).    
 uint8_t af_gpio_bank_code(void);  
+
+// Управление PTT/TX для CLI (play voice_14 в TX+PTT, аналог GP10).    
+bool af_gpio_ptt_tx_on(void);    
+void af_gpio_ptt_tx_off(void);    

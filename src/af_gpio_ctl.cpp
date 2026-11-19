@@ -9,7 +9,8 @@
 //   GP9 — LOW -> запись: тракт -> TX (микрофон), без PTT.    
 //   GP10 — LOW -> воспроизведение: тракт -> TX + PTT на GP8, звук в TX.    
 //   Уровневая логика: LOW = активно, open = стоп.    
-//   sw_ptt_active: GP8 занят как выход — входная ветка PTT отсечена.    
+//   sw_ptt_active: GP8 занят как выход — входная ветка PTT отсечена.      
+//   af_gpio_ptt_tx_on/off — то же для CLI (play voice_14 в TX+PTT).      
 //  
 // Опрос каждые AF_GPIO_POLL_MS мс, дебаунс AF_GPIO_STABLE чтений.  
 // Консольные команды имеют приоритет, но только до следующего изменения  
@@ -137,6 +138,27 @@ static void apply_play(bool grounded) {
             Serial.printf("[GPIO] GP%u open -> play off\n", ctl_play.pin);    
         }    
     }    
+} 
+
+// --- API для CLI: play voice_14 в TX с PTT (аналог GP10) -------------------    
+// Включает тракт TX + GP8 как выход PTT (LOW). Возвращает false,    
+// если PTT уже занят (sw_ptt_active) — повторный вызов не нужен.    
+bool af_gpio_ptt_tx_on(void) {    
+    if (sw_ptt_active) return false;    
+    af_dsp_set_tx(1);    
+    sw_ptt_active = true;    
+    pinMode(ctl_ptt.pin, OUTPUT);    
+    digitalWrite(ctl_ptt.pin, LOW);    
+    return true;    
+}    
+    
+// Отпускает PTT/TX: GP8 обратно на вход, тракт в RX.    
+void af_gpio_ptt_tx_off(void) {    
+    if (!sw_ptt_active) return;    
+    digitalWrite(ctl_ptt.pin, HIGH);    
+    pinMode(ctl_ptt.pin, INPUT_PULLUP);    
+    sw_ptt_active = false;    
+    af_dsp_set_tx(0);    
 }    
   
 static void apply_bank(uint8_t code) {  
@@ -277,14 +299,11 @@ void af_gpio_ctl_poll(void) {
     poll_pin(&ctl_rec);    
     poll_pin(&ctl_play);    
   
-    // Playback закончился по буферу, а GP10 ещё нажат — отпускаем PTT/TX      
-    if (sw_ptt_active && !af_rec_is_playing()) {      
-        digitalWrite(ctl_ptt.pin, HIGH);      
-        pinMode(ctl_ptt.pin, INPUT_PULLUP);      
-        sw_ptt_active = false;      
-        af_dsp_set_tx(0);      
-        Serial.println("[GPIO] play end -> ptt/tx released");      
-    }      
+    // Playback закончился по буферу (GP10 или CLI play voice_14) — отпускаем PTT/TX        
+    if (sw_ptt_active && !af_rec_is_playing()) {        
+        af_gpio_ptt_tx_off();        
+        Serial.println("[GPIO] play end -> ptt/tx released");        
+    }        
     // Запись закончилась по буферу (авто-стоп), а GP9 ещё нажат — тракт в RX      
     if (ctl_rec.stable && !af_rec_is_recording() && !sw_ptt_active && af_dsp_tx_on()) {      
         af_dsp_set_tx(0);      
