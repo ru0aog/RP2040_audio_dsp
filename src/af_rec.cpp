@@ -6,14 +6,18 @@
 // отсчёт (децимация ×2: 15464 -> 7732 Гц, ~7.8 с в 60000 отсчётов).  
 // Воспроизведение: af_rec_mix/af_rec_src читают ram_buf с интерполяцией  
 // ×2 (линейная, между соседними отсчётами).  
-// Пины: GP9 = запись (тракт -> TX, микрофон, без PTT),  
-//       GP10 = воспроизведение (тракт -> TX + PTT на GP8, звук в TX).  
+// Пины: GP9 = запись (тракт -> TX, микрофон, без PTT),    
+//       GP10 = воспроизведение (тракт -> TX + PTT на GP8, звук в TX).    
+// Если с момента старта записи не было (rec_len == 0) — воспроизводится    
+// клип-заглушка voice_14 (полная частота, без интерполяции). После первой    
+// записи GP10/CLI play переключаются на RAM-буфер.    
 // ============================================================================  
 #include <Arduino.h>  
 #include "af_rec.h"  
 #include "af_config.h"  
 #include "af_dsp.h"  
-#include "pico/stdlib.h"  
+#include "pico/stdlib.h"
+#include "voice/voice_14.inc"   // клип-заглушка: играется при пустом RAM-буфере 
 
 typedef enum { ST_IDLE = 0, ST_REC, ST_PLAY } rec_state_t;    
   
@@ -27,7 +31,9 @@ static volatile uint8_t     rec_src_tx = 0;
 static volatile uint32_t    decim_phase = 0;   // фаза дециматора (запись)  
 static volatile uint32_t    interp_phase = 0;  // фаза интерполятора (play)  
 static int16_t              prev_samp = 0;     // предыдущий отсчёт для интерполяции  
-  
+static volatile uint8_t     play_src = 0;      // 0 = ram_buf (×2 interp), 1 = voice_14 (1:1)    
+static volatile uint32_t    play_len = 0;      // длина текущего воспроизведения  
+
 // --- RAM-буфер записи --------------------------------------------------------  
 static int16_t  ram_buf[AF_REC_RAM_SAMP];  
   
@@ -67,16 +73,24 @@ void af_rec_stop(void) {
     // flash-дамп убран — запись живёт только в RAM до следующей записи/ребута  
 }  
   
-bool af_rec_play(void) {    
-    if (state != ST_IDLE || rec_len == 0) return false;    
-    pos = 0;  
-    interp_phase = 0;  
-    prev_samp = 0;  
-    state = ST_PLAY;  
-    af_rec_active = 2;
-    Serial.printf("# rec: play %lu samp\n", (unsigned long)rec_len);    
-    return true;    
-}    
+bool af_rec_play(void) {      
+    if (state != ST_IDLE) return false;      
+    pos = 0;    
+    interp_phase = 0;    
+    prev_samp = 0;    
+    if (rec_len == 0) {                     // записи не было — клип-заглушка    
+        play_src = 1;    
+        play_len = clip_voice_14_len;    
+        Serial.printf("# rec: play %lu samp (voice14)\n", (unsigned long)play_len);    
+    } else {    
+        play_src = 0;    
+        play_len = rec_len;    
+        Serial.printf("# rec: play %lu samp (ram)\n", (unsigned long)play_len);    
+    }    
+    state = ST_PLAY;    
+    af_rec_active = 2;  
+    return true;      
+}      
   
 void af_rec_play_stop(void) {    
     if (state == ST_PLAY) {
@@ -102,28 +116,36 @@ void __not_in_flash_func(af_rec_push)(int16_t s) {
     }  
 }  
   
-int16_t __not_in_flash_func(af_rec_mix)(int16_t s) {    
-    if (state != ST_PLAY) return s;    
-    if (pos >= rec_len) { state = ST_IDLE; af_rec_active = 0; return s; }    
-    int16_t cur = ram_buf[pos];  
-    int32_t v;  
-    if (++interp_phase >= AF_REC_DECIM) { interp_phase = 0; pos++; v = s + cur; }  
-    else                                { v = s + (prev_samp + cur) / 2; }  
-    prev_samp = cur;  
-    if (v > 32767) v = 32767; else if (v < -32768) v = -32768;    
-    return (int16_t)v;    
-}      
+int16_t __not_in_flash_func(af_rec_mix)(int16_t s) {      
+    if (state != ST_PLAY) return s;      
+    if (pos >= play_len) { state = ST_IDLE; af_rec_active = 0; return s; }      
+    int32_t v;    
+    if (play_src) {                          // voice_14: полная частота, 1:1    
+        v = s + clip_voice_14[pos++];    
+    } else {                                 // ram_buf: интерполяция ×2    
+        int16_t cur = ram_buf[pos];    
+        if (++interp_phase >= AF_REC_DECIM) { interp_phase = 0; pos++; v = s + cur; }    
+        else                                { v = s + (prev_samp + cur) / 2; }    
+        prev_samp = cur;    
+    }    
+    if (v > 32767) v = 32767; else if (v < -32768) v = -32768;      
+    return (int16_t)v;      
+}        
   
-int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {    
-    if (state != ST_PLAY) return mic;    
-    if (pos >= rec_len) { state = ST_IDLE; af_rec_active = 0; return mic; }    
-    int16_t cur = ram_buf[pos];  
-    int32_t v;  
-    if (++interp_phase >= AF_REC_DECIM) { interp_phase = 0; pos++; v = cur; }  
-    else                                { v = (prev_samp + cur) / 2; }  
-    prev_samp = cur;  
-    return v;                            // замещение микрофона  
-}    
+int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {      
+    if (state != ST_PLAY) return mic;      
+    if (pos >= play_len) { state = ST_IDLE; af_rec_active = 0; return mic; }      
+    int32_t v;    
+    if (play_src) {                          // voice_14: полная частота, 1:1    
+        v = clip_voice_14[pos++];    
+    } else {                                 // ram_buf: интерполяция ×2    
+        int16_t cur = ram_buf[pos];    
+        if (++interp_phase >= AF_REC_DECIM) { interp_phase = 0; pos++; v = cur; }    
+        else                                { v = (prev_samp + cur) / 2; }    
+        prev_samp = cur;    
+    }    
+    return v;                            // замещение микрофона    
+}      
   
 // --- Core 0: контроль записи (смена тракта, переполнение буфера) --------------  
 void af_rec_poll(void) {          
