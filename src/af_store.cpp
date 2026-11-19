@@ -260,37 +260,12 @@ bool af_store_save(uint8_t idx) {
 
     Serial.println("# save: clk -> nominal"); Serial.flush();    
     af_set_clk_nominal();    
-    Serial.println("# save: nominal ok"); Serial.flush();    
-  
-    // ЭТАП 3: IRQ-off окно, внутри — только пауза, без flash    
-    Serial.println("# save: irq off"); Serial.flush();
-    
-    flash_range_erase(AF_FLASH_OFF, FLASH_SECTOR_SIZE);  
-    flash_range_program(AF_FLASH_OFF, s_sector_img, FLASH_SECTOR_SIZE);   
 
-    //af_led_set(100, 0, 0);    
+    uint32_t ints = save_and_disable_interrupts();    
+    do_flash_write(NULL);               // RAM: erase+program, XIP off    
+    restore_interrupts(ints);    
+    flash_flush_cache();                // сброс XIP-кэша после записи 
     
-    Serial.println("# save: irq on"); Serial.flush();    
-  
-    // Дамп параметров записи    
-    Serial.printf("# AF_FLASH_OFF      = 0x%08lX (%lu)\n",    
-                  (unsigned long)AF_FLASH_OFF, (unsigned long)AF_FLASH_OFF);    
-    Serial.printf("# FLASH_SECTOR_SIZE = %lu\n", (unsigned long)FLASH_SECTOR_SIZE);    
-    Serial.printf("# XIP addr          = 0x%08lX\n",    
-                  (unsigned long)(XIP_BASE + AF_FLASH_OFF));    
-    Serial.printf("# s_sector_img      = 0x%08lX\n", (unsigned long)s_sector_img);    
-    Serial.printf("# rec_addr(%d)       = %lu\n", idx, (unsigned long)rec_addr(idx));    
-    Serial.printf("# sizeof(rec)       = %u  sizeof(d)=%u\n",    
-                  (unsigned)sizeof(r), (unsigned)sizeof(r.d));    
-    Serial.printf("# hdr: %02X %02X %02X %02X\n",
-                  s_sector_img[0], s_sector_img[1], s_sector_img[2], s_sector_img[3]);
-    Serial.printf("# crc               = 0x%02X\n", r.crc);
-    Serial.flush();
-  
-    Serial.println("# save: clk -> 250"); Serial.flush();  
-    af_set_clk();  
-    Serial.println("# save: unpark core1"); Serial.flush();  
-    //af_store_core1_unpark();  
     rp2040.restartCore1();  
     Serial.println("# save: done"); Serial.flush();   
     return true;    
