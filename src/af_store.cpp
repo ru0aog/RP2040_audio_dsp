@@ -43,7 +43,8 @@
 // Фиксированный адрес: последний сектор 2-МБ flash. Работает и на 4-МБ  
 // платах (сектор внутри чипа). НЕ привязывать к PICO_FLASH_SIZE_BYTES —  
 // при сборке под 4 МБ адрес уедет за пределы 2-МБ чипа.  
-#define AF_FLASH_OFF      0x1FF000u  
+// #define AF_FLASH_OFF      0x1FF000u  
+#define AF_FLASH_OFF  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE) 
 
 // Кооперативная парковка Core 1: idleOtherCore не работает, т.к. loop1  
 // не возвращается в Arduino-обёртку и не обрабатывает FIFO-handshake.  
@@ -251,32 +252,37 @@ bool af_store_save(uint8_t idx) {
     s_sector_img[3] = 0xFF;    
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));     
 
-    // Как в af_store_write_all: жёсткий reset Core 1 — детерминированно,      
-    // без гонки с флаговой парковкой. Далее — возврат clk + restartCore1.    
-    Serial.println("# w1"); Serial.flush();   // ДИАГ  
-    multicore_reset_core1();    
-    busy_wait_us(100);    
-    
-    Serial.println("# w2"); Serial.flush();   // ДИАГ  
-    af_set_clk_nominal();               // 125 МГц, самодельный путь reprogram_pll      
+    // ЭТАП 1 (диагностика): стоп Core 1 -> 1 с -> рестарт. Без flash, без клоков.  
+    Serial.println("# save: reset core1"); Serial.flush();  
+    multicore_reset_core1();  
+    busy_wait_us(100);  
 
-
-    Serial.println("# w3"); Serial.flush();   // ДИАГ    
-    uint32_t ints = save_and_disable_interrupts();        
-    do_flash_write(NULL);               // RAM: erase+program, XIP off        
-    restore_interrupts(ints);        
-    flash_flush_cache();                // сброс XIP-кэша после записи        
-      
-    // После flash-окна USB может быть в re-enumeration — Serial.println      
-    // блокируется. Только LED-маркеры, печать отложена в af_store_poll.      
-    af_led_set(100, 0, 100);            // синий: flash записан    
-    af_set_clk();                       // обратно на 250 МГц    
-    af_led_set(0, 100, 0);              // зелёный: clk поднят    
-    rp2040.restartCore1();              // Core 1: setup1 -> loop1     
-    af_led_set(100, 100, 100);          // белый: Core 1 перезапущен    
-      
-    s_save_done = idx;                  // OK напечатает af_store_poll    
-    return true;      
+    Serial.println("# save: clk -> nominal"); Serial.flush();    
+    af_set_clk_nominal();    
+    Serial.println("# save: nominal ok, wait 1s"); Serial.flush(); 
+  
+    // Дамп параметров записи    
+    Serial.printf("# AF_FLASH_OFF      = 0x%08lX (%lu)\n",    
+                  (unsigned long)AF_FLASH_OFF, (unsigned long)AF_FLASH_OFF);    
+    Serial.printf("# FLASH_SECTOR_SIZE = %lu\n", (unsigned long)FLASH_SECTOR_SIZE);    
+    Serial.printf("# XIP addr          = 0x%08lX\n",    
+                  (unsigned long)(XIP_BASE + AF_FLASH_OFF));    
+    Serial.printf("# s_sector_img      = 0x%08lX\n", (unsigned long)s_sector_img);    
+    Serial.printf("# rec_addr(%d)       = %lu\n", idx, (unsigned long)rec_addr(idx));    
+    Serial.printf("# sizeof(rec)       = %u  sizeof(d)=%u\n",    
+                  (unsigned)sizeof(r), (unsigned)sizeof(r.d));    
+    Serial.printf("# hdr: %02X %02X %02X %02X\n",    
+                  s_sector_img[0], s_sector_img[1], s_sector_img[2], s_sector_img[3]);    
+    Serial.printf("# crc               = 0x%02X\n", r.crc);    
+    Serial.flush();    
+  
+    delay(1000);    
+    Serial.println("# save: clk -> 250"); Serial.flush();    
+    af_set_clk();    
+    Serial.println("# save: restart core1"); Serial.flush();    
+    rp2040.restartCore1();    
+    Serial.println("# save: done"); Serial.flush();    
+    return true;    
 }  
   
 bool af_store_load(uint8_t idx) {  

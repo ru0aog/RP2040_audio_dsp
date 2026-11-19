@@ -50,7 +50,7 @@ struct PllConfig {
   
 // 250 МГц: VCO = 12М * 125 = 1500 МГц, p1=6, p2=1 → 250 МГц  
 // VSEL 1.30 В, BAUDR=6 → SCK флеша ~41.7 МГц  
-static const PllConfig pll_cfg = { 250000000UL, 1, 125, 6, 1};
+static const PllConfig pll_cfg_boosted = { 250000000UL, 1, 125, 6, 1};
 // Номинал для flash-операций: VCO = 12М * 125 = 1500 МГц, p1=6, p2=2 → 125 МГц    
 // BAUDR=4 → SCK флеша 31.25 МГц. Тот же путь reprogram_pll, что и разгон.    
 static const PllConfig pll_cfg_nominal = { 125000000UL, 1, 125, 6, 2};
@@ -72,89 +72,77 @@ static void __not_in_flash_func(detach_peripheral_clock)(void) {
 // Перепрограммирование PLL_SYS (ядро vfo_set_clk_sys из маяка)  
 // ----------------------------------------------------------------------------  
 static void __not_in_flash_func(reprogram_pll)(const PllConfig *cfg) {  
-    detach_peripheral_clock();  
-  
-    // 1. clk_sys -> XOSC 12 МГц (безопасный источник на время переключения)  
+    
+    // Напряжение ядра для разгона (1.30 В — обязательно для 250 МГц)  
+    vreg_set_voltage(VREG_VOLTAGE_1_30);  
+    busy_wait_us(500);
+
+    //  периферийная шина - на 48 МГц
+    clock_configure(clk_peri, 0,  CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,  
+        48000000u, 48000000u); 
+    
+    // сохраняем прерывания
+    uint32_t ints = save_and_disable_interrupts(); 
+
+    // пересадка clk_sys -> XOSC 12 МГц (безопасный источник на время переключения)  
     clock_configure(clk_sys,  
         CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLKSRC_CLK_SYS_AUX,  
         CLOCKS_CLK_SYS_CTRL_AUXSRC_VALUE_XOSC_CLKSRC,  
         VFO_XOSC_NOMINAL_HZ,  
         VFO_XOSC_NOMINAL_HZ);  
   
-    // 2. Остановить PLL_SYS  
-    pll_deinit(pll_sys);  
-  
-    // 3. Новая частота PLL  
+    // Новая частота PLL  
     pll_init(pll_sys, cfg->refdiv,  
              cfg->fbdiv * VFO_XOSC_NOMINAL_HZ,  
              cfg->postdiv1, cfg->postdiv2);  
   
-    // 4. Ждём LOCK с таймаутом 10 мс  
-    uint32_t t0 = time_us_32();  
-    while (!(pll_sys_hw->cs & PLL_CS_LOCK_BITS)) {  
-        if (time_us_32() - t0 > 10000) break;  
-        tight_loop_contents();  
-    }  
+    // Ждем взвода бита LOCK в регистре CS системной PLL
+    // Если аналоговая петля не успеет стабилизироваться за 2000 итераций — мы разорвем цикл, 
+    // чтобы ядро не зависло намертво в глухом дедлоке.
+    uint32_t timeout = 20000;  
+    while (!(pll_sys_hw->cs & PLL_CS_LOCK_BITS) && --timeout);  
+    bool pll_locked = (timeout != 0);
 
-    // 5. clk_sys -> PLL_SYS  
-    clock_configure(clk_sys,  
-        CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLKSRC_CLK_SYS_AUX,  
-        CLOCKS_CLK_SYS_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,  
-        cfg->clk_hz,  
-        cfg->clk_hz);  
-
-    // 6. Делитель флеша: SCK строго <= 48 МГц, BAUDR чётный (как в маяке)  
-    uint32_t ssi_baud = (cfg->clk_hz + 48000000u - 1) / 48000000u;  
-    ssi_baud = (ssi_baud + 1u) & ~1u;  
+    // === BAUDR: ОГРАНИЧЕНИЕ НА ТАКТИРОВАНИЕ ФЛЭША СТРОГО <= 48 МГц ===  
+    // Меняем VFO_FLASH_SCK_MAX_HZ на жесткие 48 000 000 Гц
+    const uint32_t FLASH_SAFE_MAX_HZ = 48000000u;
+    uint32_t ssi_baud = (uint32_t)((cfg->clk_hz + FLASH_SAFE_MAX_HZ - 1) / FLASH_SAFE_MAX_HZ);  
+    ssi_baud = (ssi_baud + 1u) & ~1u;   // Округление вверх до ближайшего четного (требование аппаратного SSI)  
     if (ssi_baud < 2u)  ssi_baud = 2u;  
     if (ssi_baud > 34u) ssi_baud = 34u;  
-    ssi_hw->ssienr = 0;  
+    
+    ssi_hw->ssienr = 0;                 // выключить SSI — иначе baudr не запишется  
     ssi_hw->baudr  = ssi_baud;  
-    ssi_hw->ssienr = 1;  
+    ssi_hw->ssienr = 1;                 // включить обратно  
+
+    // возвращаем clk_sys -> PLL_SYS (целевая частота)  
+    clock_configure(clk_sys,  
+                    CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLKSRC_CLK_SYS_AUX,  
+                    CLOCKS_CLK_SYS_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,  
+                    cfg->clk_hz, cfg->clk_hz);  
+    
+    // возвращаем прерывания
+    restore_interrupts(ints);
+
 }  
   
 // ----------------------------------------------------------------------------  
 // Разгон: VREG -> PLL -> верификация частотомером -> откат при сбое  
 // ----------------------------------------------------------------------------  
 void af_set_clk(void) {  
-    // Напряжение ядра до разгона (1.30 В — обязательно для 250 МГц)  
-    vreg_set_voltage(VREG_VOLTAGE_1_30);  
-    busy_wait_us(500);  
-  
-    uint32_t ints = save_and_disable_interrupts();  
-    reprogram_pll(&pll_cfg);  
-    restore_interrupts(ints);  
-  
-    // Верификация: измеряем реальную частоту частотомером  
-    uint32_t meas_khz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS);  
-    uint32_t meas_hz  = meas_khz * 1000UL;  
-    int32_t  err      = (int32_t)meas_hz - (int32_t)pll_cfg.clk_hz;  
-    if (err < 0) err = -err;  
-  
-    if (err > (int32_t)(pll_cfg.clk_hz / 100)) {  
-        // Ошибка > 1% — аварийный откат на номинал 133 МГц  
-        static const PllConfig safe = { 133000000UL, 1, 133, 6, 2 };  
-        ints = save_and_disable_interrupts();  
-        reprogram_pll(&safe);  
-        restore_interrupts(ints);  
-        vreg_set_voltage(VREG_VOLTAGE_1_10);  
-        current_clk_sys_hz = VFO_CLK_SYS_NOMINAL_HZ;  
-        return;  
-    }  
-  
-    current_clk_sys_hz = meas_hz;  
+    // перенастраиваем на разогнанную частоту
+    reprogram_pll(&pll_cfg_boosted);
+    // измеряем частоту шины
+    current_clk_sys_hz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS) * 1000UL;  
 }
 
-// Переход на номинал 125 МГц перед flash-записью — тем же самодельным    
-// путём reprogram_pll (XOSC -> pll_deinit/init -> LOCK -> PLL -> BAUDR).    
-// НЕ использовать set_sys_clock_khz: SDK-путь переконфигурирует clk_peri/    
-// usb/adc и PLL по своей логике, ломая состояние для обратного af_set_clk.    
+// Переход на номинал 125 МГц 
 void __not_in_flash_func(af_set_clk_nominal)(void) {    
-    uint32_t ints = save_and_disable_interrupts();    
-    reprogram_pll(&pll_cfg_nominal);    
-    restore_interrupts(ints);    
-    current_clk_sys_hz = pll_cfg_nominal.clk_hz;    
-}    
+    // перенастраиваем на нормальную частоту
+    reprogram_pll(&pll_cfg_nominal);
+    // измеряем частоту шины
+    current_clk_sys_hz = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS) * 1000UL; 
+}
   
 // ============================================================================  
 // Arduino  
@@ -174,7 +162,7 @@ void setup()
     // Как в радиомодеме: без USB-хоста ожидание не блокирует запуск.  
     while (!Serial && millis() < 3000) delay(1);  
 
-    watchdog_enable(3000, true);  // сторожевой 3 с
+    watchdog_enable(8000, true);  // сторожевой 8 с
     
     Serial.printf("# clk_sys=%lu Hz | FLASH=%lu kHz (BAUDR=%u)\n",  
                   (unsigned long)clock_get_hz(clk_sys),  
