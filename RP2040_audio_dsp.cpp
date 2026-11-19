@@ -46,16 +46,14 @@ struct PllConfig {
     uint16_t fbdiv;  
     uint8_t  postdiv1;  
     uint8_t  postdiv2;  
-    uint8_t  vsel;  
-    uint8_t  baudr;  
 };  
   
 // 250 МГц: VCO = 12М * 125 = 1500 МГц, p1=6, p2=1 → 250 МГц  
-// VSEL 1.30 В, BAUDR=7 → SCK флеша ~35.7 МГц  
-static const PllConfig pll_cfg = { 250000000UL, 1, 125, 6, 1, 7, 7 };
+// VSEL 1.30 В, BAUDR=6 → SCK флеша ~41.7 МГц  
+static const PllConfig pll_cfg = { 250000000UL, 1, 125, 6, 1};
 // Номинал для flash-операций: VCO = 12М * 125 = 1500 МГц, p1=6, p2=2 → 125 МГц    
 // BAUDR=4 → SCK флеша 31.25 МГц. Тот же путь reprogram_pll, что и разгон.    
-static const PllConfig pll_cfg_nominal = { 125000000UL, 1, 125, 6, 2, 1, 4 };
+static const PllConfig pll_cfg_nominal = { 125000000UL, 1, 125, 6, 2};
 
 static uint32_t current_clk_sys_hz = VFO_CLK_SYS_NOMINAL_HZ;  
   
@@ -65,9 +63,9 @@ static uint32_t current_clk_sys_hz = VFO_CLK_SYS_NOMINAL_HZ;
 static void __not_in_flash_func(detach_peripheral_clock)(void) {  
     clock_configure(clk_peri,  
         0,  
-        CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS,  
-        VFO_CLK_SYS_NOMINAL_HZ,  
-        VFO_CLK_SYS_NOMINAL_HZ);  
+        CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,  
+        48000000u,  
+        48000000u);  
 }  
   
 // ----------------------------------------------------------------------------  
@@ -105,9 +103,13 @@ static void __not_in_flash_func(reprogram_pll)(const PllConfig *cfg) {
         cfg->clk_hz,  
         cfg->clk_hz);  
 
-    // 6. Делитель флеша: SSI off -> BAUDR -> SSI on  
+    // 6. Делитель флеша: SCK строго <= 48 МГц, BAUDR чётный (как в маяке)  
+    uint32_t ssi_baud = (cfg->clk_hz + 48000000u - 1) / 48000000u;  
+    ssi_baud = (ssi_baud + 1u) & ~1u;  
+    if (ssi_baud < 2u)  ssi_baud = 2u;  
+    if (ssi_baud > 34u) ssi_baud = 34u;  
     ssi_hw->ssienr = 0;  
-    ssi_hw->baudr  = cfg->baudr;  
+    ssi_hw->baudr  = ssi_baud;  
     ssi_hw->ssienr = 1;  
 }  
   
@@ -131,7 +133,7 @@ void af_set_clk(void) {
   
     if (err > (int32_t)(pll_cfg.clk_hz / 100)) {  
         // Ошибка > 1% — аварийный откат на номинал 133 МГц  
-        static const PllConfig safe = { 133000000UL, 1, 133, 6, 2, 1, 4 };  
+        static const PllConfig safe = { 133000000UL, 1, 133, 6, 2 };  
         ints = save_and_disable_interrupts();  
         reprogram_pll(&safe);  
         restore_interrupts(ints);  
