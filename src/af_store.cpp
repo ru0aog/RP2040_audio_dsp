@@ -275,11 +275,13 @@ bool af_store_save(uint8_t idx) {
     Serial.println("# save: clk -> nominal"); Serial.flush();    
     af_set_clk_nominal();    
 
-    uint32_t ints = save_and_disable_interrupts();    
-    do_flash_write(NULL);               // RAM: erase+program, XIP off    
-    restore_interrupts(ints);    
-    flash_flush_cache();                // сброс XIP-кэша после записи 
+    //uint32_t ints = save_and_disable_interrupts();    
+    //do_flash_write(NULL);               // RAM: erase+program, XIP off    
+    //restore_interrupts(ints);    
+    //flash_flush_cache();                // сброс XIP-кэша после записи 
     
+    af_set_clk;
+
     rp2040.restartCore1();  
     Serial.println("# save: done"); Serial.flush();   
     return true;    

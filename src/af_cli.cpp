@@ -10,14 +10,15 @@
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
 //        txpres txpresmax txpresfreq txpresq txshelf txshelffreq txshelfq  
 //        txexc txexcmix txmode txclip txnotch txnotchf txsetdef txprof    
-//   SYS: stats dump save load banks pwm voice ramp rec play stop recs help      
+//   SYS: stats dump fmap save load banks pwm voice ramp rec play stop recs help        
 // ============================================================================  
 #include <Arduino.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stddef.h>                   // offsetof — таблица параметров AF_PARAMS
-#include "hardware/clocks.h"          // clock_get_hz — фактическая clk_sys
-#include "hardware/structs/ssi.h"     // ssi_hw->baudr — делитель SCK флеша
+#include "hardware/clocks.h"          // clock_get_hz — фактическая clk_sys  
+#include "hardware/structs/ssi.h"     // ssi_hw->baudr — делитель SCK флеша  
+#include "hardware/flash.h"           // FLASH_SECTOR_SIZE, PICO_FLASH_SIZE_BYTES — fmap  
 #include "af_cli.h"
 #include "af_config.h"
 #include "af_dsp.h"
@@ -98,7 +99,8 @@ static void cli_help(void) {
     Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам"); 
     Serial.println("# === СИСТЕМА ===");
     Serial.println("#   stats             — таблица параметров RX/TX/SYS");  
-    Serial.println("#   dump [N|off]      — инженерный дамп счётчиков: однократно / каждые N сек / стоп");  
+    Serial.println("#   dump [N|off]      — инженерный дамп счётчиков: однократно / каждые N сек / стоп");    
+    Serial.println("#   fmap              — RLE-карта flash: регионы, граница прошивки, банки");  
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");    
     Serial.println("#   banks             — показать все ячейки");  
@@ -395,6 +397,92 @@ static void cli_dump(void) {
     p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;    
     p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap; p_isr = isr;    
 }    
+
+// ---------------------------------------------------------------------------  
+// fmap — RLE-сканер flash: диапазоны секторов с одинаковым статусом.  
+// Только чтение через XIP — erase/program не используется, зависнуть не может.  
+// ---------------------------------------------------------------------------  
+typedef enum {  
+    FM_FW,        // прошивка (данные до AF_REC_FLASH_OFF)  
+    FM_FREE,      // пусто (всё 0xFF)  
+    FM_REC_EMPTY, // слот магнитофона, пустой  
+    FM_REC_DATA,  // слот магнитофона, есть данные (остатки дампа)  
+    FM_BANKS,     // последний сектор — банки настроек  
+    FM_DATA,      // данные вне известных регионов  
+} fm_class_t;  
+  
+static fm_class_t fmap_classify(uint32_t off, bool empty) {  
+    if (off == PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE) return FM_BANKS;  
+    if (off >= AF_REC_FLASH_OFF &&  
+        off <  AF_REC_FLASH_OFF + AF_REC_FLASH_LEN)  
+        return empty ? FM_REC_EMPTY : FM_REC_DATA;  
+    if (empty) return FM_FREE;  
+    return (off < AF_REC_FLASH_OFF) ? FM_FW : FM_DATA;  
+}  
+  
+static const char* fmap_name(fm_class_t c) {  
+    switch (c) {  
+        case FM_FW:        return "firmware";  
+        case FM_FREE:      return "free";  
+        case FM_REC_EMPTY: return "rec-slot(empty)";  
+        case FM_REC_DATA:  return "rec-slot(DATA)";  
+        case FM_BANKS:     return "banks";  
+        default:           return "data?";  
+    }  
+}  
+  
+static void cli_fmap(void) {  
+    const uint32_t FSZ  = PICO_FLASH_SIZE_BYTES;  
+    const uint32_t SEC  = FLASH_SECTOR_SIZE;  
+    const uint32_t NSEC = FSZ / SEC;  
+    const uint8_t* base = (const uint8_t*)XIP_BASE;  
+  
+    Serial.printf("# fmap: flash=%lu KB sectors=%lu rec_slot=%06lx..%06lx banks=%06lx\n",  
+                  (unsigned long)(FSZ / 1024), (unsigned long)NSEC,  
+                  (unsigned long)AF_REC_FLASH_OFF,  
+                  (unsigned long)(AF_REC_FLASH_OFF + AF_REC_FLASH_LEN - 1),  
+                  (unsigned long)(FSZ - SEC));  
+  
+    fm_class_t run_cls = (fm_class_t)-1;  
+    uint32_t   run_start = 0;  
+    uint32_t   fw_end = 0;          // последний непустой сектор до rec-слота  
+  
+    for (uint32_t s = 0; s <= NSEC; s++) {          // <= — флаш хвоста  
+        fm_class_t cls = FM_FREE;  
+        if (s < NSEC) {  
+            uint32_t off = s * SEC;  
+            // быстрый тест на пустоту: словами по 4 байта  
+            const uint32_t* w = (const uint32_t*)(base + off);  
+            bool empty = true;  
+            for (uint32_t i = 0; i < SEC / 4; i++) {  
+                if (w[i] != 0xFFFFFFFFu) { empty = false; break; }  
+            }  
+            cls = fmap_classify(off, empty);  
+            if (!empty && off < AF_REC_FLASH_OFF) fw_end = off + SEC;  
+        }  
+        if (s == NSEC || cls != run_cls) {  
+            if (run_cls != (fm_class_t)-1) {  
+                Serial.printf("# %06lx..%06lx  %4lu KB  %s\n",  
+                              (unsigned long)run_start,  
+                              (unsigned long)(s * SEC - 1),  
+                              (unsigned long)((s * SEC - run_start) / 1024),  
+                              fmap_name(run_cls));  
+            }  
+            run_cls = cls; run_start = s * SEC;  
+        }  
+        if ((s & 0x3F) == 0) Serial.flush();  
+    }  
+  
+    Serial.printf("# fmap: firmware end ~0x%06lx, free before rec-slot ~%lu KB\n",  
+                  (unsigned long)fw_end,  
+                  (unsigned long)((AF_REC_FLASH_OFF - fw_end) / 1024));  
+  
+    // Превью сектора банков: magic + начало первой записи.  
+    const uint8_t* b = base + (FSZ - SEC);  
+    Serial.printf("# banks @%06lx: %02x %02x %02x %02x | rec1: %02x %02x %02x %02x\n",  
+                  (unsigned long)(FSZ - SEC),  
+                  b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);  
+}  
 
 // TX-профили по таблице пресетов: 1=FLAT .. 7=MAX (от прозрачного к плотному).  
 // Каждый профиль — полный снимок тракта: общий блок + per-профиль отличия.  
@@ -726,10 +814,13 @@ static void cli_exec(char* line) {
         strcmp(cmd, "?") == 0) {    
         cli_help();    
     }
-    else if (strcmp(cmd, "stats") == 0) {  
-        cli_stats();  
-    }
-    else if (strcmp(cmd, "dump") == 0) {    
+    else if (strcmp(cmd, "stats") == 0) {    
+        cli_stats();    
+    }  
+    else if (strcmp(cmd, "fmap") == 0) {  
+        cli_fmap();  
+    }  
+    else if (strcmp(cmd, "dump") == 0) {      
         char* v = strtok(NULL, " \t");    
         if (v == NULL) {    
             dump_period_ms = 0;                    // однократно    

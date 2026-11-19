@@ -45,15 +45,16 @@ struct PllConfig {
     uint8_t  refdiv;  
     uint16_t fbdiv;  
     uint8_t  postdiv1;  
-    uint8_t  postdiv2;  
+    uint8_t  postdiv2;
+    uint8_t  baudr;
 };  
   
 // 250 МГц: VCO = 12М * 125 = 1500 МГц, p1=6, p2=1 → 250 МГц  
 // VSEL 1.30 В, BAUDR=6 → SCK флеша ~41.7 МГц  
-static const PllConfig pll_cfg_boosted = { 250000000UL, 1, 125, 6, 1};
+static const PllConfig pll_cfg_boosted = { 250000000UL, 1, 125, 6, 1, 6};
 // Номинал для flash-операций: VCO = 12М * 125 = 1500 МГц, p1=6, p2=2 → 125 МГц    
 // BAUDR=4 → SCK флеша 31.25 МГц. Тот же путь reprogram_pll, что и разгон.    
-static const PllConfig pll_cfg_nominal = { 125000000UL, 1, 125, 6, 2};
+static const PllConfig pll_cfg_nominal = { 125000000UL, 1, 125, 6, 2, 4};
 
 static uint32_t current_clk_sys_hz = VFO_CLK_SYS_NOMINAL_HZ;  
   
@@ -106,10 +107,7 @@ static void __not_in_flash_func(reprogram_pll)(const PllConfig *cfg) {
     // === BAUDR: ОГРАНИЧЕНИЕ НА ТАКТИРОВАНИЕ ФЛЭША СТРОГО <= 48 МГц ===  
     // Меняем VFO_FLASH_SCK_MAX_HZ на жесткие 48 000 000 Гц
     const uint32_t FLASH_SAFE_MAX_HZ = 48000000u;
-    uint32_t ssi_baud = (uint32_t)((cfg->clk_hz + FLASH_SAFE_MAX_HZ - 1) / FLASH_SAFE_MAX_HZ);  
-    ssi_baud = (ssi_baud + 1u) & ~1u;   // Округление вверх до ближайшего четного (требование аппаратного SSI)  
-    if (ssi_baud < 2u)  ssi_baud = 2u;  
-    if (ssi_baud > 34u) ssi_baud = 34u;  
+    uint32_t ssi_baud = cfg->baudr;
     
     ssi_hw->ssienr = 0;                 // выключить SSI — иначе baudr не запишется  
     ssi_hw->baudr  = ssi_baud;  
@@ -123,6 +121,10 @@ static void __not_in_flash_func(reprogram_pll)(const PllConfig *cfg) {
     
     // возвращаем прерывания
     restore_interrupts(ints);
+
+    Serial.printf("# clk: baudr=%lu sck=%lu MHz\n",  
+              (unsigned long)ssi_hw->baudr,  
+              (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000000));  
 
 }  
   
