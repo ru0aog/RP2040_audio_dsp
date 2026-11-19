@@ -25,7 +25,8 @@
 #include "af_config.h"  
 #include "af_dsp.h"  
 #include "af_tx.h"  
-#include "af_voice.h"  
+#include "af_voice.h"
+#include "af_led.h"
   
 #include "pico/stdlib.h"
 #include "hardware/flash.h"  
@@ -248,24 +249,32 @@ bool af_store_save(uint8_t idx) {
     s_sector_img[3] = 0xFF;    
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));     
 
-    // Как в af_store_write_all: жёсткий reset Core 1 — детерминированно,    
-    // без гонки с флаговой парковкой. Далее — возврат clk + restartCore1.  
-    multicore_reset_core1();  
-    busy_wait_us(100);  
-  
-    af_set_clk_nominal();               // 125 МГц, самодельный путь reprogram_pll    
+    // Как в af_store_write_all: жёсткий reset Core 1 — детерминированно,      
+    // без гонки с флаговой парковкой. Далее — возврат clk + restartCore1.    
+    Serial.println("# w1"); Serial.flush();   // ДИАГ  
+    multicore_reset_core1();    
+    busy_wait_us(100);    
+    
+    af_led_set(100, 0, 0);
+    Serial.println("# w2"); Serial.flush();   // ДИАГ  
+    af_set_clk_nominal();               // 125 МГц, самодельный путь reprogram_pll      
 
-    uint32_t ints = save_and_disable_interrupts();    
-    do_flash_write(NULL);               // RAM: erase+program, XIP off    
-    restore_interrupts(ints);    
-    flash_flush_cache();                // сброс XIP-кэша после записи    
-  
-    // Возврат без ребута: разгон + перезапуск Core 1.    
-    af_set_clk();                       // обратно на 250 МГц (PLL + vreg + verify)    
-    rp2040.restartCore1();              // Core 1: setup1 -> loop1 
-  
-    Serial.printf("# OK save=%d\n", idx);      
-    return true;  
+    af_led_set(0, 0, 100);
+    Serial.println("# w3"); Serial.flush();   // ДИАГ  
+    uint32_t ints = save_and_disable_interrupts();      
+    do_flash_write(NULL);               // RAM: erase+program, XIP off      
+    restore_interrupts(ints);      
+    flash_flush_cache();                // сброс XIP-кэша после записи      
+    
+    af_led_set(100, 0, 100);
+    // Возврат без ребута: разгон + перезапуск Core 1.      
+    Serial.println("# w4"); Serial.flush();   // ДИАГ  
+    af_set_clk();                       // обратно на 250 МГц (PLL + vreg + verify)      
+    Serial.println("# w5"); Serial.flush();   // ДИАГ  
+    rp2040.restartCore1();              // Core 1: setup1 -> loop1   
+    
+    Serial.printf("# OK save=%d\n", idx);        
+    return true;    
 }  
   
 bool af_store_load(uint8_t idx) {  
