@@ -122,16 +122,12 @@ static void __not_in_flash_func(reprogram_pll)(const PllConfig *cfg) {
     // возвращаем прерывания
     restore_interrupts(ints);
 
-    Serial.printf("# clk: baudr=%lu sck=%lu MHz\n",  
-              (unsigned long)ssi_hw->baudr,  
-              (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000000));  
-
 }  
   
 // ----------------------------------------------------------------------------  
 // Разгон: VREG -> PLL -> верификация частотомером -> откат при сбое  
 // ----------------------------------------------------------------------------  
-void af_set_clk(void) {  
+void __not_in_flash_func(af_set_clk)(void) {  
     // перенастраиваем на разогнанную частоту
     reprogram_pll(&pll_cfg_boosted);
     // измеряем частоту шины
