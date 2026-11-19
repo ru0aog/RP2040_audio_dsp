@@ -148,17 +148,31 @@ void af_store_init(void) {
     Serial.printf("# store: PICO_FLASH_SIZE_BYTES=0x%x\n",    
         (unsigned)PICO_FLASH_SIZE_BYTES);    
     
-    if (s_sector_img[0] != AF_STORE_MAGIC0 ||      
-        s_sector_img[1] != AF_STORE_MAGIC1 ||      
-        s_sector_img[2] != AF_STORE_VER) {      
-        // Boot-путь — только чтение. Никакой записи во flash здесь:  
-        // park/erase на этапе init периодически вешает плату.  
-        // Пустой/битый сектор — af_store_poll запишет дефолтные банки    
-        // на первой итерации loop (в boot-пути запись висла — BUGS.MD).    
-        memset(s_sector_img, 0xFF, sizeof(s_sector_img));        
-        s_need_defaults = true;    
-        Serial.println("[STORE] sector blank/foreign — will write defaults");      
-    }        
+    if (s_sector_img[0] != AF_STORE_MAGIC0 ||        
+        s_sector_img[1] != AF_STORE_MAGIC1 ||        
+        s_sector_img[2] != AF_STORE_VER) {        
+        memset(s_sector_img, 0xFF, sizeof(s_sector_img));          
+        Serial.println("[STORE] sector blank/foreign");        
+    }          
+  
+    // Таблица банков — всегда из кода: перезаписываем записи      
+    // дефолтами (RX-пресеты + TX-профили 1..7). Flash-ячейки      
+    // не трогаем; save N запишет текущее, когда запись починится.      
+    {      
+        af_bank_t def[AF_STORE_BANKS];      
+        af_store_fill_defaults(def);      
+        s_sector_img[0] = AF_STORE_MAGIC0;      
+        s_sector_img[1] = AF_STORE_MAGIC1;      
+        s_sector_img[2] = AF_STORE_VER;      
+        s_sector_img[3] = 0xFF;      
+        for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {      
+            af_bank_rec_t r;      
+            r.d = def[i - 1];      
+            r.crc = crc8(&r.d, sizeof(r.d));      
+            memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));      
+        }      
+    }      
+    s_need_defaults = false;   // не писать дефолты во flash при старте      
 }  
   
 bool af_store_read(uint8_t idx, af_bank_t* out) {    
@@ -413,7 +427,59 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].tx_shelf_freq = AF_TX_SHELF_FREQ_HZ;  b[i].tx_shelf_q = AF_TX_SHELF_Q_X100;      
         b[i].tx_exc_on = 1;  b[i].tx_excmix = 3277;      
         b[i].tx_notch_on = 1;      
-        b[i].tx_notch1_hz = AF_TX_NOTCH1_HZ;  b[i].tx_notch2_hz = AF_TX_NOTCH2_HZ;      
+        b[i].tx_notch1_hz = AF_TX_NOTCH1_HZ;  b[i].tx_notch2_hz = AF_TX_NOTCH2_HZ;
+                // TX — профиль i+1 (1 flat .. 7 max), как tx_apply_profile в af_cli.cpp.  
+        // Общее для всех профилей:  
+        b[i].tx_softclip = 1;  
+        b[i].tx_split_hz = 900;  
+        b[i].tx_comp_thr = 8192;  
+        b[i].tx_gate_hyst_x10 = 7;  
+        b[i].tx_pres_freq = 1900;  b[i].tx_pres_q = 90;  
+        b[i].tx_shelf_freq = 1800; b[i].tx_shelf_q = 70;  
+        b[i].tx_notch1_hz = 1000;  b[i].tx_notch2_hz = 2000;  
+        b[i].tx_intel_tgt = 15400; b[i].tx_intel_cut = 16384; b[i].tx_intel_boost = 32768;  
+  
+        // Per-профиль отличия — таблица по индексу банка:  
+        //   {lo,hi, ratio,clip, agc,agcmax, gate,hold,gfloor, ap,2band,lr2,  
+        //    cthr_lo,cthr_hi, pres,pmax, exc,emix, duck,dmax, intel, shelf, notch}  
+        static const struct {  
+            uint16_t lo, hi, ratio, clip, agc, agcmax, gate, hold, gfloor;  
+            uint8_t  ap, b2, lr2;  
+            uint16_t cthr_lo, cthr_hi;  
+            uint8_t  pres;  uint16_t pmax;  
+            uint8_t  exc;   uint16_t emix;  
+            uint8_t  duck;  uint16_t dmax;  
+            uint8_t  intel; uint16_t shelf; uint8_t notch;  
+        } TXP[AF_STORE_BANKS] = {  
+            // 1 FLAT — линейный тракт  
+            { 300,2700, 10,32767, 18000,200,   0,  0, 65535, 0,0,0, 8192,6144, 0, 0, 0,3277, 0,30, 0,  0, 0 },  
+            // 2 NATURAL — мягкий повседневный  
+            { 300,2700, 30,20000, 16000,200, 250,180, 4120, 1,1,1, 8192,6144, 1,15, 0,3277, 0,30, 1,  0, 1 },  
+            // 3 DX — пробив на слабом сигнале  
+            { 300,2700, 60,12000, 18000,200, 250,200, 4120, 1,1,1, 8192,6144, 1,30, 1,3277, 1,30, 1, 20, 1 },  
+            // 4 BASS — низкий голос  
+            { 350,2700, 40,26000, 16000,200, 250,180, 4120, 1,1,1, 8192,6144, 1,20, 0,3277, 1,40, 1, 10, 1 },  
+            // 5 WHISPER — тихая речь  
+            { 300,2700, 50,16000, 20000,200, 150,250, 4120, 1,1,1, 8192,6144, 1,30, 1,1638, 0,30, 1,  0, 1 },  
+            // 6 LOUD — громкий голос  
+            { 300,2700, 40,24000, 14000,200, 350,150, 4120, 1,1,1, 8192,6144, 1,15, 0,3277, 1,30, 1,  0, 1 },  
+            // 7 MAX — максимум плотности  
+            { 300,2400, 80, 6144, 18000,300, 250,180, 4120, 1,1,1, 6144,6144, 1,30, 1,3277, 1,30, 1, 40, 1 },  
+        };  
+        b[i].tx_lo_hz = TXP[i].lo;        b[i].tx_hi_hz = TXP[i].hi;  
+        b[i].tx_ratio_x10 = TXP[i].ratio; b[i].tx_clip = TXP[i].clip;  
+        b[i].tx_agc_target = TXP[i].agc;  b[i].tx_agc_max_x10 = TXP[i].agcmax;  
+        b[i].tx_gate_thr = TXP[i].gate;   b[i].tx_gate_hold_ms = TXP[i].hold;  
+        b[i].tx_gfloor = TXP[i].gfloor;  
+        b[i].tx_ap_on = TXP[i].ap;        b[i].tx_2band_on = TXP[i].b2;  
+        b[i].tx_lr2_on = TXP[i].lr2;  
+        b[i].tx_comp_thr_lo = TXP[i].cthr_lo;  b[i].tx_comp_thr_hi = TXP[i].cthr_hi;  
+        b[i].tx_pres_on = TXP[i].pres;    b[i].tx_presmax = TXP[i].pmax;  
+        b[i].tx_exc_on = TXP[i].exc;      b[i].tx_excmix = TXP[i].emix;  
+        b[i].tx_duck_on = TXP[i].duck;    b[i].tx_duckmax = TXP[i].dmax;  
+        b[i].tx_intel_on = TXP[i].intel;  
+        b[i].tx_shelf_db = TXP[i].shelf;  
+        b[i].tx_notch_on = TXP[i].notch;  
     }        
     // Пресеты полос RX — как в 'banks clr':        
     b[0].lo_hz = 100;  b[0].hi_hz = 3100;   // 1: SSB широкая        
