@@ -275,12 +275,12 @@ bool af_store_save(uint8_t idx) {
     Serial.println("# save: clk -> nominal"); Serial.flush();    
     af_set_clk_nominal();    
 
-    //uint32_t ints = save_and_disable_interrupts();    
-    //do_flash_write(NULL);               // RAM: erase+program, XIP off    
-    //restore_interrupts(ints);    
-    //flash_flush_cache();                // сброс XIP-кэша после записи 
+    uint32_t ints = save_and_disable_interrupts();    
+    do_flash_write(NULL);               // RAM: erase+program, XIP off    
+    restore_interrupts(ints);    
+    flash_flush_cache();                // сброс XIP-кэша после записи 
     
-    af_set_clk;
+    af_set_clk();
 
     rp2040.restartCore1();  
     Serial.println("# save: done"); Serial.flush();   
@@ -370,12 +370,14 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
   
     // Как в маяке: жёсткий сброс Core 1 вместо флаговой парковки —  
     // 100% гарантия, что Core 1 не трогает flash во время erase.  
-    multicore_reset_core1();  
-    busy_wait_us(100);  
-  
-    set_sys_clock_khz(125000, false);   // номинал, как vfo_clk_boost_exit  
-  
-    uint32_t ints = save_and_disable_interrupts();    
+    multicore_reset_core1();    
+    busy_wait_us(100);    
+    
+    af_set_clk_nominal();               // reprogram_pll: 125 МГц + BAUDR=4  
+                                        // (31.25 МГц SCK). НЕ set_sys_clock_khz —  
+                                        // SDK ставит BAUDR=2 -> 62.5 МГц -> вис  
+    
+    uint32_t ints = save_and_disable_interrupts();     
     do_flash_write(NULL);               // RAM: erase+program, XIP off    
     restore_interrupts(ints);    
     flash_flush_cache();                // сброс XIP-кэша после записи    
