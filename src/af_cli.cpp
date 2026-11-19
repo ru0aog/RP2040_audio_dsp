@@ -12,23 +12,24 @@
 //        txexc txexcmix txmode txclip txnotch txnotchf txsetdef txprof    
 //   SYS: stats dump save load banks pwm voice ramp rec play stop recs help      
 // ============================================================================  
-#include <Arduino.h>  
-#include <string.h>  
+#include <Arduino.h>
+#include <string.h>
 #include <stdlib.h>
-#include "hardware/clocks.h"          // clock_get_hz — фактическая clk_sys  
-#include "hardware/structs/ssi.h"     // ssi_hw->baudr — делитель SCK флеша  
-#include "af_cli.h"  
-#include "af_config.h"  
-#include "af_dsp.h"  
-#include "af_capture.h"  
-#include "af_pwm.h"  
+#include <stddef.h>                   // offsetof — таблица параметров AF_PARAMS
+#include "hardware/clocks.h"          // clock_get_hz — фактическая clk_sys
+#include "hardware/structs/ssi.h"     // ssi_hw->baudr — делитель SCK флеша
+#include "af_cli.h"
+#include "af_config.h"
+#include "af_dsp.h"
+#include "af_capture.h"
+#include "af_pwm.h"
 #include "af_usb.h"
 #include "af_store.h"
 #include "af_led.h"
 #include "af_voice.h"     // подмес голосовых клипов в выход
-#include "af_tx.h"        // TX-тракт: полоса/компрессия/клиппер  
+#include "af_tx.h"        // TX-тракт: полоса/компрессия/клиппер
 #include "af_gpio_ctl.h"  // af_gpio_bank_code — текущий банк с пинов
-#include "af_rec.h"       // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)  
+#include "af_rec.h"       // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
   
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -554,6 +555,139 @@ static void bank_fill_defaults(af_bank_t* b) {
 }    
 
 // ---------------------------------------------------------------------------  
+// Единая таблица параметров: метка = команда и строка таблицы banks.  
+// off — смещение поля в af_bank_t (для печати колонок cur/1..7).  
+// set — сеттер DSP (для команд вида "<метка> <значение>").  
+// ---------------------------------------------------------------------------  
+typedef enum { PT_U16, PT_I16, PT_ONOFF, PT_X100, PT_GAIN, PT_SEP } ptype_t;  
+  
+typedef struct {  
+    const char* label;                 // "band lo", "tx pres f" — и команда  
+    ptype_t     type;  
+    uint16_t    off;                   // offsetof(af_bank_t, field)  
+    void      (*set)(int32_t v);       // NULL у PT_SEP  
+} af_param_t;  
+  
+// Обёртки для парных/плавающих сеттеров.  
+static void p_set_band_lo(int32_t v)  { af_dsp_set_band((uint32_t)v, af_dsp_band_hi_hz()); }  
+static void p_set_band_hi(int32_t v)  { af_dsp_set_band(af_dsp_band_lo_hz(), (uint32_t)v); }  
+static void p_set_txband_lo(int32_t v){ af_tx_set_band((uint32_t)v, af_tx_hi_hz()); }  
+static void p_set_txband_hi(int32_t v){ af_tx_set_band(af_tx_lo_hz(), (uint32_t)v); }  
+static void p_set_notch1(int32_t v)   { af_tx_set_notchf((uint32_t)v, af_tx_notch2()); }  
+static void p_set_notch2(int32_t v)   { af_tx_set_notchf(af_tx_notch1(), (uint32_t)v); }  
+static void p_set_gain(int32_t v)     { af_dsp_set_gain((float)v / 256.0f); }        // Q8  
+static void p_set_agcmax(int32_t v)   { af_dsp_set_agcmax((float)v / 100.0f); }      // x100  
+static void p_set_agcmin(int32_t v)   { af_dsp_set_agcmin((float)v / 100.0f); }      // x100  
+  
+#define P_SET(fn)  ((void(*)(int32_t))(fn))   // сеттеры u32/bool — совместимы по ABI  
+  
+static const af_param_t AF_PARAMS[] = {  
+    // --- RX ---  
+    { "band lo",     PT_U16,   offsetof(af_bank_t, lo_hz),          p_set_band_lo },  
+    { "band hi",     PT_U16,   offsetof(af_bank_t, hi_hz),          p_set_band_hi },  
+    { "cw",          PT_ONOFF, offsetof(af_bank_t, cw_on),          P_SET(af_dsp_set_cw) },  
+    { "cw f0",       PT_U16,   offsetof(af_bank_t, cw_f0),          P_SET(af_dsp_set_cw_freq) },  
+    { "cw bw",       PT_U16,   offsetof(af_bank_t, cw_bw),          P_SET(af_dsp_set_cw_bw) },  
+    { "cw noise",    PT_U16,   offsetof(af_bank_t, cw_noise),       P_SET(af_dsp_set_cw_noise) },  
+    { "agc",         PT_ONOFF, offsetof(af_bank_t, agc_on),         P_SET(af_dsp_set_agc) },  
+    { "gain",        PT_GAIN,  offsetof(af_bank_t, gain_pct),       p_set_gain },  
+    { "voice vol",   PT_U16,   offsetof(af_bank_t, voice_vol),      P_SET(af_voice_set_volume) },  
+    { "agc ref",     PT_U16,   offsetof(af_bank_t, agc_ref),        P_SET(af_dsp_set_agcref) },  
+    { "agc max",     PT_X100,  offsetof(af_bank_t, agc_max_x100),   p_set_agcmax },  
+    { "agc min",     PT_X100,  offsetof(af_bank_t, agc_min_x100),   p_set_agcmin },  
+    { "lim ceil",    PT_U16,   offsetof(af_bank_t, lim_ceil),       P_SET(af_dsp_set_limceil) },  
+    { "nr depth",    PT_U16,   offsetof(af_bank_t, nr_depth),       P_SET(af_dsp_set_nrdepth) },  
+    { "nr makeup",   PT_U16,   offsetof(af_bank_t, nr_makeup),      P_SET(af_dsp_set_nrmakeup) },  
+    { "nt mu",       PT_U16,   offsetof(af_bank_t, nt_mu),          P_SET(af_dsp_set_ntmu) },  
+    { "nr mu",       PT_U16,   offsetof(af_bank_t, nr_mu),          P_SET(af_dsp_set_nrmu) },  
+    { "--- TX ---",  PT_SEP,   0, NULL },  
+    // --- TX ---  
+    { "tx band lo",  PT_U16,   offsetof(af_bank_t, tx_lo_hz),       p_set_txband_lo },  
+    { "tx band hi",  PT_U16,   offsetof(af_bank_t, tx_hi_hz),       p_set_txband_hi },  
+    { "tx comp",     PT_U16,   offsetof(af_bank_t, tx_ratio_x10),   P_SET(af_tx_set_ratio) },  
+    { "tx clip",     PT_U16,   offsetof(af_bank_t, tx_clip),        P_SET(af_tx_set_clip) },  
+    { "tx agc tgt",  PT_U16,   offsetof(af_bank_t, tx_agc_target),  P_SET(af_tx_set_agc) },  
+    { "tx agc max",  PT_U16,   offsetof(af_bank_t, tx_agc_max_x10), P_SET(af_tx_set_agcmax) },  
+    { "tx gate",     PT_U16,   offsetof(af_bank_t, tx_gate_thr),    P_SET(af_tx_set_gate) },  
+    { "tx gate hld", PT_U16,   offsetof(af_bank_t, tx_gate_hold_ms),P_SET(af_tx_set_gatehold) },  
+    { "tx gate hys", PT_U16,   offsetof(af_bank_t, tx_gate_hyst_x10),P_SET(af_tx_set_gatehyst) },  
+    { "tx gfloor",   PT_U16,   offsetof(af_bank_t, tx_gfloor),      P_SET(af_tx_set_gfloor) },  
+    { "tx ap",       PT_ONOFF, offsetof(af_bank_t, tx_ap_on),       P_SET(af_tx_set_ap) },  
+    { "tx soft",     PT_ONOFF, offsetof(af_bank_t, tx_softclip),    P_SET(af_tx_set_softclip) },  
+    { "tx 2band",    PT_ONOFF, offsetof(af_bank_t, tx_2band_on),    P_SET(af_tx_set_2band) },  
+    { "tx split",    PT_U16,   offsetof(af_bank_t, tx_split_hz),    P_SET(af_tx_set_split) },  
+    { "tx lr2",      PT_ONOFF, offsetof(af_bank_t, tx_lr2_on),      P_SET(af_tx_set_lr2) },  
+    { "tx cthr",     PT_U16,   offsetof(af_bank_t, tx_comp_thr),    P_SET(af_tx_set_compthr) },  
+    { "tx cthr lo",  PT_U16,   offsetof(af_bank_t, tx_comp_thr_lo), P_SET(af_tx_set_compthrlo) },  
+    { "tx cthr hi",  PT_U16,   offsetof(af_bank_t, tx_comp_thr_hi), P_SET(af_tx_set_compthrhi) },  
+    { "tx duck",     PT_ONOFF, offsetof(af_bank_t, tx_duck_on),     P_SET(af_tx_set_duck) },  
+    { "tx duckmax",  PT_U16,   offsetof(af_bank_t, tx_duckmax),     P_SET(af_tx_set_duckmax) },  
+    { "tx intel",    PT_ONOFF, offsetof(af_bank_t, tx_intel_on),    P_SET(af_tx_set_intel) },  
+    { "tx intel tgt",PT_U16,   offsetof(af_bank_t, tx_intel_tgt),   P_SET(af_tx_set_inteltgt) },  
+    { "tx intel cut",PT_U16,   offsetof(af_bank_t, tx_intel_cut),   P_SET(af_tx_set_intelcut) },  
+    { "tx intel bst",PT_U16,   offsetof(af_bank_t, tx_intel_boost), P_SET(af_tx_set_intelboost) },  
+    { "tx pres",     PT_ONOFF, offsetof(af_bank_t, tx_pres_on),     P_SET(af_tx_set_pres) },  
+    { "tx presmax",  PT_U16,   offsetof(af_bank_t, tx_presmax),     P_SET(af_tx_set_presmax) },  
+    { "tx pres f",   PT_U16,   offsetof(af_bank_t, tx_pres_freq),   P_SET(af_tx_set_presfreq) },  
+    { "tx pres q",   PT_U16,   offsetof(af_bank_t, tx_pres_q),      P_SET(af_tx_set_presq) },  
+    { "tx shelf",    PT_I16,   offsetof(af_bank_t, tx_shelf_db),    P_SET(af_tx_set_shelf) },  
+    { "tx shelf f",  PT_U16,   offsetof(af_bank_t, tx_shelf_freq),  P_SET(af_tx_set_shelffreq) },  
+    { "tx shelf q",  PT_U16,   offsetof(af_bank_t, tx_shelf_q),     P_SET(af_tx_set_shelfq) },  
+    { "tx exc",      PT_ONOFF, offsetof(af_bank_t, tx_exc_on),      P_SET(af_tx_set_exc) },  
+    { "tx excmix",   PT_U16,   offsetof(af_bank_t, tx_excmix),      P_SET(af_tx_set_excmix) },  
+    { "tx notch",    PT_ONOFF, offsetof(af_bank_t, tx_notch_on),    P_SET(af_tx_set_notch) },  
+    { "tx notch f1", PT_U16,   offsetof(af_bank_t, tx_notch1_hz),   p_set_notch1 },  
+    { "tx notch f2", PT_U16,   offsetof(af_bank_t, tx_notch2_hz),   p_set_notch2 },  
+};  
+#define AF_PARAMS_COUNT  (sizeof(AF_PARAMS) / sizeof(AF_PARAMS[0]))  
+  
+// Чтение поля банка по смещению (тип задаёт размер: u8/i16/u16).  
+static int32_t bank_field(const af_bank_t* b, const af_param_t* p) {  
+    const uint8_t* base = (const uint8_t*)b;  
+    switch (p->type) {  
+        case PT_ONOFF: return (int32_t)*(const uint8_t*)(base + p->off);  
+        case PT_I16:   return (int32_t)*(const int16_t*)(base + p->off);  
+        default:       return (int32_t)*(const uint16_t*)(base + p->off);  
+    }  
+}  
+  
+// Диспетчер команд-меток: "<label> <value>" — longest match по таблице.  
+// Вызывается до strtok (строка ещё целая). true = команда обработана.  
+static bool cli_param_try(char* line) {  
+    const af_param_t* best = NULL;  
+    size_t best_len = 0;  
+    for (size_t i = 0; i < AF_PARAMS_COUNT; i++) {  
+        const af_param_t* p = &AF_PARAMS[i];  
+        if (p->type == PT_SEP) continue;  
+        size_t l = strlen(p->label);  
+        if (l > best_len && strncmp(line, p->label, l) == 0 && line[l] == ' ') {  
+            best = p; best_len = l;  
+        }  
+    }  
+    if (best == NULL) return false;  
+  
+    char* v = line + best_len;  
+    while (*v == ' ') v++;  
+    if (*v == '\0') { Serial.printf("# ERR: %s <value>\n", best->label); return true; }  
+  
+    int32_t val;  
+    if (best->type == PT_ONOFF) {  
+        if      (strncmp(v, "on", 2) == 0)  val = 1;  
+        else if (strncmp(v, "off", 3) == 0) val = 0;  
+        else { Serial.printf("# ERR: %s on|off\n", best->label); return true; }  
+    } else if (best->type == PT_GAIN) {    
+        val = (int32_t)(strtof(v, NULL) * 256.0f + 0.5f);   // ввод множителем: 1.5 -> 384    
+    } else if (best->type == PT_X100) {    
+        val = (int32_t)(strtof(v, NULL) * 100.0f + 0.5f);   // ввод множителем: 0.25 -> 25    
+    } else {    
+        val = (int32_t)strtol(v, NULL, 10);    
+    }    
+    best->set(val);  
+    Serial.printf("# OK %s=%ld\n", best->label, (long)val);  
+    return true;  
+}  
+
+// ---------------------------------------------------------------------------  
 // Разбор одной строки  
 // ---------------------------------------------------------------------------  
 static void cli_exec(char* line) {    
@@ -561,9 +695,11 @@ static void cli_exec(char* line) {
     while (*line == ' ' || *line == '\t') ++line;    
     if (*line == '\0' || *line == '#') return;    
     
-    Serial.printf("# > %s\n", line);      // эхо введённой команды    
-    
-    char* cmd = strtok(line, " \t");    
+    Serial.printf("# > %s\n", line);      // эхо введённой команды      
+      
+    if (cli_param_try(line)) return;      // команды-метки из таблицы banks      
+      
+    char* cmd = strtok(line, " \t");      
     if (cmd == NULL) return;
   
     if (strcasecmp(cmd, "help") == 0 ||    
@@ -787,111 +923,31 @@ static void cli_exec(char* line) {
         Serial.printf("# %-14s %6s", "param", "cur");    
         for (uint8_t i = 0; i < AF_STORE_BANKS; i++) Serial.printf(" %6u", i + 1);      
         Serial.println();    
-  
-        // Макрос строки: числовое поле, "-----" для пустых банков.    
-        #define BANK_ROW(name, fmt, field) do {                                  \
-            Serial.printf("# %-14s", name);                                      \
-            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {                      \
-                if (bv[i]) Serial.printf(" %6" fmt, bk[i].field);                \
-                else       Serial.printf(" %6s", "-----");                       \
-            }                                                                    \
-            Serial.println();                                                    \
-        } while (0)    
-    
-        // Макрос строки on/off.    
-        #define BANK_ROW_ONOFF(name, field) do {                                 \
-            Serial.printf("# %-14s", name);                                      \
-            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {                      \
-                if (bv[i]) Serial.printf(" %6s", bk[i].field ? "on" : "off");    \
-                else       Serial.printf(" %6s", "-----");                       \
-            }                                                                    \
-            Serial.println();                                                    \
-        } while (0)    
-    
-        // Макрос строки x100 -> "d.dd" (agcmax/agcmin/gain).    
-        #define BANK_ROW_X100(name, field) do {                                  \
-            Serial.printf("# %-14s", name);                                      \
-            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {                      \
-                if (bv[i]) Serial.printf(" %3u.%02u",                            \
-                    (unsigned)(bk[i].field / 100), (unsigned)(bk[i].field % 100)); \
-                else       Serial.printf(" %6s", "-----");                       \
-            }                                                                    \
-            Serial.println();                                                    \
-        } while (0)    
-  
-        Serial.println("# --- RX ---");  
-        BANK_ROW("band lo",    "u", lo_hz);  
-        BANK_ROW("band hi",    "u", hi_hz);  
-        BANK_ROW_ONOFF("cw",        cw_on);  
-        BANK_ROW("cw f0",      "u", cw_f0);  
-        BANK_ROW("cw bw",      "u", cw_bw);  
-        BANK_ROW("cw noise",   "u", cw_noise);  
-        BANK_ROW_ONOFF("agc",       agc_on);    
-        // Макрос строки Q8 -> "d.dd" (gain: 256 = 1.00).      
-        #define BANK_ROW_GAIN(name, field) do {                                  \
-            Serial.printf("# %-14s", name);                                      \
-            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {                      \
-                if (bv[i]) {                                                     \
-                    unsigned g100 = (unsigned)bk[i].field * 100u / 256u;         \
-                    Serial.printf(" %3u.%02u", g100 / 100u, g100 % 100u);        \
-                } else Serial.printf(" %6s", "-----");                           \
-            }                                                                    \
-            Serial.println();                                                    \
-            } while (0)      
-        BANK_ROW_GAIN("gain",       gain_pct);    
-        BANK_ROW("voice vol",  "u", voice_vol);    
-        BANK_ROW("agc ref",    "u", agc_ref);  
-        BANK_ROW_X100("agc max",    agc_max_x100);  
-        BANK_ROW_X100("agc min",    agc_min_x100);  
-        BANK_ROW("lim ceil",   "u", lim_ceil);  
-        BANK_ROW("nr depth",   "u", nr_depth);  
-        BANK_ROW("nr makeup",  "u", nr_makeup);  
-        BANK_ROW("nt mu",      "u", nt_mu);  
-        BANK_ROW("nr mu",      "u", nr_mu);  
-  
-        Serial.println("# --- TX ---");  
-        BANK_ROW("tx band lo", "u", tx_lo_hz);  
-        BANK_ROW("tx band hi", "u", tx_hi_hz);  
-        BANK_ROW("tx comp",    "u", tx_ratio_x10);  
-        BANK_ROW("tx clip",    "u", tx_clip);  
-        BANK_ROW("tx agc tgt", "u", tx_agc_target);  
-        BANK_ROW("tx agc max", "u", tx_agc_max_x10);  
-        BANK_ROW("tx gate",    "u", tx_gate_thr);  
-        BANK_ROW("tx gate hld","u", tx_gate_hold_ms);  
-        BANK_ROW("tx gate hys","u", tx_gate_hyst_x10);  
-        BANK_ROW("tx gfloor",  "u", tx_gfloor);  
-        BANK_ROW_ONOFF("tx ap",     tx_ap_on);  
-        BANK_ROW_ONOFF("tx soft",   tx_softclip);  
-        BANK_ROW_ONOFF("tx 2band",  tx_2band_on);  
-        BANK_ROW("tx split",   "u", tx_split_hz);  
-        BANK_ROW_ONOFF("tx lr2",    tx_lr2_on);  
-        BANK_ROW("tx cthr",    "u", tx_comp_thr);  
-        BANK_ROW("tx cthr lo", "u", tx_comp_thr_lo);  
-        BANK_ROW("tx cthr hi", "u", tx_comp_thr_hi);  
-        BANK_ROW_ONOFF("tx duck",   tx_duck_on);  
-        BANK_ROW("tx duckmax", "u", tx_duckmax);  
-        BANK_ROW_ONOFF("tx intel",  tx_intel_on);  
-        BANK_ROW("tx intel tgt","u", tx_intel_tgt);  
-        BANK_ROW("tx intel cut","u", tx_intel_cut);  
-        BANK_ROW("tx intel bst","u", tx_intel_boost);  
-        BANK_ROW_ONOFF("tx pres",   tx_pres_on);  
-        BANK_ROW("tx presmax", "u", tx_presmax);  
-        BANK_ROW("tx pres f",  "u", tx_pres_freq);  
-        BANK_ROW("tx pres q",  "u", tx_pres_q);  
-        BANK_ROW("tx shelf",   "u", tx_shelf_db);  
-        BANK_ROW("tx shelf f", "u", tx_shelf_freq);  
-        BANK_ROW("tx shelf q", "u", tx_shelf_q);  
-        BANK_ROW_ONOFF("tx exc",    tx_exc_on);  
-        BANK_ROW("tx excmix",  "u", tx_excmix);  
-        BANK_ROW_ONOFF("tx notch",  tx_notch_on);    
-        BANK_ROW("tx notch f1","u", tx_notch1_hz);    
-        BANK_ROW("tx notch f2","u", tx_notch2_hz);    
-    
-        #undef BANK_ROW    
-        #undef BANK_ROW_ONOFF    
-        #undef BANK_ROW_X100    
-        #undef BANK_ROW_GAIN    
-    }  
+
+        // Строки = AF_PARAMS (та же таблица, что обслуживает команды-метки).  
+        for (size_t p = 0; p < AF_PARAMS_COUNT; p++) {  
+            const af_param_t* par = &AF_PARAMS[p];  
+            if (par->type == PT_SEP) { Serial.printf("# %s\n", par->label); continue; }  
+            Serial.printf("# %-14s", par->label);  
+            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {  
+                if (!bv[i]) { Serial.printf(" %6s", "-----"); continue; }  
+                int32_t f = bank_field(&bk[i], par);  
+                switch (par->type) {  
+                    case PT_ONOFF:  
+                        Serial.printf(" %6s", f ? "on" : "off"); break;  
+                    case PT_X100:  
+                        Serial.printf(" %3ld.%02ld", (long)(f / 100), (long)(f % 100)); break;  
+                    case PT_GAIN: {  
+                        unsigned g100 = (unsigned)f * 100u / 256u;  
+                        Serial.printf(" %3u.%02u", g100 / 100u, g100 % 100u); break;  
+                    }  
+                    default:  
+                        Serial.printf(" %6ld", (long)f); break;  
+                }  
+            }  
+            Serial.println();  
+        }  
+    }
 
     else if (strcmp(cmd, "pwm") == 0) {  
         char* s = strtok(NULL, " \t");  
