@@ -95,7 +95,7 @@ static void cli_help(void) {
     Serial.println("#   txnotchf <f1> <f2> — частоты TX-нотчей, Гц (200..7000)");    
     Serial.println("#   txprof <1..7|имя> — профиль передачи: 1 flat, 2 natural, 3 dx, 4 bass, 5 whisper, 6 loud, 7 max");  
     Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам"); 
-    Serial.println("# === СИСТЕМА ===");    
+    Serial.println("# === СИСТЕМА ===");
     Serial.println("#   stats             — таблица параметров RX/TX/SYS");  
     Serial.println("#   dump [N|off]      — инженерный дамп счётчиков: однократно / каждые N сек / стоп");  
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
@@ -1459,17 +1459,17 @@ void af_cli_poll(void) {
         Serial.println("# rec end -> tx released (rx)");      
     }      
   
-    // CLI play завершился по буферу — OK после проигрывания, затем отпуск PTT/TX        
-    if (cli_play_pending && !af_rec_is_playing()) {        
-        cli_play_pending = false;        
-        Serial.printf("# OK play: %s тракт, %lu с\n",        
-                      af_dsp_tx_on() ? "tx" : "rx",        
-                      (unsigned long)(af_rec_len_samples() * AF_REC_DECIM / AF_FS_OUT_HZ));        
-        if (cli_play_ptt) {      
-            af_gpio_ptt_tx_off();      
-            cli_play_ptt = false;      
-        }      
-    }        
+    // CLI play завершился по буферу — OK после проигрывания, затем отпуск PTT/TX          
+    if (cli_play_pending && !af_rec_is_playing()) {          
+        cli_play_pending = false;          
+        Serial.printf("# OK play: %s тракт, %lu с\n",          
+                      af_dsp_tx_on() ? "tx" : "rx",          
+                      (unsigned long)(af_rec_play_len() * AF_REC_DECIM / AF_FS_OUT_HZ));          
+        if (cli_play_ptt) {        
+            af_gpio_ptt_tx_off();        
+            cli_play_ptt = false;        
+        }        
+    }          
       
     if (dump_period_ms != 0 && (int32_t)(millis() - dump_next_ms) >= 0) {      
         dump_next_ms = millis() + dump_period_ms;      

@@ -104,7 +104,7 @@ void af_rec_play_stop(void) {
 bool     __not_in_flash_func(af_rec_is_recording)(void)  { return state == ST_REC; }      
 bool     __not_in_flash_func(af_rec_is_playing)(void)    { return state == ST_PLAY; }      
 uint32_t __not_in_flash_func(af_rec_len_samples)(void)   { return rec_len; }      
-uint32_t af_rec_play_len(void) {  return play_src ? (uint32_t)clip_voice_14_len : rec_len;  }  
+uint32_t __not_in_flash_func(af_rec_play_len)(void)      { return play_src ? (uint32_t)clip_voice_14_len : rec_len; }  
 uint32_t __not_in_flash_func(af_rec_pos_samples)(void)   { return pos; }      
   
 // --- Core 1, горячий путь (RAM) ----------------------------------------------    

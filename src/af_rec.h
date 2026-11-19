@@ -47,4 +47,4 @@ uint32_t af_rec_pos_samples(void); // текущая позиция rec/play
 void    af_rec_push(int16_t s);    // tap записи (no-op если не пишем)    
 int16_t af_rec_mix(int16_t s);     // подмес воспроизведения в RX    
 int32_t af_rec_src(int32_t mic);   // источник для TX: запись вместо микрофона    
-uint32_t af_rec_play_len(void);    // длина текущего/последнего воспроизведения (ram или voice_14)  
+uint32_t af_rec_play_len(void);    // длина текущего/последнего воспроизведения (ram или voice_14)
