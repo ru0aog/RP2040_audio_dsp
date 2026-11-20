@@ -959,15 +959,15 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 //out_emit(sat16(y));      
                 continue;      
             }      
-            if (tx_on) {    
-                // TX-тракт: FIR -> компрессор -> клиппер -> постфильтр.    
-                // RX-цепочка (FIR/CW/NT/NR/AGC) в TX не работает.    
-                int32_t tx_in = (af_rec_active == 2) ? af_rec_src(y) : y;  
-                int16_t t = af_tx_process(tx_in);            // play: запись вместо микрофона  
-                if (af_rec_active == 1) af_rec_push(t);      // запись: выход TX-тракта  
-                out_emit(t);  
-                continue;    
-            }    
+            if (tx_on) {      
+                // TX-тракт: FIR -> компрессор -> клиппер -> постфильтр.      
+                // RX-цепочка (FIR/CW/NT/NR/AGC) в TX не работает.      
+                int32_t tx_in = (af_rec_active == 2) ? af_rec_src(y) : y;    
+                if (af_rec_active == 1) af_rec_push(sat16(tx_in));  // запись: микрофон ДО TX-обработки    
+                int16_t t = af_tx_process(tx_in);            // play: запись вместо микрофона    
+                out_emit(t);    
+                continue;      
+            }      
             y = af_fir_push(y);    
             if (cw_on) {    
                 // Добавка шума: LFSR xorshift32, уровень из `cw noise`.  
