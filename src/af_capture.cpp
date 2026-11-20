@@ -439,33 +439,74 @@ bool af_capture_is_running(void) {
 // af_capture_resume — после restore_interrupts: перезапуск цепочки A->B->A.  
 // ---------------------------------------------------------------------------
 // ===============   БЛОК ПАРКОВКИ DMA НА ПЕРИОД ФЛЭШ-ЗАПИСИ   ===============
-void af_capture_pause(void) {  
-    if (!af_running) return;  
-    adc_run(false);                          // ADC перестаёт давать DREQ  
-    irq_set_enabled(DMA_IRQ_0, false);  
-    if (af_dma_a >= 0) {  
-        dma_channel_set_irq0_enabled(af_dma_a, false);  
-        dma_channel_abort(af_dma_a);  
-        dma_channel_acknowledge_irq0(af_dma_a);  
-    }  
-    if (af_dma_b >= 0) {  
-        dma_channel_set_irq0_enabled(af_dma_b, false);  
-        dma_channel_abort(af_dma_b);  
-        dma_channel_acknowledge_irq0(af_dma_b);  
-    }  
-    adc_fifo_drain();  
-}  
+void af_capture_pause(void) {    
+    if (!af_running) return;    
+    adc_run(false);                          // ADC перестаёт давать DREQ    
+    irq_set_enabled(DMA_IRQ_0, false);    
+    // Сначала разорвать chain_to (на самого себя = "не цеплять никого"),    
+    // иначе abort одного канала может пнуть напарника — гонка на рестарте.    
+    if (af_dma_a >= 0)      
+        hw_write_masked(&dma_hw->ch[af_dma_a].al1_ctrl,    
+                        (uint)af_dma_a << DMA_CH0_CTRL_TRIG_CHAIN_TO_LSB,    
+                        DMA_CH0_CTRL_TRIG_CHAIN_TO_BITS);    
+    if (af_dma_b >= 0)      
+        hw_write_masked(&dma_hw->ch[af_dma_b].al1_ctrl,    
+                        (uint)af_dma_b << DMA_CH0_CTRL_TRIG_CHAIN_TO_LSB,    
+                        DMA_CH0_CTRL_TRIG_CHAIN_TO_BITS);    
+    if (af_dma_a >= 0) {    
+        dma_channel_set_irq0_enabled(af_dma_a, false);    
+        dma_channel_abort(af_dma_a);    
+        dma_channel_acknowledge_irq0(af_dma_a);    
+    }    
+    if (af_dma_b >= 0) {    
+        dma_channel_set_irq0_enabled(af_dma_b, false);    
+        dma_channel_abort(af_dma_b);    
+        dma_channel_acknowledge_irq0(af_dma_b);    
+    }    
+    adc_fifo_drain();
+}
   
-void af_capture_resume(void) {  
-    if (!af_running) return;  
-    // Каналы сохранили конфигурацию (chain_to, dreq) — достаточно  
-    // перенастроить цель/счётчик и запустить A; B подхватит по chain_to.  
-    af_rearm_channel(af_dma_a, true);  
-    af_rearm_channel(af_dma_b, false);  
-    dma_channel_set_irq0_enabled(af_dma_a, true);  
-    dma_channel_set_irq0_enabled(af_dma_b, true);  
-    irq_set_enabled(DMA_IRQ_0, true);  
-    dma_channel_start(af_dma_a);  
-    adc_run(true);  
-}  
+void af_capture_resume(void) {    
+    if (!af_running) return;    
+    // af_rearm_channel НЕ достаточно: abort оставляет каналы в    
+    // рассогласованном состоянии, а chain_to в pause был разорван.    
+    // Полная переконфигурация — как в af_capture_start.    
+    // Сброс очереди/владения: буферы, опубликованные до паузы, протухли.    
+    af_q_head = 0;    
+    af_q_tail = 0;    
+    af_busy_a[0] = af_busy_a[1] = false;    
+    af_busy_b[0] = af_busy_b[1] = false;    
+    af_a_sel = 0;    
+    af_b_sel = 0;    
+    af_dma_a_target = af_buf_a0;    
+    af_dma_b_target = af_buf_b0;    
+    
+    dma_channel_config ca = dma_channel_get_default_config(af_dma_a);    
+    channel_config_set_transfer_data_size(&ca, DMA_SIZE_16);    
+    channel_config_set_read_increment(&ca, false);    
+    channel_config_set_write_increment(&ca, true);    
+    channel_config_set_dreq(&ca, DREQ_ADC);    
+    channel_config_set_chain_to(&ca, af_dma_b);    
+    
+    dma_channel_config cb = dma_channel_get_default_config(af_dma_b);    
+    channel_config_set_transfer_data_size(&cb, DMA_SIZE_16);    
+    channel_config_set_read_increment(&cb, false);    
+    channel_config_set_write_increment(&cb, true);    
+    channel_config_set_dreq(&cb, DREQ_ADC);    
+    channel_config_set_chain_to(&cb, af_dma_a);    
+    
+    dma_channel_configure(af_dma_a, &ca, (void*)af_buf_a0, &adc_hw->fifo,    
+                          AF_BLOCK_TRANSFERS, false);    
+    dma_channel_configure(af_dma_b, &cb, (void*)af_buf_b0, &adc_hw->fifo,    
+                          AF_BLOCK_TRANSFERS, false);    
+    
+    dma_channel_acknowledge_irq0(af_dma_a);    
+    dma_channel_acknowledge_irq0(af_dma_b);    
+    dma_channel_set_irq0_enabled(af_dma_a, true);    
+    dma_channel_set_irq0_enabled(af_dma_b, true);    
+    irq_set_enabled(DMA_IRQ_0, true);    
+    
+    dma_channel_start(af_dma_a);   // B стартует аппаратно по chain_to    
+    adc_run(true);    
+}    
 // ======================   КОНЕЦ БЛОКА DMA-ПАРКОВКИ   =======================
