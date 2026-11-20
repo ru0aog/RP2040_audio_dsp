@@ -51,11 +51,13 @@ struct PllConfig {
   
 // 250 МГц: VCO = 12М * 125 = 1500 МГц, p1=6, p2=1 → 250 МГц  
 // VSEL 1.30 В, BAUDR=6 → SCK флеша ~41.7 МГц  
-// static const PllConfig pll_cfg_boosted = { 250000000UL, 1, 125, 6, 1, 6};
+static const PllConfig pll_cfg_boosted = { 250000000UL, 1, 125, 6, 1, 6};
 
 // 320 МГц: VCO = 12М * 80 = 960 МГц, p1=3, p2=1 → 320 МГц    
 // VSEL 1.30 В, BAUDR=8 → SCK флеша 40 МГц    
-static const PllConfig pll_cfg_boosted = { 320000000UL, 1, 80, 3, 1, 8}; 
+// static const PllConfig pll_cfg_boosted = { 320000000UL, 1, 80, 3, 1, 8}; 
+
+
 // Номинал для flash-операций: VCO = 12М * 125 = 1500 МГц, p1=6, p2=2 → 125 МГц    
 // BAUDR=4 → SCK флеша 31.25 МГц. Тот же путь reprogram_pll, что и разгон.    
 static const PllConfig pll_cfg_nominal = { 125000000UL, 1, 125, 6, 2, 4};
@@ -152,8 +154,8 @@ void __not_in_flash_func(af_set_clk_nominal)(void) {
 static void core1_main(void);   // рабочий цикл Core 1, RAM-only  
 
 void setup() {
-    af_set_clk();              // разгон первым делом, до USB/Serial  
-    af_usb_init();
+
+    af_usb_init();             // монтируем диск, потом звук
 
     Serial.begin(115200);
     af_led_init();             // heartbeat (WS2812 на GP16 у Zero)
@@ -163,7 +165,9 @@ void setup() {
     // Как в радиомодеме: без USB-хоста ожидание не блокирует запуск.  
     while (!Serial && millis() < 3000) delay(1);  
 
-    watchdog_enable(8000, true);  // сторожевой 8 с
+    af_set_clk();              // разгон
+
+    watchdog_enable(3000, true);  // сторожевой 3 с
     
     Serial.printf("# clk_sys=%lu Hz | FLASH=%lu kHz (BAUDR=%u)\n",  
                   (unsigned long)clock_get_hz(clk_sys),  
