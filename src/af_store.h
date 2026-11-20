@@ -112,3 +112,7 @@ void af_store_core1_unpark(void);
 // Заполнить массив банков дефолтными пресетами (общая таблица для    
 // af_store_poll и 'banks clr').    
 void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]);  
+
+// FLASH-TEST: N циклов erase/program/verify в тестовый сектор 0x100000.  
+// mode: 0=чистое окно, 1=+park, 2=+downclock, 3=park+downclock.  
+void af_store_test(uint8_t mode, uint32_t iters);  

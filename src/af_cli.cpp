@@ -9,8 +9,8 @@
 //        tx2band txsplit txlr2 txcomp txcompthr txcompthrlo txcompthrhi  
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
 //        txpres txpresmax txpresfreq txpresq txshelf txshelffreq txshelfq  
-//        txexc txexcmix txmode txclip txnotch txnotchf txsetdef txprof    
-//   SYS: stats dump fmap save load banks pwm voice ramp rec play stop recs help        
+//        txexc txexcmix txmode txclip txnotch txnotchf txsetdef txprof
+//   SYS: stats dump fmap ftest save load banks pwm voice ramp rec play stop recs help
 // ============================================================================  
 #include <Arduino.h>
 #include <string.h>
@@ -18,7 +18,9 @@
 #include <stddef.h>                   // offsetof — таблица параметров AF_PARAMS
 #include "hardware/clocks.h"          // clock_get_hz — фактическая clk_sys  
 #include "hardware/structs/ssi.h"     // ssi_hw->baudr — делитель SCK флеша  
-#include "hardware/flash.h"           // FLASH_SECTOR_SIZE, PICO_FLASH_SIZE_BYTES — fmap  
+#include "hardware/flash.h"           // FLASH_SECTOR_SIZE, PICO_FLASH_SIZE_BYTES — fmap
+#include "hardware/sync.h"            // save_and_disable_interrupts — ftest
+
 #include "af_cli.h"
 #include "af_config.h"
 #include "af_dsp.h"
@@ -100,7 +102,8 @@ static void cli_help(void) {
     Serial.println("# === СИСТЕМА ===");
     Serial.println("#   stats             — таблица параметров RX/TX/SYS");  
     Serial.println("#   dump [N|off]      — инженерный дамп счётчиков: однократно / каждые N сек / стоп");    
-    Serial.println("#   fmap              — RLE-карта flash: регионы, граница прошивки, банки");  
+    Serial.println("#   fmap              — RLE-карта flash: регионы, граница прошивки, банки");
+    Serial.println("#   ftest [m] [N]     — FLASH-TEST @0x100000: m=0 окно, 1 +park, 2 +clk, 3 всё; N итераций");
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");    
     Serial.println("#   banks             — показать все ячейки");  
@@ -1516,7 +1519,18 @@ static void cli_exec(char* line) {
                           af_rec_is_playing()   ? "PLAY" : "idle");        
         }        
     }      
-    
+
+    else if (strcmp(cmd, "ftest") == 0) {  
+        // ftest [mode] [iters] — тест записи в свободный сектор 0x100000.  
+        // mode: 0=чистое окно, 1=+park, 2=+даунклок, 3=park+даунклок.  
+        char* s_m = strtok(NULL, " \t");  
+        char* s_n = strtok(NULL, " \t");  
+        uint8_t  mode  = s_m ? (uint8_t)strtoul(s_m, NULL, 10) : 0;  
+        uint32_t iters = s_n ? (uint32_t)strtoul(s_n, NULL, 10) : 10;  
+        if (mode > 3) { Serial.println("# ERR: ftest [0..3] [N]"); return; }  
+        af_store_test(mode, iters);  
+    }
+
     // вставлять сюда  
   
     else {    

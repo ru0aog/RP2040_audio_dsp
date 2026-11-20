@@ -514,4 +514,96 @@ void af_store_poll(void) {
     if (!s_need_defaults) return;      
     s_need_defaults = false;      
     af_store_write_defaults();      
-}    
+}
+
+// ============================================================================  
+// FLASH-TEST: отработка механизма записи в изоляции.  
+// Тестовый сектор 0x100000 — свободная зона по fmap (0x0ef000..0x13ffff).  
+// Не пересекается ни с прошивкой, ни с банками (0x1ff000), ни с rec-слотом.  
+// Четыре варианта окна — чтобы найти, какой фактор вносит зависание:  
+//   mode 0: чистое окно (IRQ-off -> erase -> program -> IRQ-on)  
+//   mode 1: + парковка Core 1 (af_store_core1_park/unpark)  
+//   mode 2: + даунклок (af_set_clk_nominal -> окно -> af_set_clk)  
+//   mode 3: парковка + даунклок (полная схема, как af_store_save)  
+// ============================================================================  
+  
+#define AF_TEST_FLASH_OFF   0x100000u  
+#define AF_TEST_MAGIC0      'T'  
+#define AF_TEST_MAGIC1      'E'  
+  
+static uint8_t s_test_img[FLASH_SECTOR_SIZE];  
+  
+// Окно записи тестового сектора — вся в RAM, как do_flash_write.  
+static void __not_in_flash_func(do_test_write)(void* param) {  
+    (void)param;  
+    flash_range_erase(AF_TEST_FLASH_OFF, FLASH_SECTOR_SIZE);  
+    flash_range_program(AF_TEST_FLASH_OFF, s_test_img, FLASH_SECTOR_SIZE);  
+}  
+  
+// Одна итерация: заполнить образ паттерном, записать, верифицировать.  
+// Возвращает true при совпадении readback.  
+static bool af_store_test_iter(uint8_t mode, uint32_t iter) {  
+    // Паттерн: сигнатура + номер итерации + пилообразные данные.  
+    s_test_img[0] = AF_TEST_MAGIC0;  
+    s_test_img[1] = AF_TEST_MAGIC1;  
+    s_test_img[2] = (uint8_t)(iter & 0xFF);  
+    s_test_img[3] = (uint8_t)(iter >> 8);  
+    for (uint32_t i = 4; i < FLASH_SECTOR_SIZE; i++) {  
+        s_test_img[i] = (uint8_t)(i + iter);   // детерминированный паттерн  
+    }  
+  
+    bool parked = false;  
+    if (mode == 1 || mode == 3) {  
+        if (!af_store_core1_park(5000)) {  
+            Serial.println("# ftest: park TIMEOUT");  
+            return false;  
+        }  
+        parked = true;  
+    }  
+    if (mode == 2 || mode == 3) {  
+        af_set_clk_nominal();  
+    }  
+  
+    uint32_t ints = save_and_disable_interrupts();  
+    do_test_write(NULL);  
+    restore_interrupts(ints);  
+    flash_flush_cache();  
+  
+    if (mode == 2 || mode == 3) {  
+        af_set_clk();  
+    }  
+    if (parked) {  
+        af_store_core1_unpark();  
+    }  
+  
+    // Верификация: readback через XIP, сравнение с образом.  
+    const uint8_t* rb = (const uint8_t*)(XIP_BASE + AF_TEST_FLASH_OFF);  
+    if (rb[0] != AF_TEST_MAGIC0 || rb[1] != AF_TEST_MAGIC1) return false;  
+    for (uint32_t i = 4; i < FLASH_SECTOR_SIZE; i++) {  
+        if (rb[i] != (uint8_t)(i + iter)) return false;  
+    }  
+    return true;  
+}  
+  
+// Публичный вход из CLI: af_store_test(mode, iters).  
+// mode 0..3 (см. выше), iters — число циклов erase/program/verify.  
+void af_store_test(uint8_t mode, uint32_t iters) {  
+    Serial.printf("# ftest: mode=%u iters=%lu off=0x%x\n",  
+                  (unsigned)mode, (unsigned long)iters, (unsigned)AF_TEST_FLASH_OFF);  
+    Serial.flush();  
+    uint32_t fails = 0;  
+    for (uint32_t i = 0; i < iters; i++) {  
+        if (!af_store_test_iter(mode, i)) {  
+            fails++;  
+            Serial.printf("# ftest: iter %lu FAIL\n", (unsigned long)i);  
+            Serial.flush();  
+        } else if ((i % 10) == 0 || i == iters - 1) {  
+            Serial.printf("# ftest: iter %lu ok\n", (unsigned long)i);  
+            Serial.flush();  
+        }  
+    }  
+    Serial.printf("# ftest: done, %lu/%lu ok\n",  
+                  (unsigned long)(iters - fails), (unsigned long)iters);  
+    Serial.flush();  
+}
+// =======================   КОНЕЦ БЛОКА ТЕСТОВ   =============================

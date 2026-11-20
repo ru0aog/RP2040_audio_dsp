@@ -150,7 +150,7 @@ static void core1_main(void);   // рабочий цикл Core 1, RAM-only
 void setup()  
 {  
     af_set_clk();              // разгон первым делом, до USB/Serial  
-    af_usb_init();
+//    af_usb_init();
 
     Serial.begin(115200);
     af_led_init();             // heartbeat (WS2812 на GP16 у Zero)
@@ -166,21 +166,26 @@ void setup()
                   (unsigned long)clock_get_hz(clk_sys),  
                   (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000),  
                   (unsigned)ssi_hw->baudr);  
-  
-    af_dsp_init();  
-    af_cli_init();  
-    Serial.println("# before store_init"); Serial.flush();  
-    af_store_init();  
-    Serial.println("# after store_init");  Serial.flush(); 
+
+// === FLASH-TEST СТЕНД: все модули отключены ===
+// Оставлены: clk, USB/Serial, CLI (fmap/ftest), watchdog.
+af_cli_init();
+
+/*
+    af_dsp_init();
+    af_cli_init();
+    Serial.println("# before store_init"); Serial.flush();
+    af_store_init();
+    Serial.println("# after store_init");  Serial.flush();
     af_rec_init();
     af_led_set(0, 0, 10);
     af_gpio_ctl_init();
     af_capture_start();
     af_pwm_init();
-    af_voice_init();  
-    af_voice_play(VOICE_READY);   // приветствие после инициализации  
+    af_voice_init();
+    af_voice_play(VOICE_READY);   // приветствие после инициализации
     af_led_set(0, 10, 0);
-
+*/
     __dmb();  
     core0_ready = true;
     af_led_set(0, 0, 0);
@@ -189,7 +194,11 @@ void setup()
 void loop()  
 {  
     const uint32_t t0 = micros();  
-  
+
+// === FLASH-TEST: только CLI и heartbeat === 
+af_led_poll();
+af_cli_poll();
+/*
     af_usb_poll();      // первым: TX-FIFO TinyUSB — самый мелкий буфер тракта  
     af_led_poll();    
     af_cli_poll();  
@@ -200,7 +209,7 @@ void loop()
     af_pwm_poll();    
     af_pwm_poll();    
     af_usb_poll();      // и ещё раз в конце — сглаживает джиттер итерации  
-  
+*/
     watchdog_update();  
   
     // Учёт загрузки Core 0  
@@ -216,6 +225,10 @@ void loop()
   
 void setup1()    
 {    
+for (;;) { tight_loop_contents(); }   // Core 1 спит в RAM-цикле 
+
+// === FLASH-TEST: Core 1 не запускаем — чистое окно без мультиядра === 
+/*
     const uint32_t t0 = millis();    
     while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {    
         af_store_core1_park_poll();    
@@ -226,6 +239,7 @@ void setup1()
     // обращаться к flash — ни кодом, ни данными. loop1() Arduino-ядра    
     // лежит во flash, поэтому крутим свой цикл из RAM-функции.    
     core1_main();   // не возвращается  
+*/
 }  
   
 // Рабочий цикл Core 1 — строго в RAM. Запрещено вызывать отсюда    
