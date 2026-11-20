@@ -525,4 +525,27 @@ af_gpio_ctl.cpp/.h — дебаунс GP2/GP3/GP4
 - Профили: txprof 1..7 (natural/dx/bass/whisper/loud/flat/work),  
   старт = work; см. AGENTS.md «TX-профили».  
 
+  ## MSC-диск (af_fm)  
   
+FAT12 ~1.6 МБ, RAM-образ ~14 КБ. Раскладка: LBA 0 boot, 1..10 FAT,  
+11 root dir, 12..27 SET.TXT (RAM), 28+ REC1..REC7.WAV (виртуальные).  
+  
+- Чтение WAV: af_fm_msc_read синтезирует сектор на лету — заголовок  
+  WAV (16000 Гц mono) + линейный ресемплинг 7732→16000 из XIP-слота.  
+- Запись: только data-область SET.TXT ставит fm_dirty; дебаунс 800 мс  
+  в af_fm_poll → af_cli_apply_set_txt → af_store_write_all.  
+- Синхронизация: af_fm_request_sync() вызывается из af_store_save/  
+  write_all, rec_slot_write, af_rec_erase_all, cli_param_try, save,  
+  load, banks clr — SET.TXT и размеры WAV всегда актуальны.  
+- Порядок в setup(): af_fm_init → af_store_init → af_gpio_ctl_init →  
+  af_fm_sync → af_usb_init — образ собран до энумерации, диск  
+  появляется один раз с готовым SET.TXT.  
+  
+## Магнитофон (af_rec)  
+  
+Запись: af_rec_push(sat16(tx_in)) до af_tx_process — сырой микрофон,  
+децимация ×2 в ram_buf (56000 отсч., ~7.2 с). Сброс на stop через  
+flash-окно (park Core1 → mute → 125 МГц → capture pause → pwm off →  
+IRQ-off → erase+program → restore). Воспроизведение: XIP-чтение слота  
+с интерполяцией ×2 → подстановка в tx_in → один проход TX-тракта.  
+
