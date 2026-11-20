@@ -188,10 +188,6 @@ void setup() {
 void loop() {
     const uint32_t t0 = micros();  
 
-// === FLASH-TEST: только CLI и heartbeat === 
-af_led_poll();
-af_cli_poll();
-/*
     af_usb_poll();      // первым: TX-FIFO TinyUSB — самый мелкий буфер тракта  
     af_led_poll();    
     af_cli_poll();  
@@ -202,7 +198,7 @@ af_cli_poll();
     af_pwm_poll();    
     af_pwm_poll();    
     af_usb_poll();      // и ещё раз в конце — сглаживает джиттер итерации  
-*/
+
     watchdog_update();  
   
     // Учёт загрузки Core 0  
