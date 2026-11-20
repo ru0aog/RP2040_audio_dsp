@@ -165,15 +165,9 @@ void af_fm_poll(void) {
                           AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE);        
         Serial.printf("# fm: SET.TXT %s\n",        
                       applied ? "parsed -> banks written" : "parse failed");        
-        if (applied) {      
-            af_fm_sync();              // перерендерить из записанных банков      
-            af_usb_reenumerate();      // хост перечитает образ — иначе      
-                                       // его кеш перезапишет наши правки      
-        } else {      
-            fm_stale = true;           // парсинг не удался — вернуть образ      
-        }      
+        fm_stale = true;               // перерендерить из записанных банков         
     }      
-    if (fm_stale) af_fm_sync();      
+    if (fm_stale) af_fm_sync();        
 }    
   
 bool     af_fm_dirty(void)    { return fm_dirty; }  
@@ -251,13 +245,18 @@ void af_fm_msc_flush(void) {
     if (fm_dirty) fm_dirty_ms = millis();   // flush = конец пачки записи    
 }    
   
-int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {      
-    if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;      
-    if (bufsize < AF_FM_SECTOR_SIZE) return -1;      
-    if (lba >= AF_FM_WAV_LBA(0)) return -1;        // WAV — read-only      
-    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only      
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);        
-    fm_dirty   = true;    
-    fm_dirty_ms = millis();          // дебаунс -> парсер в af_fm_poll    
-    return (int32_t)AF_FM_SECTOR_SIZE;        
+int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {        
+    if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;        
+    if (bufsize < AF_FM_SECTOR_SIZE) return -1;        
+    if (lba >= AF_FM_WAV_LBA(0)) return -1;        // WAV — read-only        
+    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only        
+    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);          
+    // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..27).  
+    // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)  
+    // не должны триггерить парсинг и перемонтирование — иначе цикл.  
+    if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {  
+        fm_dirty   = true;      
+        fm_dirty_ms = millis();      // дебаунс -> парсер в af_fm_poll      
+    }  
+    return (int32_t)AF_FM_SECTOR_SIZE;          
 }  
