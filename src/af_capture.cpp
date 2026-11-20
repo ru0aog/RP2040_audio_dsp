@@ -429,3 +429,43 @@ uint32_t af_capture_dropped(void) { return af_dropped; }
 bool af_capture_is_running(void) {  
     return af_running;  
 }
+
+// ---------------------------------------------------------------------------  
+// DMA-окно для flash-записи: пауза capture на время XIP-off.  
+// Без этого capture DMA + pending IRQ ломают flash-окно (подтверждено  
+// изоляцией: ftest 3 вис с capture, 100/100 без).  
+// af_capture_pause  — до save_and_disable_interrupts (ADC стоп, DMA abort,  
+//                     IRQ off). НЕ __not_in_flash_func — вызывается при живом XIP.  
+// af_capture_resume — после restore_interrupts: перезапуск цепочки A->B->A.  
+// ---------------------------------------------------------------------------
+// ===============   БЛОК ПАРКОВКИ DMA НА ПЕРИОД ФЛЭШ-ЗАПИСИ   ===============
+void af_capture_pause(void) {  
+    if (!af_running) return;  
+    adc_run(false);                          // ADC перестаёт давать DREQ  
+    irq_set_enabled(DMA_IRQ_0, false);  
+    if (af_dma_a >= 0) {  
+        dma_channel_set_irq0_enabled(af_dma_a, false);  
+        dma_channel_abort(af_dma_a);  
+        dma_channel_acknowledge_irq0(af_dma_a);  
+    }  
+    if (af_dma_b >= 0) {  
+        dma_channel_set_irq0_enabled(af_dma_b, false);  
+        dma_channel_abort(af_dma_b);  
+        dma_channel_acknowledge_irq0(af_dma_b);  
+    }  
+    adc_fifo_drain();  
+}  
+  
+void af_capture_resume(void) {  
+    if (!af_running) return;  
+    // Каналы сохранили конфигурацию (chain_to, dreq) — достаточно  
+    // перенастроить цель/счётчик и запустить A; B подхватит по chain_to.  
+    af_rearm_channel(af_dma_a, true);  
+    af_rearm_channel(af_dma_b, false);  
+    dma_channel_set_irq0_enabled(af_dma_a, true);  
+    dma_channel_set_irq0_enabled(af_dma_b, true);  
+    irq_set_enabled(DMA_IRQ_0, true);  
+    dma_channel_start(af_dma_a);  
+    adc_run(true);  
+}  
+// ======================   КОНЕЦ БЛОКА DMA-ПАРКОВКИ   =======================

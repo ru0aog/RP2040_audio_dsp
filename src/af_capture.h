@@ -46,3 +46,7 @@ extern volatile uint32_t af_q_fill_max;      // high-water заполнения 
 extern volatile uint32_t af_cap_get_empty;   // опросы пустой очереди Core 1    
 extern volatile uint32_t af_cap_published;   // блоков опубликовано IRQ    
 extern volatile uint32_t af_cap_released;    // блоков освобождено DSP    
+
+// DMA-окно для flash-записи (af_store): пауза/рестарт capture.  
+void af_capture_pause(void);  
+void af_capture_resume(void);  

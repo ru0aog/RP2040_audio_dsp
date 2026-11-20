@@ -27,6 +27,7 @@
 #include "af_tx.h"  
 #include "af_voice.h"
 #include "af_led.h"
+#include "af_capture.h"               // af_capture_pause/resume — DMA-окно  
   
 #include "pico/stdlib.h"
 #include "hardware/flash.h"  
@@ -564,12 +565,14 @@ static bool af_store_test_iter(uint8_t mode, uint32_t iter) {
         af_set_clk_nominal();  
     }  
   
+    af_capture_pause();               // DMA-окно: ADC+DMA стоп до XIP-off  
     uint32_t ints = save_and_disable_interrupts();    
     do_test_write(NULL);    
     flash_flush_cache();              // ДО restore_interrupts: иначе pending  
                                       // DMA IRQ прыгнет в ISR на протухшем  
                                       // XIP-кэше -> вис (гипотеза проверяется)  
     restore_interrupts(ints);    
+    af_capture_resume();              // рестарт цепочки A->B->A  
   
     if (mode == 2 || mode == 3) {  
         af_set_clk();  
