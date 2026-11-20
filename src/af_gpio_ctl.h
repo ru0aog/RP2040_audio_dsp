@@ -15,16 +15,10 @@ void af_gpio_ctl_init(void);
 // Неблокирующий опрос пинов с дебаунсом. Вызывать из loop() (Core 0).    
 void af_gpio_ctl_poll(void);  
   
-// Текущий код банка с GP2..GP4 (0 = ручной режим).    
-uint8_t af_gpio_bank_code(void);  
-
 // Управление PTT/TX для CLI (play voice_14 в TX+PTT, аналог GP10).    
 bool af_gpio_ptt_tx_on(void);    
 void af_gpio_ptt_tx_off(void);    
 
-uint8_t af_gpio_bank_code(void);              // текущий код банка (0 = manual)  
 void    af_gpio_set_bank_code(uint8_t code);  // установить из CLI 'load N'  
-
 uint8_t af_gpio_bank_code(void);      // текущий код 0..7 (0 = manual)    
 uint8_t af_gpio_last_bank(void);      // последний загруженный банк 1..7    
-void    af_gpio_set_bank_code(uint8_t code);    
