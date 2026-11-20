@@ -44,7 +44,9 @@ static volatile uint8_t     play_src = 0;      // 0 = ram_buf (×2 interp), 1 = 
 static volatile uint32_t    play_len = 0;      // длина текущего воспроизведения  
 
 // --- RAM-буфер записи --------------------------------------------------------    
-static int16_t  ram_buf[AF_REC_RAM_SAMP];    
+// +128 отсчётов (256 Б) — запас под паддинг хвоста до границы страницы  
+// в rec_slot_write: flash_range_program требует длину кратную 256 Б.  
+static int16_t  ram_buf[AF_REC_RAM_SAMP + 128];  
   
 // --- Слот во flash ------------------------------------------------------------    
 // Заголовок слота (первая страница, 256 Б): magic + длина + банк + crc.    
@@ -141,7 +143,42 @@ static bool rec_slot_write(uint8_t bank, uint32_t n_samp) {
     if (pwm_was) af_pwm_set_enabled(true);    
     af_store_core1_unpark();    
     return true;    
-}    
+}
+
+// Очистка всех слотов: erase всего региона магнитофона одним окном.        
+// Вызывается из обработчика "banks clr" (af_cli.cpp, Core 0).        
+// Окно ~3-4 с (erase 224 секторов) — звук/USB мьютятся, как при save.        
+static void __not_in_flash_func(do_rec_flash_erase_all)(void* param) {        
+    (void)param;        
+    flash_range_erase(AF_REC_FLASH_OFF, AF_REC_FLASH_LEN);        
+}        
+    
+bool af_rec_erase_all(void) {        
+    if (state != ST_IDLE) return false;         // не во время rec/play        
+    
+    if (!af_store_core1_park(5000)) {        
+        Serial.println("# rec: park TIMEOUT — erase aborted");        
+        return false;        
+    }        
+    af_usb_set_muted(true);        
+    af_set_clk_nominal();        
+    af_capture_pause();        
+    const bool pwm_was = af_pwm_is_enabled();        
+    if (pwm_was) af_pwm_set_enabled(false);        
+    uint32_t ints = save_and_disable_interrupts();        
+    do_rec_flash_erase_all(NULL);        
+    flash_flush_cache();        
+    restore_interrupts(ints);        
+    af_capture_resume();        
+    af_usb_set_muted(false);        
+    af_set_clk();        
+    if (pwm_was) af_pwm_set_enabled(true);        
+    af_store_core1_unpark();        
+    
+    slot_len = 0;                               // активный слот тоже пуст        
+    Serial.println("# rec: all slots erased");        
+    return true;        
+}        
   
 // --- API --------------------------------------------------------------------      
 void af_rec_init(void) {    
@@ -243,7 +280,7 @@ int16_t __not_in_flash_func(af_rec_mix)(int16_t s) {
     int32_t v;    
     if (play_src) {                          // voice_14: полная частота, 1:1    
         v = s + clip_voice_14[pos++];    
-    } else {                                 // ram_buf: интерполяция ×2    
+    } else {                                 // flash-слот: интерполяция ×2
         int16_t cur = rec_slot_data()[pos];   // XIP-чтение слота    
         if (++interp_phase >= AF_REC_DECIM) { interp_phase = 0; pos++; v = s + cur; }    
         else                                { v = s + (prev_samp + cur) / 2; }    
@@ -259,7 +296,7 @@ int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {
     int32_t v;    
     if (play_src) {                          // voice_14: полная частота, 1:1    
         v = clip_voice_14[pos++];    
-    } else {                                 // ram_buf: интерполяция ×2    
+    } else {                                 // flash-слот: интерполяция ×2
         int16_t cur = rec_slot_data()[pos];   // XIP-чтение слота    
         if (++interp_phase >= AF_REC_DECIM) { interp_phase = 0; pos++; v = cur; }    
         else                                { v = (prev_samp + cur) / 2; }    
