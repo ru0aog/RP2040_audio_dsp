@@ -185,9 +185,18 @@ void setup() {
     af_rec_init();
     af_led_set(0, 0, 10);
     af_gpio_ctl_init();
-    af_fm_sync();              // SET.TXT = актуальная таблица banks
-                               // (после store_init + gpio_ctl: cur финальный)
-    af_capture_start();
+    af_fm_sync();              // SET.TXT = актуальная таблица banks  
+                               // (после store_init + gpio_ctl: cur финальный)  
+  
+    // Хост энумерировался в af_usb_init и закешировал dir с size=0.  
+    // Пере-энумерация — перечитает FAT/каталог с реальным размером.  
+    if (TinyUSBDevice.mounted()) {  
+        TinyUSBDevice.detach();  
+        delay(100);  
+        TinyUSBDevice.attach();  
+    }  
+  
+    af_capture_start();  
     af_pwm_init();
     af_voice_init();
     af_voice_play(VOICE_READY);   // приветствие после инициализации
