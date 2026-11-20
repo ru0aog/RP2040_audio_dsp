@@ -147,8 +147,7 @@ void __not_in_flash_func(af_set_clk_nominal)(void) {
 // ============================================================================  
 static void core1_main(void);   // рабочий цикл Core 1, RAM-only  
 
-void setup()  
-{  
+void setup() {
     af_set_clk();              // разгон первым делом, до USB/Serial  
 //    af_usb_init();
 
@@ -191,8 +190,7 @@ af_cli_init();
     af_led_set(0, 0, 0);
 }  
   
-void loop()  
-{  
+void loop() {
     const uint32_t t0 = micros();  
 
 // === FLASH-TEST: только CLI и heartbeat === 
@@ -222,11 +220,27 @@ af_cli_poll();
     }  
     // Периодическая сводка убрана — диагностика по команде 'stats'.  
 }
-  
-void setup1()    
-{    
-for (;;) { tight_loop_contents(); }   // Core 1 спит в RAM-цикле 
 
+  
+// Рабочий цикл Core 1 — строго в RAM. Запрещено вызывать отсюда    
+// (и из af_dsp_poll) любые функции без __not_in_flash_func и читать    
+// const-данные/XIP-указатели — иначе зависание во время записи af_store.    
+static void __not_in_flash_func(core1_main)(void) {
+    for (;;) {  
+        af_store_core1_park_poll();   // парковка по запросу af_store (RAM)  
+        af_dsp_poll();                // вся DSP-цепочка — __not_in_flash_func  
+    }  
+}
+
+// Спящий цикл Core 1 — строго в RAM: во время flash-окна XIP off,  
+// фетч из flash = зависание SSI. tight_loop_contents() в setup1()  
+// исполнялся бы из flash — поэтому отдельная __not_in_flash_func.  
+static void __not_in_flash_func(core1_idle_spin)(void) {
+    for (;;) { tight_loop_contents(); }  
+}  
+
+void setup1() {
+    core1_idle_spin();   // не возвращается; Core 1 спит в RAM, XIP не трогает  
 // === FLASH-TEST: Core 1 не запускаем — чистое окно без мультиядра === 
 /*
     const uint32_t t0 = millis();    
@@ -241,20 +255,8 @@ for (;;) { tight_loop_contents(); }   // Core 1 спит в RAM-цикле
     core1_main();   // не возвращается  
 */
 }  
-  
-// Рабочий цикл Core 1 — строго в RAM. Запрещено вызывать отсюда    
-// (и из af_dsp_poll) любые функции без __not_in_flash_func и читать    
-// const-данные/XIP-указатели — иначе зависание во время записи af_store.    
-static void __not_in_flash_func(core1_main)(void)  
-{  
-    for (;;) {  
-        af_store_core1_park_poll();   // парковка по запросу af_store (RAM)  
-        af_dsp_poll();                // вся DSP-цепочка — __not_in_flash_func  
-    }  
-}  
-  
-void loop1()  
-{  
+ 
+void loop1() {
     // Не используется: рабочий цикл Core 1 — core1_main() в RAM,  
     // вызывается из setup1(). Оставлена для Arduino-ядра.  
 }  
