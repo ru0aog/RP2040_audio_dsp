@@ -174,7 +174,7 @@ void setup() {
     af_rec_init();
     af_led_set(0, 0, 10);
     af_gpio_ctl_init();
-    //af_capture_start();
+    af_capture_start();
     af_pwm_init();
     af_voice_init();
     af_voice_play(VOICE_READY);   // приветствие после инициализации
