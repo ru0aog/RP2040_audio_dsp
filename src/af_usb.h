@@ -30,3 +30,5 @@ uint32_t af_usb_fifo_full(void);     // poll встретил полный TX-FI
 uint32_t af_usb_write_short(void);   // байт, недопринятых write()    
 uint32_t af_usb_poll_gap_max(void);  // пиковый gap между poll, мкс (сброс при чтении)
 uint32_t af_usb_avail_max(void);   // макс. avail_frames ≈ ёмкость TX-FIFO (фреймы)    
+
+void af_usb_set_muted(bool m);   // тишина в USB на время flash-окна    

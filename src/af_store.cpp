@@ -6,9 +6,14 @@
 // EEPROM-эмуляция ядра Philhower. Чтение — напрямую из XIP в s_sector_img,
 // запись — напрямую flash_range_erase/flash_range_program из RAM-функции
 // do_flash_write. Схема окна (баг 4, все условия обязательны):
-//   af_capture_pause → af_store_core1_park → af_set_clk_nominal (125 МГц)
-//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on  
-//   → af_capture_resume → af_set_clk (250 МГц) → af_store_core1_unpark  
+//   af_usb_set_muted(true) + промывка ~60 мс → af_capture_pause    
+//   → af_pwm off → af_store_core1_park → af_set_clk_nominal (125 МГц)    
+//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on      
+//   → af_capture_resume → af_usb_set_muted(false)    
+//   → af_set_clk (250 МГц) → af_pwm restore → af_store_core1_unpark      
+// af_pwm off — глушение выхода: без него на границах окна слышен щелчок.    
+// USB-мьют: буфер AudioTools ~46 мс, поэтому mute ставится заранее    
+// и poll'ами промывается нулями — иначе в окно уходит хвост живого звука.    
 //  
 // Раскладка сектора:  
 //   [0..1]   magic 'A','F'  
@@ -30,7 +35,9 @@
 #include "af_tx.h"  
 #include "af_voice.h"
 #include "af_led.h"
-#include "af_capture.h"               // af_capture_pause/resume — DMA-окно  
+#include "af_capture.h"               // af_capture_pause/resume — DMA-окно
+#include "af_pwm.h"                   // af_pwm_set_enabled — глушение выхода на окно
+#include "af_usb.h"                   // af_usb_set_muted/poll — тишина в USB на окно
   
 #include "pico/stdlib.h"
 #include "hardware/flash.h"  
@@ -259,21 +266,31 @@ bool af_store_save(uint8_t idx) {
         return false;    
     }    
     
-    af_set_clk_nominal();               // 125 МГц на окно — обязательно,    
-                                        // на 250 МГц erase/program виснет    
-    af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off  
-    uint32_t ints = save_and_disable_interrupts();      
-    do_flash_write(NULL);               // RAM: erase+program, XIP off      
-    flash_flush_cache();                // ДО restore_interrupts: иначе pending  
-                                        // DMA IRQ прыгнет в ISR на протухшем  
-                                        // XIP-кэше -> вис  
-    restore_interrupts(ints);      
-    af_capture_resume();                // рестарт цепочки A->B->A  
-    af_set_clk();                       // возврат на 250 МГц — обязательно,  
-                                        // иначе следующий save входит в окно  
-                                        // на 125 МГц в нештатном состоянии  
-    af_store_core1_unpark();    
-    return true;        
+    af_usb_set_muted(true);             // USB -> тишина; буфер ~46 мс,    
+    {                                   // промываем poll'ами до окна    
+        const uint32_t t0 = millis();    
+        while ((uint32_t)(millis() - t0) < 60u) af_usb_poll();    
+    }    
+    af_set_clk_nominal();               // 125 МГц на окно — обязательно,
+                                        // на 250 МГц erase/program виснет
+    af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off
+    const bool pwm_was = af_pwm_is_enabled();   // запомнить состояние выхода
+    if (pwm_was) af_pwm_set_enabled(false);     // глушим — иначе щелчок на окне
+    uint32_t ints = save_and_disable_interrupts();
+    do_flash_write(NULL);               // RAM: erase+program, XIP off
+    flash_flush_cache();                // ДО restore_interrupts: иначе pending
+                                        // DMA IRQ прыгнет в ISR на протухшем
+                                        // XIP-кэше -> вис
+    restore_interrupts(ints);
+    af_capture_resume();                // рестарт цепочки A->B->A
+    af_usb_set_muted(false);            // USB -> звук
+    af_set_clk();                       // возврат на 250 МГц — обязательно,
+                                        // иначе следующий save входит в окно
+                                        // на 125 МГц в нештатном состоянии
+    if (pwm_was) af_pwm_set_enabled(true);      // вернуть выход (мягкий рестарт
+                                              // через duty_ready в af_pwm_poll)
+    af_store_core1_unpark();
+    return true;
 }
   
 bool af_store_load(uint8_t idx) {  
@@ -361,16 +378,26 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         Serial.println("# banks: park TIMEOUT — abort");    
         return;    
     }    
-  
-    af_set_clk_nominal();      
-    af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off  
-    uint32_t ints = save_and_disable_interrupts();      
-    do_flash_write(NULL);               // RAM: erase+program, XIP off      
-    flash_flush_cache();                // ДО restore_interrupts — см. save  
-    restore_interrupts(ints);      
-    af_capture_resume();                // рестарт цепочки A->B->A  
-    af_set_clk();    
-    af_store_core1_unpark();  
+
+    af_usb_set_muted(true);             // USB -> тишина + промывка, см. save    
+    {    
+        const uint32_t t0 = millis();    
+        while ((uint32_t)(millis() - t0) < 60u) af_usb_poll();    
+    }    
+    af_set_clk_nominal();          
+    af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off      
+    const bool pwm_was = af_pwm_is_enabled();      
+    if (pwm_was) af_pwm_set_enabled(false);     // глушим выход на окно      
+    uint32_t ints = save_and_disable_interrupts();          
+    do_flash_write(NULL);               // RAM: erase+program, XIP off          
+    flash_flush_cache();                // ДО restore_interrupts — см. save      
+    restore_interrupts(ints);          
+    af_capture_resume();                // рестарт цепочки A->B->A      
+    af_usb_set_muted(false);            // USB -> звук    
+    af_set_clk();        
+    if (pwm_was) af_pwm_set_enabled(true);      
+    af_store_core1_unpark();      
+
     Serial.println("# OK banks written");      
 }
 
@@ -547,14 +574,23 @@ static bool af_store_test_iter(uint8_t mode, uint32_t iter) {
         af_set_clk_nominal();  
     }  
   
-    af_capture_pause();               // DMA-окно: ADC+DMA стоп до XIP-off  
-    uint32_t ints = save_and_disable_interrupts();    
-    do_test_write(NULL);    
-    flash_flush_cache();              // ДО restore_interrupts: иначе pending    
-                                      // DMA IRQ прыгнет в ISR на протухшем    
-                                      // XIP-кэше -> вис    
-    restore_interrupts(ints);    
-    af_capture_resume();              // рестарт цепочки A->B->A  
+    af_usb_set_muted(true);           // USB -> тишина + промывка, как в save    
+    {    
+        const uint32_t t0 = millis();    
+        while ((uint32_t)(millis() - t0) < 60u) af_usb_poll();    
+    }    
+    af_capture_pause();               // DMA-окно: ADC+DMA стоп до XIP-off      
+    const bool pwm_was = af_pwm_is_enabled();      
+    if (pwm_was) af_pwm_set_enabled(false);   // глушим выход — как в save      
+    uint32_t ints = save_and_disable_interrupts();        
+    do_test_write(NULL);        
+    flash_flush_cache();              // ДО restore_interrupts: иначе pending        
+                                      // DMA IRQ прыгнет в ISR на протухшем        
+                                      // XIP-кэше -> вис        
+    restore_interrupts(ints);        
+    af_capture_resume();              // рестарт цепочки A->B->A      
+    af_usb_set_muted(false);          // USB -> звук    
+    if (pwm_was) af_pwm_set_enabled(true);      
   
     if (mode == 2 || mode == 3) {  
         af_set_clk();  

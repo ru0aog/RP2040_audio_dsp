@@ -38,8 +38,13 @@ static volatile uint8_t  usb_ur_idx = 0;
 // Гистерезис заправки: не отдаём данные хосту, пока out_usb не накопит      
 // половину кольца. Иначе очередь живёт на дне (fill=0..1), регулятор      
 // прижат к -LIMIT, а TinyUSB пустеет между 4-мс блоками → разрывы.      
-static bool     usb_primed    = false;      
-static volatile uint32_t usb_reprimes = 0;   // разы ушли на перезаправку      
+static bool     usb_primed    = false;        
+static volatile uint32_t usb_reprimes = 0;   // разы ушли на перезаправку        
+  
+// Мьют на время flash-окна (af_store): в TinyUSB пишутся нули вместо    
+// ресемплированных фреймов — чистая тишина вместо удержания последнего    
+// фрейма. Входная очередь при этом дренируется, чтобы out_usb не забилась.    
+static volatile bool usb_muted = false;    
   
 // USB_LOW_MARK не используется: нижних отметок нет — кадр ограничен только      
 // лимитом 64 фрейма, а при пустой очереди дописывается паддингом последнего      
@@ -296,11 +301,22 @@ void af_usb_poll(void) {
         // на дне → нулевые EP-пакеты (провалы до нуля на осциллограмме).      
         if (avail_frames > 64) avail_frames = 64;            
     
-        int frames = 0;    
-        int16_t s = 0;    
-    
-        while (frames < avail_frames) {    
-            if (!next_frame(&s)) {    
+        int frames = 0;      
+        int16_t s = 0;      
+      
+        if (usb_muted) {    
+            // Flash-окно: тишина в поток. Очередь дренируем — иначе    
+            // за ~45 мс окна out_usb переполнится и блоки дропнутся.    
+            int32_t dummy;    
+            while (get_input(&dummy)) { /* drain */ }    
+            while (frames < avail_frames) {    
+                pcm_buffer[frames * 2]     = 0;    
+                pcm_buffer[frames * 2 + 1] = 0;    
+                ++frames;    
+            }    
+        } else    
+        while (frames < avail_frames) {      
+            if (!next_frame(&s)) {      
                 // Источник пуст: underrun. НЕ обрываем кадр — дописываем    
                 // последний фрейм (s сохраняет прошлое значение). Дефицит    
                 // ~1% = ~10 мс повторов в секунду, размазанных по потоку —    
@@ -370,3 +386,7 @@ bool     af_usb_mounted(void)      { return TinyUSBDevice.mounted(); }
 void af_usb_ur_log(uint32_t* t, uint16_t* n) {    
     for (int i = 0; i < 8; i++) { t[i] = usb_ur_t[i]; n[i] = usb_ur_n[i]; }    
 }  
+
+// Мьют USB-выхода на время flash-окна: poll пишет нули в TinyUSB.    
+// Вызывается из af_store до/после окна (при живом XIP).    
+void af_usb_set_muted(bool m) { usb_muted = m; }    
