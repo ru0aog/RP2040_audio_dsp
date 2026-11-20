@@ -11,18 +11,17 @@
 // SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.    
 // Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.    
   
-#include "af_config.h"  
-#include "af_fm.h"  
 #include <Arduino.h>  
 #include <string.h>  
 #include <stdio.h>  
-  
+
+#include "af_config.h"  
+#include "af_fm.h"
+#include "af_cli.h"
+ 
 // Рендер таблицы banks в буфер (af_cli.cpp — там AF_PARAMS/bank_field).    
 // Возвращает длину текста без NUL.    
 extern size_t af_cli_format_banks(char* buf, size_t cap);    
-// Парсер SET.TXT: применяет колонки 1..7 в банки + запись во flash.    
-// Возвращает число применённых полей (0 = ничего не распознано).    
-extern uint32_t af_cli_apply_set_txt(const char* txt, size_t len);    
   
 #include "af_rec.h"          // af_rec_slot_len/data — WAV-экспорт    
     
@@ -160,11 +159,12 @@ void af_fm_poll(void) {
     // потом парсим SET.TXT целиком и пишем банки во flash.    
     if (fm_dirty && (int32_t)(millis() - fm_dirty_ms) >= 800) {    
         fm_dirty = false;    
-        const char* txt = (const char*)&fm_disk[AF_FM_SET_LBA][0];    
-        uint32_t applied = af_cli_apply_set_txt(txt, fm_set_len);    
-        Serial.printf("# fm: SET.TXT parsed, %lu fields applied\n",    
-                      (unsigned long)applied);    
-        fm_stale = true;               // перерендерить из записанных банков    
+        const char* txt = (const char*)&fm_disk[AF_FM_SET_LBA][0];      
+        bool applied = af_cli_apply_set_txt(txt,      
+                          AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE);      
+        Serial.printf("# fm: SET.TXT %s\n",      
+                      applied ? "parsed -> banks written" : "parse failed");      
+        fm_stale = true;               // перерендерить из записанных банков       
     }    
     if (fm_stale) af_fm_sync();    
 }    
