@@ -24,7 +24,8 @@
 #include "src/af_store.h"
 #include "src/af_led.h"
 #include "src/af_voice.h"     // подмес голосовых клипов в выход
-#include "src/af_rec.h"           // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)  
+#include "src/af_rec.h"           // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
+#include "src/af_fm.h"            // файловый менеджер: FAT12-диск 16 КБ, SET.TXT
   
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    
@@ -155,7 +156,9 @@ static void core1_main(void);   // рабочий цикл Core 1, RAM-only
 
 void setup() {
 
-    af_usb_init();             // монтируем диск, потом звук
+    af_fm_init();              // образ диска ДО af_usb_init — первые READ'ы  
+                               // хоста при монтировании должны получить FAT12  
+    af_usb_init();             // монтируем диск, потом звук  
 
     Serial.begin(115200);
     af_led_init();             // heartbeat (WS2812 на GP16 у Zero)
@@ -182,6 +185,8 @@ void setup() {
     af_rec_init();
     af_led_set(0, 0, 10);
     af_gpio_ctl_init();
+    af_fm_sync();              // SET.TXT = актуальная таблица banks
+                               // (после store_init + gpio_ctl: cur финальный)
     af_capture_start();
     af_pwm_init();
     af_voice_init();

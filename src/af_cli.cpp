@@ -758,6 +758,56 @@ static bool cli_param_try(char* line) {
 }  
 
 // ---------------------------------------------------------------------------  
+// af_cli_format_banks — таблица banks в текстовый буфер (для SET.TXT / af_fm).  
+// Формат идентичен выводу команды 'banks': строки = AF_PARAMS,  
+// столбцы = cur + ячейки 1..7. Возвращает длину текста (без '\0').  
+// ---------------------------------------------------------------------------  
+size_t af_cli_format_banks(char* buf, size_t cap) {  
+    size_t n = 0;  
+    #define FMTP(...) do { \  
+        if (n < cap) n += snprintf(buf + n, cap - n, __VA_ARGS__); \  
+    } while (0)  
+  
+    af_bank_t bk[AF_STORE_BANKS + 1];  
+    bool      bv[AF_STORE_BANKS + 1];  
+    af_store_snapshot(&bk[0]);            // bk[0] = текущее состояние  
+    bv[0] = true;  
+    for (uint8_t i = 0; i < AF_STORE_BANKS; i++)  
+        bv[i + 1] = af_store_read(i + 1, &bk[i + 1]);  
+  
+    FMTP("# === BANKS (столбцы = cur + ячейки 1..7) ===\r\n");  
+    FMTP("# %-14s %6s", "param", "cur");  
+    for (uint8_t i = 0; i < AF_STORE_BANKS; i++) FMTP(" %6u", i + 1);  
+    FMTP("\r\n");  
+  
+    for (size_t p = 0; p < AF_PARAMS_COUNT; p++) {  
+        const af_param_t* par = &AF_PARAMS[p];  
+        if (par->type == PT_SEP) { FMTP("# %s\r\n", par->label); continue; }  
+        FMTP("# %-14s", par->label);  
+        for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {  
+            if (!bv[i]) { FMTP(" %6s", "-----"); continue; }  
+            int32_t f = bank_field(&bk[i], par);  
+            switch (par->type) {  
+                case PT_ONOFF:  
+                    FMTP(" %6s", f ? "on" : "off"); break;  
+                case PT_X100:  
+                    FMTP(" %3ld.%02ld", (long)(f / 100), (long)(f % 100)); break;  
+                case PT_GAIN: {  
+                    unsigned g100 = (unsigned)f * 100u / 256u;  
+                    FMTP(" %3u.%02u", g100 / 100u, g100 % 100u); break;  
+                }  
+                default:  
+                    FMTP(" %6ld", (long)f); break;  
+            }  
+        }  
+        FMTP("\r\n");  
+    }  
+    #undef FMTP  
+    if (n < cap) buf[n] = '\0'; else buf[cap - 1] = '\0';  
+    return n;  
+}  
+
+// ---------------------------------------------------------------------------  
 // Разбор одной строки  
 // ---------------------------------------------------------------------------  
 static void cli_exec(char* line) {    
@@ -964,44 +1014,11 @@ static void cli_exec(char* line) {
             Serial.flush();      
             af_store_write_all(preset);   // park + nominal + DMA-окно + erase/program      
         }    
-        // Без аргументов — транспонированная таблица: строки = параметры,      
-        // столбцы = cur (текущее состояние DSP) + банки 1..7.      
-        // Пустая ячейка — "-----" во всех строках.      
-        af_bank_t bk[AF_STORE_BANKS + 1];    
-        bool      bv[AF_STORE_BANKS + 1];    
-        af_store_snapshot(&bk[0]);            // bk[0] = текущее состояние    
-        bv[0] = true;    
-        for (uint8_t i = 0; i < AF_STORE_BANKS; i++)      
-            bv[i + 1] = af_store_read(i + 1, &bk[i + 1]);      
-    
-        Serial.println("# === BANKS (столбцы = cur + ячейки 1..7) ===");    
-        Serial.printf("# %-14s %6s", "param", "cur");    
-        for (uint8_t i = 0; i < AF_STORE_BANKS; i++) Serial.printf(" %6u", i + 1);      
-        Serial.println();    
-
-        // Строки = AF_PARAMS (та же таблица, что обслуживает команды-метки).  
-        for (size_t p = 0; p < AF_PARAMS_COUNT; p++) {  
-            const af_param_t* par = &AF_PARAMS[p];  
-            if (par->type == PT_SEP) { Serial.printf("# %s\n", par->label); continue; }  
-            Serial.printf("# %-14s", par->label);  
-            for (uint8_t i = 0; i <= AF_STORE_BANKS; i++) {  
-                if (!bv[i]) { Serial.printf(" %6s", "-----"); continue; }  
-                int32_t f = bank_field(&bk[i], par);  
-                switch (par->type) {  
-                    case PT_ONOFF:  
-                        Serial.printf(" %6s", f ? "on" : "off"); break;  
-                    case PT_X100:  
-                        Serial.printf(" %3ld.%02ld", (long)(f / 100), (long)(f % 100)); break;  
-                    case PT_GAIN: {  
-                        unsigned g100 = (unsigned)f * 100u / 256u;  
-                        Serial.printf(" %3u.%02u", g100 / 100u, g100 % 100u); break;  
-                    }  
-                    default:  
-                        Serial.printf(" %6ld", (long)f); break;  
-                }  
-            }  
-            Serial.println();  
-        }  
+        // Без аргументов — та же таблица, что пишется в SET.TXT (af_fm).  
+        // Единый форматтер — af_cli_format_banks.  
+        static char tbl[4096];  
+        af_cli_format_banks(tbl, sizeof(tbl));  
+        Serial.print(tbl);  
     }
 
     else if (strcmp(cmd, "pwm") == 0) {  

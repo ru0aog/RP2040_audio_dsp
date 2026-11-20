@@ -13,3 +13,5 @@ void af_cli_init(void);
 // Поллинг: читать Serial, разбирать команды. Вызывать из loop().  
 void af_cli_poll(void);
 
+// Таблица banks в текстовый буфер (SET.TXT для af_fm). Возвращает длину.  
+size_t af_cli_format_banks(char* buf, size_t cap);  

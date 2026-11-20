@@ -15,56 +15,26 @@
 #include <math.h>  
 #include <string.h>  
 #include "af_usb.h"  
-#include "af_dsp.h"  
+#include "af_dsp.h"
+#include "af_fm.h"                   // af_fm_read/write_sector — образ диска
   
 #include "AudioTools.h"    
 #include "AudioTools/Communication/USB/USBAudioStream.h"    
 #include <Adafruit_TinyUSB.h>    
   
-// ---------------------------------------------------------------------------  
-// MSC-заглушка (этап 0 файлового менеджера): диск 32 сектора x 512 Б.  
-// LBA 0 — минимальный FAT12 boot sector, остальное нули. Проверяет, что  
-// composite UAC+MSC собирается и хост видит оба устройства.  
-// ---------------------------------------------------------------------------  
-static Adafruit_USBD_MSC usb_msc;    
-  
-#define MSC_SECTOR_SIZE   512u    
-#define MSC_SECTOR_COUNT  32u    
-  
-static int32_t msc_read_cb(uint32_t lba, void* buffer, uint32_t bufsize) {    
-    if (buffer == nullptr || bufsize == 0 || lba >= MSC_SECTOR_COUNT) return -1;    
-    memset(buffer, 0, bufsize);    
-    if (lba == 0) {    
-        uint8_t* b = (uint8_t*)buffer;    
-        b[0] = 0xEB; b[1] = 0x3C; b[2] = 0x90;    
-        memcpy(&b[3], "MSDOS5.0", 8);    
-        b[11] = 0x00; b[12] = 0x02;          // bytes/sector = 512    
-        b[13] = 1;                          // sectors/cluster    
-        b[14] = 1;  b[15] = 0;              // reserved    
-        b[16] = 1;                          // FAT count    
-        b[17] = 16; b[18] = 0;              // root entries    
-        const uint16_t ts = MSC_SECTOR_COUNT;    
-        memcpy(&b[19], &ts, 2);             // total sectors    
-        b[21] = 0xF8;                       // media    
-        b[22] = 1;  b[23] = 0;              // sectors/FAT    
-        b[24] = 1;  b[25] = 0;              // spt    
-        b[26] = 1;  b[27] = 0;              // heads    
-        b[36] = 0x80; b[38] = 0x29;    
-        const uint32_t vid = 0xA0D5F000;    // volume id    
-        memcpy(&b[39], &vid, 4);    
-        memcpy(&b[43], "AUDIO_DSP  ", 11);    
-        memcpy(&b[54], "FAT12   ", 8);    
-        b[510] = 0x55; b[511] = 0xAA;    
-    }    
-    return (int32_t)bufsize;    
-}    
-  
-static int32_t msc_write_cb(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {    
-    (void)lba; (void)buffer;    
-    return (int32_t)bufsize;               // этап 0: записи игнорируем    
-}    
-  
-static void msc_flush_cb(void) { /* этап 0: пусто */ }    
+// ---------------------------------------------------------------------------    
+// MSC-диск файлового менеджера: образ FAT12 живёт в af_fm (SET.TXT).    
+// Колбэки — тонкие прокси в af_fm; геометрия — AF_FM_SECTOR_COUNT/SIZE.    
+// ---------------------------------------------------------------------------    
+static Adafruit_USBD_MSC usb_msc;      
+    
+static int32_t msc_read_cb(uint32_t lba, void* buffer, uint32_t bufsize) {  
+    return af_fm_msc_read(lba, buffer, bufsize);  
+}  
+static int32_t msc_write_cb(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {  
+    return af_fm_msc_write(lba, buffer, bufsize);  
+}  
+static void msc_flush_cb(void) { af_fm_msc_flush(); }    
   
 // ---------------------------------------------------------------------------  
 // Диагностика разрывов (объявлены до get_input — используются в нём)  
@@ -258,8 +228,8 @@ void af_usb_init(void) {
     // begin(), и все интерфейсы должны быть объявлены до этого, иначе    
     // хост увидит только UAC (как init_usb_msc_interface до usb_audio_init    
     // в radiomodem).    
-    usb_msc.setID("RU0AOG", "AUDIO_DSP", "1.0");    
-    usb_msc.setCapacity(MSC_SECTOR_COUNT, MSC_SECTOR_SIZE);    
+    usb_msc.setID("RU0AOG", "AUDIO_DSP", "1.0");      
+    usb_msc.setCapacity(AF_FM_SECTOR_COUNT, AF_FM_SECTOR_SIZE);      
     usb_msc.setReadWriteCallback(msc_read_cb, msc_write_cb, msc_flush_cb);    
     usb_msc.setUnitReady(true);    
     usb_msc.begin();    
