@@ -80,6 +80,7 @@
 #define AF_RX_NOTCH2_HZ         2000u  
 #define AF_RX_NOTCH3_HZ         3000u  
 #define AF_RX_NOTCH4_HZ         4000u  
+#define AF_RX_NOTCH5_HZ         5000u
 #define AF_RX_NOTCH_R_Q15       32650   // r = 0.995 (шире -> 32000)  
 #define AF_RX_NOTCH_ON_DEFAULT  1       // 1 = нотчи включены при старте  
 
@@ -341,7 +342,11 @@
 #define AF_REC_FLASH_OFF        0x140000u    
 #define AF_REC_FLASH_LEN        0xBF000u    // 191 * 4096 = 782336 байт    
 #define AF_REC_SEC_COUNT        (AF_REC_FLASH_LEN / FLASH_SECTOR_SIZE)    
-  
+
+// Тестовый сектор ftest: свободная зона между прошивкой и rec-slot.  
+// НЕ пересекается ни с банками (0x1FF000), ни с rec-slot (0x140000).  
+#define AF_TEST_FLASH_OFF       0x100000u  
+
 // Дебаунс: период опроса и число стабильных чтений для смены состояния  
 #define AF_GPIO_POLL_MS         10u  
 #define AF_GPIO_STABLE          4           // ~40 мс устойчивого уровня

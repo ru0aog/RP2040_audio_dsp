@@ -189,7 +189,7 @@ static inline int32_t __not_in_flash_func(af_fir_push)(int32_t x) {
 }  
 
 // ---------------------------------------------------------------------------  
-// Фиксированные узкие нотчи RX — гребёнка наводок 1/2/3/4 кГц.  
+// Фиксированные узкие нотчи RX — гребёнка наводок 1/2/3/4/5 кГц.
 // Биквад-нотч (RBJ notch), Q15, Direct Form I. Частоты зашиты в  
 // af_config.h — коэффициенты считаются один раз в af_dsp_init.  
 // ---------------------------------------------------------------------------  
@@ -200,13 +200,14 @@ typedef struct {
     int32_t x1, x2, y1, y2;  
 } rx_notch_t;  
   
-static rx_notch_t rx_notch[4];  
-  
-static void rx_notch_design(void) {  
-    const float r  = (float)AF_RX_NOTCH_R_Q15 / 32768.0f;  
-    const float hz[4] = { (float)AF_RX_NOTCH1_HZ, (float)AF_RX_NOTCH2_HZ,  
-                          (float)AF_RX_NOTCH3_HZ, (float)AF_RX_NOTCH4_HZ };  
-    for (int i = 0; i < 4; i++) {  
+static rx_notch_t rx_notch[5];    
+    
+static void rx_notch_design(void) {    
+    const float r  = (float)AF_RX_NOTCH_R_Q15 / 32768.0f;    
+    const float hz[5] = { (float)AF_RX_NOTCH1_HZ, (float)AF_RX_NOTCH2_HZ,    
+                          (float)AF_RX_NOTCH3_HZ, (float)AF_RX_NOTCH4_HZ,    
+                          (float)AF_RX_NOTCH5_HZ };    
+    for (int i = 0; i < 5; i++) {    
         const float w = 2.0f * PI * hz[i] / (float)AF_FS_OUT_HZ;  
         rx_notch[i].b1 = (int32_t)lrintf(-2.0f * cosf(w) * 32768.0f);  
         rx_notch[i].a1 = (int32_t)lrintf(-2.0f * r * cosf(w) * 32768.0f);  
@@ -216,8 +217,8 @@ static void rx_notch_design(void) {
     __dmb();  
 }  
   
-static inline int32_t __not_in_flash_func(rx_notch_push)(int32_t x) {  
-    for (int i = 0; i < 4; i++) {  
+static inline int32_t __not_in_flash_func(rx_notch_push)(int32_t x) {    
+    for (int i = 0; i < 5; i++) {    
         rx_notch_t* n = &rx_notch[i];  
         int64_t acc = ((int64_t)x << 15)  
                     + (int64_t)n->b1 * n->x1 + ((int64_t)n->x2 << 15)  
@@ -700,10 +701,10 @@ int af_dsp_set_notch(bool on) {
 }
 
 void af_dsp_set_rxnotch(bool on) {  
-    if (on && !rx_notch_on) {          // чистый старт — без переходного звона  
-        for (int i = 0; i < 4; i++)  
-            rx_notch[i].x1 = rx_notch[i].x2 = rx_notch[i].y1 = rx_notch[i].y2 = 0;  
-    }  
+    if (on && !rx_notch_on) {          // чистый старт — без переходного звона    
+        for (int i = 0; i < 5; i++)    
+            rx_notch[i].x1 = rx_notch[i].x2 = rx_notch[i].y1 = rx_notch[i].y2 = 0;    
+    }    
     rx_notch_on = on;  
 }  
 bool af_dsp_rxnotch_on(void) { return rx_notch_on; }  

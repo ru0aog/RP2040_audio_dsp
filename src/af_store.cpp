@@ -41,6 +41,7 @@
 #include "af_capture.h"               // af_capture_pause/resume — DMA-окно
 #include "af_pwm.h"                   // af_pwm_set_enabled — глушение выхода на окно
 #include "af_usb.h"                   // af_usb_set_muted/poll — тишина в USB на окно
+#include "af_gpio_ctl.h"              // af_gpio_set_bank_code — stats 'bank=' при автозагрузке
   
 #include "pico/stdlib.h"
 #include "hardware/flash.h"  
@@ -174,15 +175,16 @@ void af_store_init(void) {
         // Автозагрузка последнего сохранённого банка (байт [3]).  
         // Пины GP2..GP4 применят свой банк позже в af_gpio_ctl_init —  
         // приоритет у пинов.  
-        const uint8_t last = s_sector_img[3];  
-        if (last >= 1 && last <= AF_STORE_BANKS) {  
-            if (af_store_load(last)) {  
-                Serial.printf("[STORE] autoload bank %u\n", (unsigned)last);  
-            } else {  
-                Serial.printf("[STORE] autoload bank %u: bad crc — skipped\n",  
-                              (unsigned)last);  
-            }  
-        }  
+        const uint8_t last = s_sector_img[3];    
+        if (last >= 1 && last <= AF_STORE_BANKS) {    
+            if (af_store_load(last)) {    
+                af_gpio_set_bank_code(last);   // stats 'bank=' = автозагруженный  
+                Serial.printf("[STORE] autoload bank %u\n", (unsigned)last);    
+            } else {    
+                Serial.printf("[STORE] autoload bank %u: bad crc — skipped\n",    
+                              (unsigned)last);    
+            }    
+        }    
     }      
 }    
   
@@ -551,7 +553,8 @@ void af_store_poll(void) {
 //   mode 3: парковка + даунклок + DMA-окно (полная схема, как af_store_save)    
 // ============================================================================  
   
-#define AF_TEST_FLASH_OFF   0x100000u  
+// AF_TEST_FLASH_OFF — в af_config.h (0x100000, свободная зона    
+// между прошивкой и rec-slot). 
 #define AF_TEST_MAGIC0      'T'  
 #define AF_TEST_MAGIC1      'E'  
   
@@ -566,9 +569,19 @@ static void __not_in_flash_func(do_test_write)(void* param) {
   
 // Одна итерация: заполнить образ паттерном, записать, верифицировать.  
 // Возвращает true при совпадении readback.  
-static bool af_store_test_iter(uint8_t mode, uint32_t iter) {  
-    // Паттерн: сигнатура + номер итерации + пилообразные данные.  
-    s_test_img[0] = AF_TEST_MAGIC0;  
+static bool af_store_test_iter(uint8_t mode, uint32_t iter) {    
+    // Сторож: тестовый сектор не должен пересекаться ни с банками,    
+    // ни с rec-slot. При переносе AF_TEST_FLASH_OFF ближе к ним    
+    // тест откажется работать, а не сотрёт таблицу настроек/записи.    
+    const uint32_t t0 = AF_TEST_FLASH_OFF;    
+    const uint32_t t1 = t0 + FLASH_SECTOR_SIZE;    
+    if ((t0 < AF_FLASH_OFF + FLASH_SECTOR_SIZE && t1 > AF_FLASH_OFF) ||    
+        (t0 < AF_REC_FLASH_OFF + AF_REC_FLASH_LEN && t1 > AF_REC_FLASH_OFF)) {    
+        Serial.println("# ftest: ABORT — test area overlaps banks/rec-slot");    
+        return false;    
+    }    
+    // Паттерн: сигнатура + номер итерации + пилообразные данные.    
+    s_test_img[0] = AF_TEST_MAGIC0;    
     s_test_img[1] = AF_TEST_MAGIC1;  
     s_test_img[2] = (uint8_t)(iter & 0xFF);  
     s_test_img[3] = (uint8_t)(iter >> 8);  
