@@ -32,3 +32,5 @@ uint32_t af_usb_poll_gap_max(void);  // пиковый gap между poll, мк
 uint32_t af_usb_avail_max(void);   // макс. avail_frames ≈ ёмкость TX-FIFO (фреймы)    
 
 void af_usb_set_muted(bool m);   // тишина в USB на время flash-окна    
+
+void af_usb_reenumerate(void);  

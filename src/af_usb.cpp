@@ -454,3 +454,13 @@ void af_usb_set_muted(bool m) {
     if (!usb_muted && m)  usb_fade = 255;   // mute   -> fade-out 256->0    
     usb_muted = m;      
 }  
+
+// Пере-энумерация: хост перечитывает дескрипторы и каталог FAT.  
+// Вызывается из setup() после af_fm_sync — SET.TXT уже с размером.  
+void af_usb_reenumerate(void) {  
+    if (TinyUSBDevice.mounted()) {  
+        TinyUSBDevice.detach();  
+        delay(100);  
+        TinyUSBDevice.attach();  
+    }  
+}  

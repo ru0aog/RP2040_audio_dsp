@@ -190,11 +190,7 @@ void setup() {
   
     // Хост энумерировался в af_usb_init и закешировал dir с size=0.  
     // Пере-энумерация — перечитает FAT/каталог с реальным размером.  
-    if (TinyUSBDevice.mounted()) {  
-        TinyUSBDevice.detach();  
-        delay(100);  
-        TinyUSBDevice.attach();  
-    }  
+    af_usb_reenumerate();   // хост перечитает SET.TXT с реальным размером  
   
     af_capture_start();  
     af_pwm_init();
