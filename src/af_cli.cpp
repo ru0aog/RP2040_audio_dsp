@@ -776,7 +776,7 @@ static bool cli_param_try(char* line) {
 // ---------------------------------------------------------------------------  
 size_t af_cli_format_banks(char* buf, size_t cap) {  
     size_t n = 0;  
-    #define FMTP(...) do { \  
+    #define FMTP(...) do { \
         if (n < cap) n += snprintf(buf + n, cap - n, __VA_ARGS__); \
     } while (0)  
   

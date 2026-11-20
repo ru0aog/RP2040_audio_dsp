@@ -40,17 +40,25 @@ static gpio_ctl_t ctl_ptt;       // GP8 — LOW -> TX
 static gpio_ctl_t ctl_rec;       // GP9 — LOW -> запись магнитофона  
 static gpio_ctl_t ctl_play;      // GP10 — LOW -> воспроизведение  
   
-static uint32_t t_next_poll = 0;    
-static uint8_t  bank_code   = 0; // текущий применённый код 0..7    
-static bool     sw_ptt_active = false;  // GP8 — выход PTT (playback магнитофона)    
+static uint32_t t_next_poll = 0;      
+static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
+static uint8_t  last_bank   = 1; // последний загруженный банк 1..7 (для af_rec)      
+static bool     sw_ptt_active = false;  // GP8 — выход PTT (playback магнитофона)      
+    
+// Текущий код банка с GP2..GP4 (0 = ручной режим). Для cli_stats.      
+uint8_t af_gpio_bank_code(void) { return bank_code; }      
   
-// Текущий код банка с GP2..GP4 (0 = ручной режим). Для cli_stats.    
-uint8_t af_gpio_bank_code(void) { return bank_code; }    
-  
-// Установить код активного банка извне (CLI 'load N') — чтобы stats    
-// 'bank=' отражал последний применённый банк, а не только пины.    
-// Пины при следующем изменении перезапишут через apply_bank.    
-void af_gpio_set_bank_code(uint8_t code) { bank_code = code; }    
+// Последний загруженный банк 1..7 — в т.ч. в manual-режиме (bank_code=0).    
+// Для af_rec: слот магнитофона привязан к последнему активному банку.    
+uint8_t af_gpio_last_bank(void) { return last_bank; }      
+    
+// Установить код активного банка извне (CLI 'load N') — чтобы stats      
+// 'bank=' отражал последний применённый банк, а не только пины.      
+// Пины при следующем изменении перезапишут через apply_bank.      
+void af_gpio_set_bank_code(uint8_t code) {      
+    bank_code = code;      
+    if (code >= 1 && code <= 7) last_bank = code;   // CLI load N — тоже банк      
+}      
 
 // ---------------------------------------------------------------------------  
 static void apply_nr(bool grounded) {      
@@ -173,8 +181,9 @@ static void apply_bank(uint8_t code) {
         Serial.println("[GPIO] bank pins released -> manual mode (settings kept)"); 
         return;    
     }
-    if (af_store_load(code)) {  
-        af_led_set_bank(code);   // code = 0..7 с GP2..GP4  
+    if (af_store_load(code)) {    
+        last_bank = code;        // запомнить для af_rec (слот = последний банк)    
+        af_led_set_bank(code);   // code = 0..7 с GP2..GP4    
         af_voice_play((af_voice_id_t)(VOICE_PROF_1 + code - 1));  // "профиль N"  
         if (!af_dsp_agc_on()) af_voice_play(VOICE_AGC_OFF);  
         Serial.printf("[GPIO] bank=%u -> loaded band=%lu..%lu cw=%s f0=%lu bw=%lu\n",  

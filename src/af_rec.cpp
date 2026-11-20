@@ -9,8 +9,9 @@
 // -> IRQ-off -> erase+program -> restore), как в af_store_save.    
 // Воспроизведение: чтение слота напрямую из XIP с интерполяцией ×2.    
 // Пустой слот -> клип-заглушка voice_14 (1:1, без интерполяции).    
-// Активный слот = текущий банк (af_gpio_bank_code); в manual-режиме    
-// (код 0) используется последний активный банк.    
+// Активный слот = последний загруженный банк (af_gpio_last_bank):      
+// обновляется при каждом apply_bank/'load N', в manual-режиме      
+// (пины отпущены, код 0) сохраняет последнее значение.      
 // Пины: GP9 = запись (тракт -> TX, микрофон, без PTT),      
 //       GP10 = воспроизведение (тракт -> TX + PTT на GP8, звук в TX).      
 // ============================================================================    
@@ -18,7 +19,7 @@
 #include "af_rec.h"    
 #include "af_config.h"    
 #include "af_dsp.h"    
-#include "af_gpio_ctl.h"        // af_gpio_bank_code — активный слот    
+#include "af_gpio_ctl.h"        // af_gpio_last_bank — активный слот      
 #include "af_store.h"          // park/unpark, af_set_clk*, af_store_write_all    
 #include "af_capture.h"        // af_capture_pause/resume    
 #include "af_pwm.h"            // af_pwm_set_enabled/is_enabled    
@@ -56,16 +57,15 @@ static int16_t  ram_buf[AF_REC_RAM_SAMP + 128];
 #define AF_REC_MAGIC1     0x43u   // 'C'    
 #define AF_REC_VER        0x01u    
   
-static uint8_t  last_bank = 1;    // последний активный банк (manual -> он же)    
-static uint32_t slot_len  = 0;    // отсчётов в слоте активного банка    
-static uint32_t slot_off  = 0;    // flash-offset активного слота    
-  
-// Активный банк: код с пинов/CLI; 0 (manual) -> последний активный.    
-static uint8_t rec_bank(void) {    
-    uint8_t b = af_gpio_bank_code();    
-    if (b >= 1 && b <= AF_STORE_BANKS) { last_bank = b; return b; }    
-    return last_bank;    
-}    
+static uint32_t slot_len  = 0;    // отсчётов в слоте активного банка      
+static uint32_t slot_off  = 0;    // flash-offset активного слота      
+    
+// Активный банк: последний загруженный (af_gpio_ctl видит каждое      
+// переключение — пины и CLI 'load N'). В manual-режиме (код 0)      
+// возвращает последний активный — локальный last_bank не нужен.      
+static uint8_t rec_bank(void) {      
+    return af_gpio_last_bank();      
+}      
   
 static uint32_t rec_slot_off(uint8_t bank) {          // bank = 1..7    
     return AF_REC_FLASH_OFF + (uint32_t)(bank - 1) * AF_REC_SLOT_SIZE;    
