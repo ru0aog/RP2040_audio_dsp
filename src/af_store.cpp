@@ -2,13 +2,13 @@
 // ============================================================================  
 // af_store.cpp — банки настроек во flash (Core 0)  
 //  
-// Хранилище — последний сектор flash (4 КБ), тот же, что использует    
-// EEPROM-эмуляция ядра Philhower. Чтение — через EEPROM (RAM-буфер),    
-// запись — напрямую flash_range_erase/flash_range_program из RAM-функции    
-// do_flash_write. Схема окна (баг 4, все условия обязательны):    
-//   af_capture_pause → af_store_core1_park → af_set_clk_nominal (125 МГц)    
-//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on    
-//   → af_set_clk (250 МГц) → af_capture_resume → af_store_core1_unpark    
+// Хранилище — последний сектор flash (4 КБ), тот же, что использует
+// EEPROM-эмуляция ядра Philhower. Чтение — напрямую из XIP в s_sector_img,
+// запись — напрямую flash_range_erase/flash_range_program из RAM-функции
+// do_flash_write. Схема окна (баг 4, все условия обязательны):
+//   af_capture_pause → af_store_core1_park → af_set_clk_nominal (125 МГц)
+//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on  
+//   → af_capture_resume → af_set_clk (250 МГц) → af_store_core1_unpark  
 //  
 // Раскладка сектора:  
 //   [0..1]   magic 'A','F'  
@@ -24,7 +24,6 @@
 // Дефолты — единая таблица af_store_fill_defaults (все поля af_bank_t).    
 // ============================================================================  
 #include <Arduino.h>  
-#include <EEPROM.h>  
 #include "af_store.h"  
 #include "af_config.h"  
 #include "af_dsp.h"  
@@ -41,7 +40,6 @@
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
 #define AF_STORE_VER      4   // было 3: банк = полный снимок RX+TX  
-#define AF_EEPROM_SIZE    1024  // 7 записей по ~90 байт + заголовок  
   
 // Смещение сектора банков от начала flash — последний сектор чипа.  
 // Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
@@ -55,8 +53,6 @@
 // не возвращается в Arduino-обёртку и не обрабатывает FIFO-handshake.  
 static volatile bool g_park_req = false;  
 static volatile bool g_parked   = false;  
-
-static uint8_t s_save_done = 0;   // idx успешного save — OK из poll 
   
 // Вызывается с Core 1 из core1_main (перед af_dsp_poll). Вся функция в RAM — во время    
 // erase/program flash недоступен, spin-цикл обязан быть не во flash.  
@@ -277,7 +273,6 @@ bool af_store_save(uint8_t idx) {
                                         // иначе следующий save входит в окно  
                                         // на 125 МГц в нештатном состоянии  
     af_store_core1_unpark();    
-    s_save_done = idx;                // af_store_poll напечатает "# OK save=N"    
     return true;        
 }
   
@@ -380,10 +375,11 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
 }
 
 // ---------------------------------------------------------------------------    
-// Дефолтные банки — те же пресеты, что в 'banks clr' (af_cli.cpp).    
+// Дефолтные банки - banks clr ссылается сюда
 // ---------------------------------------------------------------------------    
-// Единая таблица дефолтов — используется и af_store_poll (пустой сектор),    
-// и 'banks clr' в af_cli.cpp. Все поля af_bank_t заполняются явно.    
+// Единая таблица дефолтов — источник истины для всех банков.      
+// Используется af_store_init (пустой/чужой сектор) и 'banks clr' в af_cli.cpp.      
+// Все поля af_bank_t заполняются явно.      
 void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {        
     memset(b, 0, sizeof(af_bank_t) * AF_STORE_BANKS);        
     for (int i = 0; i < AF_STORE_BANKS; i++) {        
@@ -497,15 +493,11 @@ static void af_store_write_defaults(void) {
 }    
   
 // Core 0, из loop(): отложенная запись дефолтных банков при пустом секторе.    
-void af_store_poll(void) {      
-    if (s_save_done) {      
-        Serial.printf("# OK save=%d\n", s_save_done);      
-        s_save_done = 0;      
-    }      
-    if (!s_need_defaults) return;      
-    s_need_defaults = false;      
-    af_store_write_defaults();      
-}
+void af_store_poll(void) {        
+    if (!s_need_defaults) return;        
+    s_need_defaults = false;        
+    af_store_write_defaults();        
+}  
 
 // ============================================================================  
 // FLASH-TEST: отработка механизма записи в изоляции.  

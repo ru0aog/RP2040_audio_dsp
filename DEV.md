@@ -377,3 +377,9 @@ GP10: `play on (tx+ptt)` -> `play end -> ptt/tx released`.
 - `band lo/hi` при cw=on: af_dsp_set_band вернёт false молча  
   (полоса следует за f0) — OK печатается, cur не меняется.  
 
+- 2026-11: баг 4 закрыт — причина: flash-окно на 250 МГц требует    
+  park + даунклок + DMA-окно одновременно (матрица ftest 0-3).    
+  Схема перенесена в af_store_save/write_all; af_rec flash-дамп    
+  удалён (RAM-only магнитофон).    
+
+  
