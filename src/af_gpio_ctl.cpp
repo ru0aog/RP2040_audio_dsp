@@ -244,9 +244,11 @@ void af_gpio_ctl_init(void) {
     ctl_nr.stable = ctl_nr.last_raw = (digitalRead(ctl_nr.pin) == LOW);  
     ctl_nt.stable = ctl_nt.last_raw = (digitalRead(ctl_nt.pin) == LOW);  
   
-    // Старт всегда с ручного режима — переходные состояния пинов  
-    // при подаче питания не должны дёргать банки.  
-    apply_bank(0);
+    // Старт всегда с ручного режима — переходные состояния пинов    
+    // при подаче питания не должны дёргать банки.    
+    // bank_code не трогаем: af_store_init мог уже автозагрузить    
+    // последний сохранённый банк — не затираем его отображение.    
+    af_led_set_bank(0);  
     delay(200);      // ждём, пока подтянутся линии с внешней ёмкостью  
 
     // Посев по установившимся уровням — после delay.  
@@ -279,10 +281,11 @@ void af_gpio_ctl_init(void) {
     apply_ptt(ctl_ptt.stable);  
     // rec/play при старте не применяем: запись с замкнутого GP9 при boot  
     // не нужна, а play всё равно вернёт false — слот пуст.  
-    uint8_t code = 0;  
-    for (int i = 0; i < 3; i++)  
-        if (ctl_bank[i].stable) code |= (1 << i);  
-    apply_bank(code);
+    uint8_t code = 0;    
+    for (int i = 0; i < 3; i++)    
+        if (ctl_bank[i].stable) code |= (1 << i);    
+    if (code != 0)    
+        apply_bank(code);   // 000 = manual: настройки и bank_code не трогаем  
   
     Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u ptt=GP%u rec=GP%u play=GP%u (LOW=1/on)\n",    
                   AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS, AF_PIN_PTT,  
