@@ -236,7 +236,10 @@ static void __not_in_flash_func(core1_main)(void) {
 // фетч из flash = зависание SSI. tight_loop_contents() в setup1()  
 // исполнялся бы из flash — поэтому отдельная __not_in_flash_func.  
 static void __not_in_flash_func(core1_idle_spin)(void) {
-    for (;;) { tight_loop_contents(); }  
+    for (;;) {  
+        af_store_core1_park_poll();   // чтобы ftest 1/3 могли парковать Core 1  
+        tight_loop_contents();  
+    }    
 }  
 
 void setup1() {
