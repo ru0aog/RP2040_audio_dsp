@@ -272,19 +272,26 @@ bool af_store_save(uint8_t idx) {
         Serial.println("# save: park TIMEOUT — abort");  
         return false;  
     }  
-    Serial.println("# save: core1 parked"); Serial.flush(); 
-
-    //Serial.println("# save: clk -> nominal"); Serial.flush();    
-    //af_set_clk_nominal();    
-
-    uint32_t ints = save_and_disable_interrupts();    
-    do_flash_write(NULL);               // RAM: erase+program, XIP off    
-    restore_interrupts(ints);    
-    flash_flush_cache();                // сброс XIP-кэша после записи 
-    
-    //af_set_clk();  
-    af_store_core1_unpark();
-    return true;    
+    Serial.println("# save: core1 parked"); Serial.flush();   
+  
+    Serial.println("# save: clk -> nominal"); Serial.flush();      
+    af_set_clk_nominal();               // 125 МГц на окно — обязательно,  
+                                        // на 250 МГц erase/program виснет  
+  
+    af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off  
+    uint32_t ints = save_and_disable_interrupts();      
+    do_flash_write(NULL);               // RAM: erase+program, XIP off      
+    flash_flush_cache();                // ДО restore_interrupts: иначе pending  
+                                        // DMA IRQ прыгнет в ISR на протухшем  
+                                        // XIP-кэше -> вис  
+    restore_interrupts(ints);      
+    af_capture_resume();                // рестарт цепочки A->B->A  
+  
+    af_set_clk();                       // возврат на 250 МГц — обязательно,  
+                                        // иначе следующий save входит в окно  
+                                        // на 125 МГц в нештатном состоянии  
+    af_store_core1_unpark();  
+    return true;      
 }  
   
 bool af_store_load(uint8_t idx) {  
@@ -379,14 +386,16 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
     Serial.println("# save: clk -> nominal"); Serial.flush();    
     af_set_clk_nominal();    
 
-    uint32_t ints = save_and_disable_interrupts();    
-    do_flash_write(NULL);               // RAM: erase+program, XIP off    
-    restore_interrupts(ints);    
-    flash_flush_cache();                // сброс XIP-кэша после записи 
-    
-    af_set_clk();  
-    af_store_core1_unpark();
-    Serial.println("# OK banks written");    
+    af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off  
+    uint32_t ints = save_and_disable_interrupts();      
+    do_flash_write(NULL);               // RAM: erase+program, XIP off      
+    flash_flush_cache();                // ДО restore_interrupts — см. save  
+    restore_interrupts(ints);      
+    af_capture_resume();                // рестарт цепочки A->B->A  
+  
+    af_set_clk();    
+    af_store_core1_unpark();  
+    Serial.println("# OK banks written");      
 }
 
 // ---------------------------------------------------------------------------    

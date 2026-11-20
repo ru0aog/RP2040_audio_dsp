@@ -1133,3 +1133,12 @@ restore_interrupts + flash_flush_cache. Одна flash-операция за о�
    только в `stop`. Фикс: добиватель в `af_cli_poll` —  
    `cli_rec_tx && !af_rec_is_recording()` -> set_tx(0).  
 
+Финальная схема flash-записи (все три условия обязательны)
+af_capture_pause()        <- DMA-окно: ADC off, каналы abort, IRQ off  
+af_store_core1_park()     <- Core 1 в RAM-спине с IRQ off  
+af_set_clk_nominal()      <- 125 МГц на окно  
+IRQ-off → erase/program → flash_flush_cache → IRQ-on  
+af_set_clk()              <- возврат 250 МГц  
+af_store_core1_unpark()  
+af_capture_resume()       <- рестарт цепочки A->B->A  
+
