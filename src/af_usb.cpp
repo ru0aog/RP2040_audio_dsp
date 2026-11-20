@@ -232,7 +232,7 @@ void af_usb_init(void) {
     usb_msc.setCapacity(AF_FM_SECTOR_COUNT, AF_FM_SECTOR_SIZE);      
     usb_msc.setReadWriteCallback(msc_read_cb, msc_write_cb, msc_flush_cb);    
     usb_msc.setUnitReady(true);    
-    usb_msc.begin();    
+    //usb_msc.begin();    
 
     memset(pcm_buffer, 0, sizeof(pcm_buffer));  
     rs_step    = (float)AF_FS_OUT_HZ;  
