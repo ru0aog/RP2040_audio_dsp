@@ -246,11 +246,23 @@ static void cli_stats(void) {
                   (unsigned)af_dsp_out_fill_max_usb(),      
                   (unsigned long)af_dsp_out_underruns_pwm(),      
                   (unsigned)af_dsp_out_fill_max_pwm());      
-    Serial.printf("#   fs      : out=%lu adc=%lu div=%lu\n",        
-                  (unsigned long)AF_FS_OUT_HZ,        
-                  (unsigned long)AF_FS_ADC_HZ,        
-                  (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));    
-    Serial.printf("#   clk_sys = %lu MHz  flash_sck=%lu.%lu MHz (BAUDR=%u)\n",  
+    Serial.printf("#   fs      : out=%lu adc=%lu div=%lu\n",          
+                  (unsigned long)AF_FS_OUT_HZ,          
+                  (unsigned long)AF_FS_ADC_HZ,          
+                  (unsigned long)(AF_FS_ADC_HZ / AF_FS_OUT_HZ));      
+    {   // Фактические параметры ADC: то, что раньше было только в boot-логе [CAP].  
+        const uint32_t cad = af_capture_clk_adc_hz();  
+        const float    dvr = af_capture_adc_div();  
+        Serial.printf("#   adc     : clk_adc=%lu MHz  div=%lu.%02u  fs=%lu Hz  ch=%u\n",  
+                      (unsigned long)(cad / 1000000u),  
+                      (unsigned long)dvr,  
+                      (unsigned)((dvr - (float)(unsigned long)dvr) * 100.0f),  
+                      (unsigned long)(dvr > 0.0f  
+                          ? (uint32_t)((float)cad / (dvr + 1.0f))  
+                          : 0u),  
+                      (unsigned)af_capture_channel());  
+    }  
+    Serial.printf("#   clk_sys = %lu MHz  flash_sck=%lu.%lu MHz (BAUDR=%u)\n",    
                   (unsigned long)(clock_get_hz(clk_sys) / 1000000u),  
                   (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000000u),  
                   (unsigned long)((clock_get_hz(clk_sys) / ssi_hw->baudr % 1000000u) / 100000u),  

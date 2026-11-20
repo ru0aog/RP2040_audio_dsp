@@ -86,7 +86,12 @@ static volatile uint16_t* af_dma_b_target = af_buf_b0;
 static int af_dma_a = -1;  
 static int af_dma_b = -1;  
 static volatile bool af_running = false;  
-  
+
+// Диагностика для stats: сохраняются в af_capture_start.    
+static uint32_t af_clk_adc_hz = 0;    
+static float    af_adc_div    = 0.0f;    
+static uint8_t  af_adc_ch     = 0;    
+
 // ---------------------------------------------------------------------------  
 // Вспомогательные функции  
 // ---------------------------------------------------------------------------  
@@ -290,7 +295,11 @@ void af_capture_start(void) {
     float adc_div = (float)clk_adc_hz / (float)AF_FS_ADC_HZ - 1.0f;      
     if (adc_div < 95.0f) adc_div = 95.0f;   // минимум 96 тактов периода      
     adc_set_clkdiv(adc_div);     
-  
+
+    af_clk_adc_hz = clk_adc_hz;   // для stats    
+    af_adc_div    = adc_div;    
+    af_adc_ch     = 0;    
+
     // Два DMA-канала с аппаратным chain_to: A -> B -> A -> ...  
     af_dma_a = dma_claim_unused_channel(true);  
     af_dma_b = dma_claim_unused_channel(true);  
@@ -392,10 +401,11 @@ void af_capture_stop(void) {
 // ---------------------------------------------------------------------------    
 void __not_in_flash_func(af_capture_set_channel)(uint8_t adc_input) {
     if (!af_running) return;    
-    adc_run(false);    
-    adc_fifo_drain();    
-    adc_select_input(adc_input & 1u);    
-    adc_run(true);    
+    adc_run(false);      
+    adc_fifo_drain();      
+    adc_select_input(adc_input & 1u);      
+    af_adc_ch = adc_input & 1u;    
+    adc_run(true);   
 }    
 
 // ---------------------------------------------------------------------------  
@@ -510,3 +520,10 @@ void af_capture_resume(void) {
     adc_run(true);    
 }    
 // ======================   КОНЕЦ БЛОКА DMA-ПАРКОВКИ   =======================
+
+// ---------------------------------------------------------------------------    
+// Диагностика для stats (читается с Core 0, пишется при start/set_channel)    
+// ---------------------------------------------------------------------------    
+uint32_t af_capture_clk_adc_hz(void) { return af_clk_adc_hz; }    
+float    af_capture_adc_div(void)    { return af_adc_div; }    
+uint8_t  af_capture_channel(void)    { return af_adc_ch; }    

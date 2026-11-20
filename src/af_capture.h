@@ -50,3 +50,7 @@ extern volatile uint32_t af_cap_released;    // блоков освобожде�
 // DMA-окно для flash-записи (af_store): пауза/рестарт capture.  
 void af_capture_pause(void);  
 void af_capture_resume(void);  
+
+uint32_t af_capture_clk_adc_hz(void);   // clk_adc на момент старта    
+float    af_capture_adc_div(void);      // adc_set_clkdiv (период-1 тактов)    
+uint8_t  af_capture_channel(void);      // 0=GP26/RX, 1=GP27/TX    
