@@ -243,17 +243,8 @@ static void __not_in_flash_func(core1_idle_spin)(void) {
 }  
 
 
-// === FLASH-TEST: Core 1 не запускаем вообще ===  
-// setup1/loop1 закомментированы -> Arduino-ядро не делает  
-// multicore_launch_core1, Core 1 остаётся в bootrom-сне,  
-// XIP не трогает никогда. Парковка не нужна в принципе.  
-/*  
-
 
 void setup1() {
-    core1_idle_spin();   // не возвращается; Core 1 спит в RAM, XIP не трогает  
-// === FLASH-TEST: Core 1 не запускаем — чистое окно без мультиядра === 
-/*
     const uint32_t t0 = millis();    
     while (!core0_ready && (uint32_t)(millis() - t0) < 10000u) {    
         af_store_core1_park_poll();    
@@ -263,15 +254,12 @@ void setup1() {
     // erase/program (af_store, ~45 мс, XIP off) Core 1 не должна    
     // обращаться к flash — ни кодом, ни данными. loop1() Arduino-ядра    
     // лежит во flash, поэтому крутим свой цикл из RAM-функции.    
-    core1_main();   // не возвращается  
-
+    
+    core1_idle_spin();   // RAM-спин с park_poll — Core 1 жива, паркуется, DSP нет
+    //core1_main();   // не возвращается  
 }  
-
-
 
 void loop1() {
     // Не используется: рабочий цикл Core 1 — core1_main() в RAM,  
     // вызывается из setup1(). Оставлена для Arduino-ядра.  
 }  
-
-*/
