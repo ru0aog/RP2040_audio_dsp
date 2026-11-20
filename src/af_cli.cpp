@@ -107,7 +107,7 @@ static void cli_help(void) {
     Serial.println("#   save <1..7>       — сохранить настройки в ячейку");    
     Serial.println("#   load <0..7>       — применить ячейку (0 = ручной режим)");    
     Serial.println("#   banks             — показать все ячейки");  
-    Serial.println("#   banks clr         — перезаписать все банки заводскими пресетами");    
+    Serial.println("#   banks clr         — стандартные пресеты во все банки + очистка голосовых слотов");      
     Serial.println("#   pwm on|off        — PWM-выход (off = несущая заглушена)");  
     Serial.println("#   voice [N|vol <0..400>] — голосовые сообщения");  
     Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест потока)");    
@@ -1015,17 +1015,25 @@ static void cli_exec(char* line) {
     }  
     else if (strcmp(cmd, "banks") == 0) {  
         char* sub = strtok(NULL, " \t");  
-        if (sub && strcmp(sub, "clr") == 0) {        
-            // Перезаписать все 7 ячеек заводскими пресетами.      
-            // Единый источник дефолтов — af_store_fill_defaults    
-            // (af_store.cpp): полный снимок RX+TX + per-банк отличия.    
-            af_bank_t preset[AF_STORE_BANKS];    
-            af_store_fill_defaults(preset);    
-    
-            Serial.println("# banks clr: writing 7 banks...");      
-            Serial.flush();      
-            af_store_write_all(preset);   // park + nominal + DMA-окно + erase/program      
-        }    
+        if (sub && strcmp(sub, "clr") == 0) {          
+            // Перезаписать все 7 ячеек заводскими пресетами.        
+            // Единый источник дефолтов — af_store_fill_defaults      
+            // (af_store.cpp): полный снимок RX+TX + per-банк отличия.      
+            af_bank_t preset[AF_STORE_BANKS];      
+            af_store_fill_defaults(preset);      
+      
+            Serial.println("# banks clr: writing 7 banks...");        
+            Serial.flush();        
+            af_store_write_all(preset);   // park + nominal + DMA-окно + erase/program        
+  
+            // + очистка голосовых слотов всех банков (erase 0x140000..0x1EFFFF,    
+            // окно ~3-4 с). Отказ при активном rec/play — слоты остаются.    
+            if (af_rec_erase_all()) {    
+                Serial.println("# banks clr: rec slots erased");    
+            } else {    
+                Serial.println("# banks clr: rec slots kept (rec/play active)");    
+            }    
+        }      
         // Без аргументов — та же таблица, что пишется в SET.TXT (af_fm).  
         // Единый форматтер — af_cli_format_banks.  
         static char tbl[4096];  
