@@ -18,10 +18,11 @@
 // хвост живого звука из буфера AudioTools (~46 мс) — принято.       
 //  
 // Раскладка сектора:  
-//   [0..1]   magic 'A','F'  
-//   [2]      версия формата  
-//   [3]      резерв  
-//   [4..]    7 записей по sizeof(af_bank_rec_t)  
+//   [0..1]   magic 'A','F'    
+//   [2]      версия формата    
+//   [3]      last-bank: номер последнего 'save N' (1..7), 0xFF = нет.  
+//            При boot af_store_init применяет его через af_store_load.  
+//   [4..]    7 записей по sizeof(af_bank_rec_t)    
 //  
 // Запись — по 'save x' / 'banks clr' и один раз при старте, если сектор    
 // пустой/чужой: af_store_init заполняет образ дефолтами и ставит флаг,    
@@ -166,12 +167,24 @@ void af_store_init(void) {
             r.crc = crc8(&r.d, sizeof(r.d));        
             memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));        
         }        
-        s_need_defaults = true;        
-        Serial.println("[STORE] sector blank/foreign — defaults pending");          
-    } else {  
-        s_need_defaults = false;  
-    }    
-}  
+        s_need_defaults = true;          
+        Serial.println("[STORE] sector blank/foreign — defaults pending");            
+    } else {    
+        s_need_defaults = false;    
+        // Автозагрузка последнего сохранённого банка (байт [3]).  
+        // Пины GP2..GP4 применят свой банк позже в af_gpio_ctl_init —  
+        // приоритет у пинов.  
+        const uint8_t last = s_sector_img[3];  
+        if (last >= 1 && last <= AF_STORE_BANKS) {  
+            if (af_store_load(last)) {  
+                Serial.printf("[STORE] autoload bank %u\n", (unsigned)last);  
+            } else {  
+                Serial.printf("[STORE] autoload bank %u: bad crc — skipped\n",  
+                              (unsigned)last);  
+            }  
+        }  
+    }      
+}    
   
 bool af_store_read(uint8_t idx, af_bank_t* out) {    
     if (idx < 1 || idx > AF_STORE_BANKS) return false;    
@@ -264,11 +277,11 @@ bool af_store_save(uint8_t idx) {
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));    
     // Гарантируем заголовок: если сектор был пустой/чужой, без magic    
     // af_store_init при следующем boot сотрёт образ — банк потеряется.    
-    s_sector_img[0] = AF_STORE_MAGIC0;    
-    s_sector_img[1] = AF_STORE_MAGIC1;    
-    s_sector_img[2] = AF_STORE_VER;    
-    s_sector_img[3] = 0xFF;    
-    memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));     
+    s_sector_img[0] = AF_STORE_MAGIC0;      
+    s_sector_img[1] = AF_STORE_MAGIC1;      
+    s_sector_img[2] = AF_STORE_VER;      
+    s_sector_img[3] = idx;              // last-bank: автозагрузка при boot  
+    memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));         
 
     if (!af_store_core1_park(5000)) {    
         Serial.println("# save: park TIMEOUT — abort");    
