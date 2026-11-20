@@ -6,11 +6,11 @@
 // EEPROM-эмуляция ядра Philhower. Чтение — напрямую из XIP в s_sector_img,
 // запись — напрямую flash_range_erase/flash_range_program из RAM-функции
 // do_flash_write. Схема окна (баг 4, все условия обязательны):
-//   af_usb_set_muted(true) + промывка ~60 мс → af_capture_pause    
-//   → af_pwm off → af_store_core1_park → af_set_clk_nominal (125 МГц)    
-//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on      
-//   → af_capture_resume → af_usb_set_muted(false)    
-//   → af_set_clk (250 МГц) → af_pwm restore → af_store_core1_unpark      
+//   af_store_core1_park → af_usb_set_muted(true) + промывка ~60 мс  
+//   → af_set_clk_nominal (125 МГц) → af_capture_pause → af_pwm off  
+//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on  
+//   → af_capture_resume → af_usb_set_muted(false)  
+//   → af_set_clk (250 МГц) → af_pwm restore → af_store_core1_unpark  
 // af_pwm off — глушение выхода: без него на границах окна слышен щелчок.    
 // USB-мьют: буфер AudioTools ~46 мс, поэтому mute ставится заранее    
 // и poll'ами промывается нулями — иначе в окно уходит хвост живого звука.    
@@ -589,6 +589,12 @@ static bool af_store_test_iter(uint8_t mode, uint32_t iter) {
                                       // XIP-кэше -> вис        
     restore_interrupts(ints);        
     af_capture_resume();              // рестарт цепочки A->B->A      
+    // Транзиент ADC после resume идёт в тракт ~50-80 мс — держим    
+    // выход в мьюте, пока он не уйдёт в нули.    
+    {    
+        const uint32_t t1 = millis();    
+        while ((uint32_t)(millis() - t1) < 80u) af_usb_poll();    
+    }    
     af_usb_set_muted(false);          // USB -> звук    
     if (pwm_was) af_pwm_set_enabled(true);      
   

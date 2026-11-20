@@ -41,10 +41,11 @@ static volatile uint8_t  usb_ur_idx = 0;
 static bool     usb_primed    = false;        
 static volatile uint32_t usb_reprimes = 0;   // разы ушли на перезаправку        
   
-// Мьют на время flash-окна (af_store): в TinyUSB пишутся нули вместо    
-// ресемплированных фреймов — чистая тишина вместо удержания последнего    
-// фрейма. Входная очередь при этом дренируется, чтобы out_usb не забилась.    
-static volatile bool usb_muted = false;    
+// Мьют на время flash-окна (af_store): в TinyUSB пишутся нули вместо      
+// ресемплированных фреймов — чистая тишина вместо удержания последнего      
+// фрейма. Входная очередь при этом дренируется, чтобы out_usb не забилась.      
+static volatile bool usb_muted = false;      
+static volatile uint16_t usb_fade = 0;   // 0..256, рампа после снятия мьюта (0 = fade off)  
   
 // USB_LOW_MARK не используется: нижних отметок нет — кадр ограничен только      
 // лимитом 64 фрейма, а при пустой очереди дописывается паддингом последнего      
@@ -333,9 +334,13 @@ void af_usb_poll(void) {
                 }    
                 break;    
             }    
-            pcm_buffer[frames * 2]     = s;                   // L    
-            pcm_buffer[frames * 2 + 1] = s;                   // R = дубль моно    
-            ++frames;    
+            if (usb_fade) {                          // fade-in после unmute  
+                s = (int16_t)(((int32_t)s * usb_fade) >> 8);  
+                if (++usb_fade > 256) usb_fade = 0;  // ~5.8 мс при 44.1 кГц  
+            }  
+            pcm_buffer[frames * 2]     = s;                   // L      
+            pcm_buffer[frames * 2 + 1] = s;                   // R = дубль моно      
+            ++frames;      
         }    
     
         if (frames > 0) {      
@@ -387,6 +392,9 @@ void af_usb_ur_log(uint32_t* t, uint16_t* n) {
     for (int i = 0; i < 8; i++) { t[i] = usb_ur_t[i]; n[i] = usb_ur_n[i]; }    
 }  
 
-// Мьют USB-выхода на время flash-окна: poll пишет нули в TinyUSB.    
-// Вызывается из af_store до/после окна (при живом XIP).    
-void af_usb_set_muted(bool m) { usb_muted = m; }    
+// Мьют USB-выхода на время flash-окна: poll пишет нули в TinyUSB.      
+// Вызывается из af_store до/после окна (при живом XIP).      
+void af_usb_set_muted(bool m) {    
+    if (usb_muted && !m) usb_fade = 1;   // старт fade-in на unmute    
+    usb_muted = m;    
+}  
