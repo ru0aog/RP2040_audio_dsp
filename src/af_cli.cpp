@@ -605,46 +605,6 @@ static void tx_apply_profile(uint8_t idx) {
     }  
 }  
 
-// Заводские дефолты банка: RX — из af_config.h, TX — рабочая точка    
-// tx_apply_profile. Per-банк отличия задаются в banks clr.    
-static void bank_fill_defaults(af_bank_t* b) {    
-    // RX    
-    b->lo_hz = 300;  b->hi_hz = 3000;    
-    b->cw_on = 0;  b->cw_f0 = 700;  b->cw_bw = 150;  b->cw_noise = 400;    
-    b->agc_on = 1;  b->gain_pct = 256;  b->voice_vol = 300;    
-    b->agc_ref = AGC_REF;    
-    b->agc_max_x100 = (uint16_t)(AGC_MAX_GAIN * 100.0f + 0.5f);    
-    b->agc_min_x100 = (uint16_t)(AGC_MIN_GAIN * 100.0f + 0.5f);    
-    b->lim_ceil = LIMIT_CEIL;    
-    b->nr_depth = NR_DEPTH_Q15;  b->nr_makeup = NR_MAKEUP_Q15;    
-    b->nt_mu = NOTCH_MU_Q;  b->nr_mu = NR_MU_Q;    
-    // TX — рабочая точка (как базис tx_apply_profile)    
-    b->tx_lo_hz = 300;  b->tx_hi_hz = 2700;    
-    b->tx_ratio_x10 = 40;  b->tx_clip = 26000;    
-    b->tx_agc_target = 18000;  b->tx_agc_max_x10 = AF_TX_AGC_MAX_X10;    
-    b->tx_gate_thr = AF_TX_GATE_THR;    
-    b->tx_gate_hold_ms = AF_TX_GATE_HOLD_MS;    
-    b->tx_gate_hyst_x10 = AF_TX_GATE_HYST_X10;    
-    b->tx_gfloor = AF_TX_GATE_FLOOR_Q16;    
-    b->tx_ap_on = 1;  b->tx_softclip = 1;  b->tx_2band_on = 1;    
-    b->tx_split_hz = AF_TX_SPLIT_HZ;  b->tx_lr2_on = 1;    
-    b->tx_comp_thr = 8192;    
-    b->tx_comp_thr_lo = AF_TX_COMP_THR_LO;    
-    b->tx_comp_thr_hi = AF_TX_COMP_THR_HI;    
-    b->tx_duck_on = 1;  b->tx_duckmax = 30;    
-    b->tx_intel_on = 1;    
-    b->tx_intel_tgt = AF_TX_INTEL_TGT_Q15;    
-    b->tx_intel_cut = AF_TX_INTEL_CUT_Q15;    
-    b->tx_intel_boost = AF_TX_INTEL_BOOST_Q15;    
-    b->tx_pres_on = 1;  b->tx_presmax = 15;    
-    b->tx_pres_freq = AF_TX_PRES_FREQ_HZ;  b->tx_pres_q = AF_TX_PRES_Q_X100;    
-    b->tx_shelf_db = 0;    
-    b->tx_shelf_freq = AF_TX_SHELF_FREQ_HZ;  b->tx_shelf_q = AF_TX_SHELF_Q_X100;    
-    b->tx_exc_on = 1;  b->tx_excmix = 3277;    
-    b->tx_notch_on = 1;    
-    b->tx_notch1_hz = AF_TX_NOTCH1_HZ;  b->tx_notch2_hz = AF_TX_NOTCH2_HZ;    
-}    
-
 // ---------------------------------------------------------------------------  
 // Единая таблица параметров: метка = команда и строка таблицы banks.  
 // off — смещение поля в af_bank_t (для печати колонок cur/1..7).  
@@ -991,36 +951,17 @@ static void cli_exec(char* line) {
     }  
     else if (strcmp(cmd, "banks") == 0) {  
         char* sub = strtok(NULL, " \t");  
-        if (sub && strcmp(sub, "clr") == 0) {      
-            // Перезаписать все 7 ячеек заводскими пресетами.    
-            // Банк = полный снимок RX+TX: сначала дефолты из af_config.h  
-            // и рабочая точка tx_apply_profile, затем per-банк отличия  
-            // (полоса ПФ, CW, АРУ/gain — как раньше).  
-            af_bank_t preset[AF_STORE_BANKS];  
-            for (uint8_t i = 0; i < AF_STORE_BANKS; i++) {  
-                bank_fill_defaults(&preset[i]);  
-            }  
-            // Per-банк отличия — только RX-поля, TX у всех одинаковый.  
-            // 1 (GP2): SSB нормальная  
-            preset[0].lo_hz = 100;  preset[0].hi_hz = 3100;  
-            // 2 (GP3): SSB узкая  
-            preset[1].lo_hz = 300;  preset[1].hi_hz = 2200;  
-            // 3: резерв — широкая  
-            preset[2].lo_hz = 100;  preset[2].hi_hz = 4000;  
-            // 4 (GP4): CW 700 Гц  
-            preset[3].lo_hz = 450;  preset[3].hi_hz = 950;  
-            preset[3].cw_on = 1;  
-            // 5: резерв — очень узкая  
-            preset[4].lo_hz = 300;  preset[4].hi_hz = 900;  
-            // 6: резерв — AM, АРУ off (×1.5)  
-            preset[5].lo_hz = 300;  preset[5].hi_hz = 3000;  
-            preset[5].agc_on = 0;   preset[5].gain_pct = 384;  
-            // 7: резерв  
-            preset[6].lo_hz = 200;  preset[6].hi_hz = 3500;  
-  
-            Serial.println("# banks clr: writing 7 banks...");    
-            Serial.flush();    
-            af_store_write_all(preset);   // reset Core1 + erase/program + restartCore1    
+        if (sub && strcmp(sub, "clr") == 0) {        
+            // Перезаписать все 7 ячеек заводскими пресетами.      
+            // Единый источник дефолтов — af_store_fill_defaults    
+            // (af_store.cpp): полный снимок RX+TX + per-банк отличия.    
+            af_bank_t preset[AF_STORE_BANKS];    
+            af_store_fill_defaults(preset);    
+    
+            Serial.println("# banks clr: writing 7 banks...");      
+            Serial.flush();      
+            af_store_write_all(preset);   // park + nominal + DMA-окно + erase/program      
+        }       
         }    
         // Без аргументов — транспонированная таблица: строки = параметры,      
         // столбцы = cur (текущее состояние DSP) + банки 1..7.      

@@ -109,8 +109,8 @@ bool af_store_core1_park(uint32_t timeout_ms);
 // Core 0: отпустить Core 1 после flash-операции.    
 void af_store_core1_unpark(void);  
 
-// Заполнить массив банков дефолтными пресетами (общая таблица для    
-// af_store_poll и 'banks clr').    
+// Заводские пресеты всех банков — единый источник дефолтов.  
+// Используется af_store_init (пустой/чужой сектор) и CLI 'banks clr'. 
 void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]);  
 
 // FLASH-TEST: N циклов erase/program/verify в тестовый сектор 0x100000.  

@@ -16,11 +16,12 @@
 //   [3]      резерв  
 //   [4..]    7 записей по sizeof(af_bank_rec_t)  
 //  
-// Запись — по 'save x' / 'banks clr'. Таблица банков всегда из кода:    
-// af_store_init заполняет s_sector_img дефолтами, flash не читается    
-// (отладочный режим — вернуть чтение из flash после стабилизации).    
-// Запись отложена в loop() — в boot-пути af_store_init она висла (BUGS.MD).    
-// Чтение — по 'load x' и при смене кода на GP2..GP4.    
+// Запись — по 'save x' / 'banks clr' и один раз при старте, если сектор    
+// пустой/чужой: af_store_init заполняет образ дефолтами и ставит флаг,    
+// af_store_poll пишет их во flash из loop() (в boot-пути запись висла).    
+// Чтение — по 'load x', при смене кода на GP2..GP4 и при старте    
+// (af_gpio_ctl_init -> apply_bank -> af_store_load).    
+// Дефолты — единая таблица af_store_fill_defaults (все поля af_bank_t).    
 // ============================================================================  
 #include <Arduino.h>  
 #include <EEPROM.h>  
@@ -99,10 +100,9 @@ struct af_bank_rec_t {
 // Образ всего сектора — читаем, патчим, пишем целиком.    
 static uint8_t s_sector_img[FLASH_SECTOR_SIZE];    
   
-// Флаг отложенной записи дефолтов через af_store_poll (не в init:      
-// там запись висла). Сейчас af_store_init всегда ставит false —      
-// таблица банков берётся из кода, flash при старте не пишется.      
-static bool s_need_defaults = false;      
+// Флаг отложенной записи дефолтов через af_store_poll (не в init:    
+// там запись висла). Ставится, когда сектор пустой/чужой.    
+static bool s_need_defaults = false;        
   
 static uint8_t crc8(const void* p, size_t n) {  
     const uint8_t* b = (const uint8_t*)p;  
@@ -143,31 +143,29 @@ void af_store_init(void) {
     Serial.printf("# store: PICO_FLASH_SIZE_BYTES=0x%x\n",    
         (unsigned)PICO_FLASH_SIZE_BYTES);    
     
-    if (s_sector_img[0] != AF_STORE_MAGIC0 ||        
-        s_sector_img[1] != AF_STORE_MAGIC1 ||        
-        s_sector_img[2] != AF_STORE_VER) {        
-        memset(s_sector_img, 0xFF, sizeof(s_sector_img));          
-        Serial.println("[STORE] sector blank/foreign");        
-    }          
-  
-    // Таблица банков — всегда из кода: перезаписываем записи      
-    // дефолтами (RX-пресеты + TX-профили 1..7). Flash-ячейки      
-    // не трогаем; save N запишет текущее в сектор по запросу.        
-    {      
-        af_bank_t def[AF_STORE_BANKS];      
-        af_store_fill_defaults(def);      
-        s_sector_img[0] = AF_STORE_MAGIC0;      
-        s_sector_img[1] = AF_STORE_MAGIC1;      
-        s_sector_img[2] = AF_STORE_VER;      
-        s_sector_img[3] = 0xFF;      
-        for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {      
-            af_bank_rec_t r;      
-            r.d = def[i - 1];      
-            r.crc = crc8(&r.d, sizeof(r.d));      
-            memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));      
-        }      
-    }      
-    s_need_defaults = false;   // не писать дефолты во flash при старте      
+    if (s_sector_img[0] != AF_STORE_MAGIC0 ||          
+        s_sector_img[1] != AF_STORE_MAGIC1 ||          
+        s_sector_img[2] != AF_STORE_VER) {          
+        // Сектор пустой/чужой: заполняем образ дефолтами и ставим        
+        // флаг — af_store_poll запишет их во flash из loop()        
+        // (в boot-пути запись висла, см. BUGS.MD).        
+        af_bank_t def[AF_STORE_BANKS];        
+        af_store_fill_defaults(def);        
+        s_sector_img[0] = AF_STORE_MAGIC0;        
+        s_sector_img[1] = AF_STORE_MAGIC1;        
+        s_sector_img[2] = AF_STORE_VER;        
+        s_sector_img[3] = 0xFF;        
+        for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {        
+            af_bank_rec_t r;        
+            r.d = def[i - 1];        
+            r.crc = crc8(&r.d, sizeof(r.d));        
+            memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));        
+        }        
+        s_need_defaults = true;        
+        Serial.println("[STORE] sector blank/foreign — defaults pending");          
+    } else {  
+        s_need_defaults = false;  
+    }    
 }  
   
 bool af_store_read(uint8_t idx, af_bank_t* out) {    
