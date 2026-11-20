@@ -96,7 +96,7 @@ void af_store_core1_unpark(void) {
 #pragma pack(push, 1)  
 struct af_bank_rec_t {  
     af_bank_t d;  
-    uint8_t   crc;        // XOR всех байт d; 0xFF-пустая ячейка имеет crc=0xFF  
+    uint8_t   crc;        // XOR всех байт d; пустая ячейка = вся запись 0xFF  
 };  
 #pragma pack(pop)  
   
@@ -176,12 +176,19 @@ bool af_store_read(uint8_t idx, af_bank_t* out) {
     // Читаем из s_sector_img — образ сектора AF_FLASH_OFF, заполнен      
     // af_store_init напрямую из XIP (EEPROM.get не используем —      
     // читаем свой сектор явно, без зависимости от эмуляции).      
-    af_bank_rec_t r;    
-    memcpy(&r, &s_sector_img[rec_addr(idx)], sizeof(r));    
-    if (r.crc == 0xFF) return false;                       // пустая    
-    if (r.crc != crc8(&r.d, sizeof(r.d))) return false;    // битая    
-    *out = r.d;    
-    return true;    
+    af_bank_rec_t r;      
+    memcpy(&r, &s_sector_img[rec_addr(idx)], sizeof(r));      
+    // Пустая ячейка = ВСЯ запись 0xFF (стёртый flash). Проверять только      
+    // crc == 0xFF нельзя: валидная запись может иметь crc = 0xFF      
+    // (XOR данных), и тогда она ошибочно читалась как пустая — банк 5.      
+    bool all_ff = true;      
+    for (size_t i = 0; i < sizeof(r); i++) {      
+        if (((const uint8_t*)&r)[i] != 0xFF) { all_ff = false; break; }      
+    }      
+    if (all_ff) return false;                              // пустая      
+    if (r.crc != crc8(&r.d, sizeof(r.d))) return false;    // битая      
+    *out = r.d;      
+    return true;      
 }  
   
 // Снимок текущих настроек DSP в af_bank_t (полный снимок RX+TX).    

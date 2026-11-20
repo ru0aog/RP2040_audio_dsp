@@ -305,43 +305,61 @@ void af_usb_poll(void) {
         int frames = 0;      
         int16_t s = 0;      
       
-        if (usb_muted) {    
-            // Flash-окно: тишина в поток. Очередь дренируем — иначе    
-            // за ~45 мс окна out_usb переполнится и блоки дропнутся.    
-            int32_t dummy;    
-            while (get_input(&dummy)) { /* drain */ }    
+        if (usb_muted) {      
+            // Flash-окно: тишина в поток. Первые ~6 мс — fade-out:      
+            // продолжаем ресемплировать живой вход с убывающей рампой,      
+            // иначе стык живой->нули сам по себе щёлкает.      
+            while (frames < avail_frames) {      
+                if (usb_fade) {                      // fade-out 256->0    
+                    if (!next_frame(&s)) s = 0;    
+                    s = (int16_t)(((int32_t)s * usb_fade) >> 8);    
+                    if (--usb_fade == 0) break;      // рампа кончилась    
+                } else {    
+                    s = 0;    
+                }    
+                pcm_buffer[frames * 2]     = s;    
+                pcm_buffer[frames * 2 + 1] = s;    
+                ++frames;    
+            }    
+            // Остаток кадра — нули; очередь дренируем, чтобы out_usb    
+            // не переполнилась за ~45 мс окна.    
             while (frames < avail_frames) {    
                 pcm_buffer[frames * 2]     = 0;    
                 pcm_buffer[frames * 2 + 1] = 0;    
                 ++frames;    
             }    
-        } else    
-        while (frames < avail_frames) {      
-            if (!next_frame(&s)) {      
-                // Источник пуст: underrun. НЕ обрываем кадр — дописываем    
-                // последний фрейм (s сохраняет прошлое значение). Дефицит    
-                // ~1% = ~10 мс повторов в секунду, размазанных по потоку —    
-                // неслышно, в отличие от дыр до следующей заправки.    
-                ++usb_underruns;    
-                usb_frames_short += (uint32_t)(avail_frames - frames);    
-                usb_ur_t[usb_ur_idx] = time_us_32();    
-                usb_ur_n[usb_ur_idx] = (uint16_t)(avail_frames - frames);    
-                usb_ur_idx = (uint8_t)((usb_ur_idx + 1) & 7);    
-                while (frames < avail_frames) {    
-                    pcm_buffer[frames * 2]     = s;    
-                    pcm_buffer[frames * 2 + 1] = s;    
-                    ++frames;    
-                }    
-                break;    
+            int32_t dummy;    
+            while (get_input(&dummy)) { /* drain */ }    
+        } else      
+        while (frames < avail_frames) {        
+            if (!next_frame(&s)) {        
+                // Источник пуст: underrun. НЕ обрываем кадр — дописываем      
+                // последний фрейм (s сохраняет прошлое значение). Дефицит      
+                // ~1% = ~10 мс повторов в секунду, размазанных по потоку —      
+                // неслышно, в отличие от дыр до следующей заправки.      
+                ++usb_underruns;      
+                usb_frames_short += (uint32_t)(avail_frames - frames);      
+                usb_ur_t[usb_ur_idx] = time_us_32();      
+                usb_ur_n[usb_ur_idx] = (uint16_t)(avail_frames - frames);      
+                usb_ur_idx = (uint8_t)((usb_ur_idx + 1) & 7);      
+                // Во время fade-in паддинг нулями — иначе повтор      
+                // последнего фрейма на полной громкости ломает рампу.    
+                const int16_t pad = usb_fade ? 0 : s;    
+                while (frames < avail_frames) {      
+                    pcm_buffer[frames * 2]     = pad;      
+                    pcm_buffer[frames * 2 + 1] = pad;      
+                    ++frames;      
+                }      
+                break;      
+            }      
+            if (usb_fade) {                          // fade-in после unmute    
+                s = (int16_t)(((int32_t)s * usb_fade) >> 8);    
+                if (++usb_fade > 256) usb_fade = 0;  // ~5.8 мс при 44.1 кГц    
             }    
-            if (usb_fade) {                          // fade-in после unmute  
-                s = (int16_t)(((int32_t)s * usb_fade) >> 8);  
-                if (++usb_fade > 256) usb_fade = 0;  // ~5.8 мс при 44.1 кГц  
-            }  
-            pcm_buffer[frames * 2]     = s;                   // L      
-            pcm_buffer[frames * 2 + 1] = s;                   // R = дубль моно      
-            ++frames;      
-        }    
+            pcm_buffer[frames * 2]     = s;                   // L        
+            pcm_buffer[frames * 2 + 1] = s;                   // R = дубль моно        
+            ++frames;        
+        }      
     
         if (frames > 0) {      
             // write() может принять меньше, чем просили — это потерянные      
@@ -394,7 +412,8 @@ void af_usb_ur_log(uint32_t* t, uint16_t* n) {
 
 // Мьют USB-выхода на время flash-окна: poll пишет нули в TinyUSB.      
 // Вызывается из af_store до/после окна (при живом XIP).      
-void af_usb_set_muted(bool m) {    
-    if (usb_muted && !m) usb_fade = 1;   // старт fade-in на unmute    
-    usb_muted = m;    
+void af_usb_set_muted(bool m) {      
+    if (usb_muted && !m)  usb_fade = 1;     // unmute -> fade-in 0->256    
+    if (!usb_muted && m)  usb_fade = 255;   // mute   -> fade-out 256->0    
+    usb_muted = m;      
 }  
