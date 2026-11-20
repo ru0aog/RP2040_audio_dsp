@@ -161,16 +161,34 @@ void af_pwm_init(void) {
     channel_config_set_write_increment(&c, false);  
   
     // Pacing-таймер DMA на AF_FS_OUT_HZ.  
+    // Таймер даёт темп f_sys * num/den; подбираем num/den с минимальной  
+    // ошибкой при den <= 0xFFFF — работает при любом clk_sys, без  
+    // ручного пересчёта после разгона.  
     pwm_dma_timer = dma_claim_unused_timer(true);  
     uint32_t f_sys = clock_get_hz(clk_sys);  
-    uint32_t den = 0;  
-    if (f_sys % AF_FS_OUT_HZ == 0) {  
-        den = f_sys / AF_FS_OUT_HZ;             // точный делитель  
-    } else {  
-        den = (f_sys + AF_FS_OUT_HZ / 2) / AF_FS_OUT_HZ;  
-        if (den > 0xFFFF) den = 0xFFFF;  
+    uint32_t best_num = 1, best_den = 1;  
+    uint64_t best_err = UINT64_MAX;  
+    for (uint32_t num = 1; num <= 4096; num++) {  
+        // den, ближайший к f_sys*num/AF_FS_OUT_HZ  
+        uint64_t ideal = (uint64_t)f_sys * num;  
+        uint32_t den = (uint32_t)((ideal + AF_FS_OUT_HZ / 2) / AF_FS_OUT_HZ);  
+        if (den == 0 || den > 0xFFFF) continue;  
+        // |f_sys*num - AF_FS_OUT_HZ*den| — абсолютная ошибка темпа  
+        uint64_t err = (ideal > (uint64_t)AF_FS_OUT_HZ * den)  
+                     ? ideal - (uint64_t)AF_FS_OUT_HZ * den  
+                     : (uint64_t)AF_FS_OUT_HZ * den - ideal;  
+        if (err < best_err) {  
+            best_err = err;  
+            best_num = num;  
+            best_den = den;  
+            if (err == 0) break;                // точное попадание  
+        }  
     }  
-    dma_timer_set_fraction(pwm_dma_timer, 1, (uint16_t)den);  
+    dma_timer_set_fraction(pwm_dma_timer, (uint16_t)best_num, (uint16_t)best_den);  
+    Serial.printf("[PWM] pacing %lu/%lu -> %lu Hz (target %lu)\n",  
+                  (unsigned long)best_num, (unsigned long)best_den,  
+                  (unsigned long)((uint64_t)f_sys * best_num / best_den),  
+                  (unsigned long)AF_FS_OUT_HZ);  
     channel_config_set_dreq(&c, dma_get_timer_dreq(pwm_dma_timer));  
   
     dma_channel_configure(  
