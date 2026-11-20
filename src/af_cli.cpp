@@ -961,7 +961,6 @@ static void cli_exec(char* line) {
             Serial.println("# banks clr: writing 7 banks...");      
             Serial.flush();      
             af_store_write_all(preset);   // park + nominal + DMA-окно + erase/program      
-        }       
         }    
         // Без аргументов — транспонированная таблица: строки = параметры,      
         // столбцы = cur (текущее состояние DSP) + банки 1..7.      
