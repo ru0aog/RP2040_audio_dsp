@@ -89,7 +89,18 @@ static uint32_t rec_slot_len(uint8_t bank) {
 static const int16_t* rec_slot_data(void) {    
     return (const int16_t*)(XIP_BASE + slot_off + AF_REC_HDR_SIZE);    
 }    
-  
+
+// --- Экспорт слотов для af_fm (WAV-файлы на диске) ---------------------------    
+uint32_t af_rec_slot_len(uint8_t bank) {    
+    if (bank < 1 || bank > AF_STORE_BANKS) return 0;    
+    return rec_slot_len(bank);    
+}    
+    
+const int16_t* af_rec_slot_data(uint8_t bank) {    
+    if (bank < 1 || bank > AF_STORE_BANKS) return nullptr;    
+    return (const int16_t*)(XIP_BASE + rec_slot_off(bank) + AF_REC_HDR_SIZE);    
+}    
+
 // --- Flash-окно: erase+program слота. Вся функция в RAM. ----------------------    
 // param = {off, src, bytes}: erase AF_REC_SLOT_SIZE, затем program src.    
 struct rec_wr_t { uint32_t off; const uint8_t* src; uint32_t bytes; };    

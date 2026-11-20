@@ -49,3 +49,9 @@ int16_t af_rec_mix(int16_t s);     // подмес воспроизведени�
 int32_t af_rec_src(int32_t mic);   // источник для TX: запись вместо микрофона    
 uint32_t af_rec_play_len(void);    // длина текущего/последнего воспроизведения (ram или voice_14)
 bool af_rec_erase_all(void);   // очистка всех 7 слотов (banks clr)  
+
+// Доступ к слотам для файлового менеджера (WAV-экспорт, read-only).    
+// bank = 1..7. len = отсчётов PCM16 @7732 Гц (0 = слот пуст).    
+// data = XIP-указатель на PCM слота (NULL если bank вне диапазона).    
+uint32_t       af_rec_slot_len(uint8_t bank);    
+const int16_t* af_rec_slot_data(uint8_t bank);    
