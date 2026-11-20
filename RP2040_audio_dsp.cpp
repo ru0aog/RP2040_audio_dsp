@@ -149,7 +149,7 @@ static void core1_main(void);   // рабочий цикл Core 1, RAM-only
 
 void setup() {
     af_set_clk();              // разгон первым делом, до USB/Serial  
-//    af_usb_init();
+    af_usb_init();
 
     Serial.begin(115200);
     af_led_init();             // heartbeat (WS2812 на GP16 у Zero)
@@ -166,11 +166,6 @@ void setup() {
                   (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000),  
                   (unsigned)ssi_hw->baudr);  
 
-// === FLASH-TEST СТЕНД: все модули отключены ===
-// Оставлены: clk, USB/Serial, CLI (fmap/ftest), watchdog.
-af_cli_init();
-
-/*
     af_dsp_init();
     af_cli_init();
     Serial.println("# before store_init"); Serial.flush();
@@ -184,7 +179,7 @@ af_cli_init();
     af_voice_init();
     af_voice_play(VOICE_READY);   // приветствие после инициализации
     af_led_set(0, 10, 0);
-*/
+
     __dmb();  
     core0_ready = true;
     af_led_set(0, 0, 0);
