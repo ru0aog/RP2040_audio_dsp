@@ -564,10 +564,12 @@ static bool af_store_test_iter(uint8_t mode, uint32_t iter) {
         af_set_clk_nominal();  
     }  
   
-    uint32_t ints = save_and_disable_interrupts();  
-    do_test_write(NULL);  
-    restore_interrupts(ints);  
-    flash_flush_cache();  
+    uint32_t ints = save_and_disable_interrupts();    
+    do_test_write(NULL);    
+    flash_flush_cache();              // ДО restore_interrupts: иначе pending  
+                                      // DMA IRQ прыгнет в ISR на протухшем  
+                                      // XIP-кэше -> вис (гипотеза проверяется)  
+    restore_interrupts(ints);    
   
     if (mode == 2 || mode == 3) {  
         af_set_clk();  
