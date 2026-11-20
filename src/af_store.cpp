@@ -6,14 +6,16 @@
 // EEPROM-эмуляция ядра Philhower. Чтение — напрямую из XIP в s_sector_img,
 // запись — напрямую flash_range_erase/flash_range_program из RAM-функции
 // do_flash_write. Схема окна (баг 4, все условия обязательны):
-//   af_store_core1_park → af_usb_set_muted(true) + промывка ~60 мс  
-//   → af_set_clk_nominal (125 МГц) → af_capture_pause → af_pwm off  
-//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on  
-//   → af_capture_resume → af_usb_set_muted(false)  
-//   → af_set_clk (250 МГц) → af_pwm restore → af_store_core1_unpark  
-// af_pwm off — глушение выхода: без него на границах окна слышен щелчок.    
-// USB-мьют: буфер AudioTools ~46 мс, поэтому mute ставится заранее    
-// и poll'ами промывается нулями — иначе в окно уходит хвост живого звука.    
+//   af_store_core1_park → af_usb_set_muted(true)  
+//   → af_set_clk_nominal (125 МГц) → af_capture_pause → af_pwm off    
+//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on    
+//   → af_capture_resume → af_usb_set_muted(false)    
+//   → af_set_clk (250 МГц) → af_pwm restore → af_store_core1_unpark    
+// af_pwm off — глушение выхода: без него на границах окна слышен щелчок.      
+// USB-мьют: poll пишет нули (fade-out/in в af_usb). Промывка poll'ами      
+// убрана — tight-loop с блокирующим usb_out.write() вешал ftest,      
+// когда хост приостанавливал чтение UAC-стрима. В окно уходит      
+// хвост живого звука из буфера AudioTools (~46 мс) — принято.       
 //  
 // Раскладка сектора:  
 //   [0..1]   magic 'A','F'  
@@ -273,11 +275,7 @@ bool af_store_save(uint8_t idx) {
         return false;    
     }    
     
-    af_usb_set_muted(true);             // USB -> тишина; буфер ~46 мс,    
-    {                                   // промываем poll'ами до окна    
-        const uint32_t t0 = millis();    
-        while ((uint32_t)(millis() - t0) < 60u) af_usb_poll();    
-    }    
+    af_usb_set_muted(true);             // USB -> тишина (fade-out в poll)
     af_set_clk_nominal();               // 125 МГц на окно — обязательно,
                                         // на 250 МГц erase/program виснет
     af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off
@@ -386,12 +384,8 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         return;    
     }    
 
-    af_usb_set_muted(true);             // USB -> тишина + промывка, см. save    
-    {    
-        const uint32_t t0 = millis();    
-        while ((uint32_t)(millis() - t0) < 60u) af_usb_poll();    
-    }    
-    af_set_clk_nominal();          
+    af_usb_set_muted(true);             // USB -> тишина (fade-out в poll)  
+    af_set_clk_nominal();            
     af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off      
     const bool pwm_was = af_pwm_is_enabled();      
     if (pwm_was) af_pwm_set_enabled(false);     // глушим выход на окно      
@@ -581,12 +575,8 @@ static bool af_store_test_iter(uint8_t mode, uint32_t iter) {
         af_set_clk_nominal();  
     }  
   
-    af_usb_set_muted(true);           // USB -> тишина + промывка, как в save    
-    {    
-        const uint32_t t0 = millis();    
-        while ((uint32_t)(millis() - t0) < 60u) af_usb_poll();    
-    }    
-    af_capture_pause();               // DMA-окно: ADC+DMA стоп до XIP-off      
+    af_usb_set_muted(true);           // USB -> тишина (fade-out в poll)  
+    af_capture_pause();               // DMA-окно: ADC+DMA стоп до XIP-off        
     const bool pwm_was = af_pwm_is_enabled();      
     if (pwm_was) af_pwm_set_enabled(false);   // глушим выход — как в save      
     uint32_t ints = save_and_disable_interrupts();        
@@ -595,14 +585,8 @@ static bool af_store_test_iter(uint8_t mode, uint32_t iter) {
                                       // DMA IRQ прыгнет в ISR на протухшем        
                                       // XIP-кэше -> вис        
     restore_interrupts(ints);        
-    af_capture_resume();              // рестарт цепочки A->B->A      
-    // Транзиент ADC после resume идёт в тракт ~50-80 мс — держим    
-    // выход в мьюте, пока он не уйдёт в нули.    
-    {    
-        const uint32_t t1 = millis();    
-        while ((uint32_t)(millis() - t1) < 80u) af_usb_poll();    
-    }    
-    af_usb_set_muted(false);          // USB -> звук    
+    af_capture_resume();              // рестарт цепочки A->B->A        
+    af_usb_set_muted(false);          // USB -> звук (fade-in в poll)  
     if (pwm_was) af_pwm_set_enabled(true);      
   
     if (mode == 2 || mode == 3) {  
