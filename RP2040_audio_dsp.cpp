@@ -52,11 +52,11 @@ struct PllConfig {
   
 // 250 МГц: VCO = 12М * 125 = 1500 МГц, p1=6, p2=1 → 250 МГц  
 // VSEL 1.30 В, BAUDR=6 → SCK флеша ~41.7 МГц  
-static const PllConfig pll_cfg_boosted = { 250000000UL, 1, 125, 6, 1, 6};
+// static const PllConfig pll_cfg_boosted = { 250000000UL, 1, 125, 6, 1, 6};
 
 // 320 МГц: VCO = 12М * 80 = 960 МГц, p1=3, p2=1 → 320 МГц    
 // VSEL 1.30 В, BAUDR=8 → SCK флеша 40 МГц    
-// static const PllConfig pll_cfg_boosted = { 320000000UL, 1, 80, 3, 1, 8}; 
+static const PllConfig pll_cfg_boosted = { 320000000UL, 1, 80, 3, 1, 8}; 
 
 
 // Номинал для flash-операций: VCO = 12М * 125 = 1500 МГц, p1=6, p2=2 → 125 МГц    
