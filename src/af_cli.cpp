@@ -714,7 +714,18 @@ static int32_t bank_field(const af_bank_t* b, const af_param_t* p) {
         default:       return (int32_t)*(const uint16_t*)(base + p->off);    
     }    
 }  
-  
+
+// Запись поля банка по смещению (зеркало bank_field).        
+static void bank_field_set(af_bank_t* b, const af_param_t* p, int32_t v) {      
+    uint8_t* base = (uint8_t*)b;      
+    switch (p->type) {      
+        case PT_ONOFF:      
+        case PT_U8:    *(uint8_t*)(base + p->off)  = (uint8_t)v;  break;      
+        case PT_I16:   *(int16_t*)(base + p->off)  = (int16_t)v;  break;      
+        default:       *(uint16_t*)(base + p->off) = (uint16_t)v; break;      
+    }      
+}      
+
 // Диспетчер команд-меток: "<label> <value>" — longest match по таблице.  
 // Вызывается до strtok (строка ещё целая). true = команда обработана.  
 static bool cli_param_try(char* line) {    
@@ -818,6 +829,86 @@ size_t af_cli_format_banks(char* buf, size_t cap) {
     if (n < cap) buf[n] = '\0'; else buf[cap - 1] = '\0';  
     return n;  
 }  
+
+// ---------------------------------------------------------------------------    
+// af_cli_apply_set_txt — парсер SET.TXT с диска (запись хоста -> банки).    
+// Формат = вывод af_cli_format_banks: строки "# <label> <cur> <1>..<7>".    
+// Колонка cur игнорируется (только чтение); "-----" и пустые банки — пропуск.    
+// Применённые поля пишутся во flash одним окном af_store_write_all.    
+// Возвращает true, если хоть одно поле применено.    
+// ---------------------------------------------------------------------------    
+bool af_cli_apply_set_txt(const char* txt, size_t len) {      
+    af_bank_t bk[AF_STORE_BANKS];      
+    bool      bv[AF_STORE_BANKS];      
+    for (uint8_t i = 0; i < AF_STORE_BANKS; i++)      
+        bv[i] = af_store_read(i + 1, &bk[i]);      
+      
+    uint32_t applied = 0;      
+    const char* p   = txt;      
+    const char* end = txt + len;      
+      
+    while (p < end) {      
+        const char* eol = p;      
+        while (eol < end && *eol != '\n') eol++;      
+      
+        const char* s = p;      
+        while (s < eol && (*s == '#' || *s == ' ' || *s == '\t' || *s == '\r')) s++;      
+      
+        // Метка из AF_PARAMS — longest match (как в cli_param_try).      
+        const af_param_t* best = NULL;      
+        size_t best_len = 0;      
+        for (size_t i = 0; i < AF_PARAMS_COUNT; i++) {      
+            const af_param_t* par = &AF_PARAMS[i];      
+            if (par->type == PT_SEP) continue;      
+            size_t l = strlen(par->label);      
+            if (l > best_len && (size_t)(eol - s) > l &&      
+                strncmp(s, par->label, l) == 0 && s[l] == ' ') {      
+                best = par; best_len = l;      
+            }      
+        }      
+      
+        if (best) {      
+            const char* v = s + best_len;      
+            for (uint8_t col = 0; col <= AF_STORE_BANKS; col++) {      
+                while (v < eol && (*v == ' ' || *v == '\t')) v++;      
+                if (v >= eol || *v == '\r') break;      
+                char tok[16]; uint8_t tl = 0;      
+                while (v < eol && *v != ' ' && *v != '\t' && *v != '\r') {      
+                    if (tl < sizeof(tok) - 1) tok[tl++] = *v;      
+                    v++;      
+                }      
+                tok[tl] = '\0';      
+      
+                if (col == 0) continue;              // cur — только чтение      
+                if (!bv[col - 1]) continue;          // банк пуст — не трогаем      
+                if (strcmp(tok, "-----") == 0) continue;      
+      
+                int32_t val;      
+                if (best->type == PT_ONOFF) {      
+                    if      (strncmp(tok, "on", 2) == 0)  val = 1;      
+                    else if (strncmp(tok, "off", 3) == 0) val = 0;      
+                    else continue;      
+                } else if (best->type == PT_GAIN) {      
+                    val = (int32_t)(strtof(tok, NULL) * 256.0f + 0.5f);      
+                } else if (best->type == PT_X100) {      
+                    val = (int32_t)(strtof(tok, NULL) * 100.0f + 0.5f);      
+                } else {      
+                    val = (int32_t)strtol(tok, NULL, 10);      
+                }      
+                bank_field_set(&bk[col - 1], best, val);      
+                applied++;      
+            }      
+        }      
+        p = (eol < end) ? eol + 1 : end;      
+    }      
+      
+    if (applied == 0) return false;      
+    Serial.printf("# fm: SET.TXT parsed, %lu fields -> writing banks...\n",      
+                  (unsigned long)applied);      
+    Serial.flush();      
+    af_store_write_all(bk);          // park + окно + erase/program (~1 с)      
+    return true;      
+}      
 
 // ---------------------------------------------------------------------------  
 // Разбор одной строки  

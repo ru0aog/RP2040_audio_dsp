@@ -8,8 +8,8 @@
 //   LBA 28..   REC1..REC7.WAV — виртуальные, синтез в af_fm_msc_read    
 //              (WAV 16000 Гц mono, ресемплинг из слота 7732 Гц)    
 //  
-// SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.  
-// Запись с ПК копируется в образ и ставит fm_dirty (парсер — этап 2).  
+// SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.    
+// Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.    
   
 #include "af_config.h"  
 #include "af_fm.h"  
@@ -17,16 +17,20 @@
 #include <string.h>  
 #include <stdio.h>  
   
-// Рендер таблицы banks в буфер (af_cli.cpp — там AF_PARAMS/bank_field).  
-// Возвращает длину текста без NUL.  
-extern size_t af_cli_format_banks(char* buf, size_t cap);  
+// Рендер таблицы banks в буфер (af_cli.cpp — там AF_PARAMS/bank_field).    
+// Возвращает длину текста без NUL.    
+extern size_t af_cli_format_banks(char* buf, size_t cap);    
+// Парсер SET.TXT: применяет колонки 1..7 в банки + запись во flash.    
+// Возвращает число применённых полей (0 = ничего не распознано).    
+extern uint32_t af_cli_apply_set_txt(const char* txt, size_t len);    
   
 #include "af_rec.h"          // af_rec_slot_len/data — WAV-экспорт    
     
 static uint8_t  fm_disk[AF_FM_RAM_SECTORS][AF_FM_SECTOR_SIZE];  // ~14 КБ    
 static uint32_t fm_set_len = 0;        // байт в SET.TXT  
-static bool     fm_dirty   = false;    // ПК писал — ждёт парсера (этап 2)  
-static bool     fm_stale   = true;     // SET.TXT устарел — регенерировать  
+static bool     fm_dirty   = false;    // ПК писал — ждёт парсера    
+static bool     fm_stale   = true;     // SET.TXT устарел — регенерировать    
+static uint32_t fm_dirty_ms = 0;       // millis() последней записи (дебаунс)    
   
 // ---------------------------------------------------------------------------  
 // Построение образа  
@@ -151,9 +155,19 @@ void af_fm_sync(void) {
     fm_stale = false;    
 }    
   
-void af_fm_poll(void) {  
-    if (fm_stale) af_fm_sync();  
-}  
+void af_fm_poll(void) {    
+    // Дебаунс: хост пишет файл пачкой секторов — ждём 800 мс тишины,    
+    // потом парсим SET.TXT целиком и пишем банки во flash.    
+    if (fm_dirty && (int32_t)(millis() - fm_dirty_ms) >= 800) {    
+        fm_dirty = false;    
+        const char* txt = (const char*)&fm_disk[AF_FM_SET_LBA][0];    
+        uint32_t applied = af_cli_apply_set_txt(txt, fm_set_len);    
+        Serial.printf("# fm: SET.TXT parsed, %lu fields applied\n",    
+                      (unsigned long)applied);    
+        fm_stale = true;               // перерендерить из записанных банков    
+    }    
+    if (fm_stale) af_fm_sync();    
+}    
   
 bool     af_fm_dirty(void)    { return fm_dirty; }  
 uint32_t af_fm_set_size(void) { return fm_set_len; }  
@@ -227,15 +241,16 @@ int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {
 }    
   
 void af_fm_msc_flush(void) {    
-    // этап 1: пусто. Этап 2: здесь дебаунс-метка времени последней записи.    
-}  
+    if (fm_dirty) fm_dirty_ms = millis();   // flush = конец пачки записи    
+}    
   
 int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {      
     if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;      
     if (bufsize < AF_FM_SECTOR_SIZE) return -1;      
     if (lba >= AF_FM_WAV_LBA(0)) return -1;        // WAV — read-only      
     if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only      
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);      
-    fm_dirty = true;                 // этап 2: дебаунс -> парсер -> flash      
-    return (int32_t)AF_FM_SECTOR_SIZE;      
+    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);        
+    fm_dirty   = true;    
+    fm_dirty_ms = millis();          // дебаунс -> парсер в af_fm_poll    
+    return (int32_t)AF_FM_SECTOR_SIZE;        
 }  

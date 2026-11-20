@@ -15,3 +15,5 @@ void af_cli_poll(void);
 
 // Таблица banks в текстовый буфер (SET.TXT для af_fm). Возвращает длину.  
 size_t af_cli_format_banks(char* buf, size_t cap);  
+
+bool   af_cli_apply_set_txt(const char* txt, size_t len);   // парсер SET.TXT -> банки  
