@@ -33,6 +33,7 @@
 #include "af_tx.h"        // TX-тракт: полоса/компрессия/клиппер
 #include "af_gpio_ctl.h"  // af_gpio_bank_code — текущий банк с пинов
 #include "af_rec.h"       // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
+#include "af_fm.h"        // af_fm_request_sync — перерендер SET.TXT 
   
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -775,10 +776,11 @@ static bool cli_param_try(char* line) {
     } else {    
         val = (int32_t)strtol(v, NULL, 10);    
     }    
-    best->set(val);  
-    Serial.printf("# OK %s=%ld\n", best->label, (long)val);  
-    return true;  
-}  
+    best->set(val);    
+    af_fm_request_sync();   // cur изменился — SET.TXT перерендерить  
+    Serial.printf("# OK %s=%ld\n", best->label, (long)val);    
+    return true;    
+}    
 
 // ---------------------------------------------------------------------------  
 // af_cli_format_banks — таблица banks в текстовый буфер (для SET.TXT / af_fm).  
@@ -1076,10 +1078,12 @@ static void cli_exec(char* line) {
             Serial.println("# ERR: save <1..7>");  
             return;  
         }  
-        if (af_store_save((uint8_t)idx))  
-            Serial.printf("# OK saved bank %d\n", idx);  
-        else  
-            Serial.printf("# ERR save bank %d\n", idx);  
+        if (af_store_save((uint8_t)idx)) {    
+            af_fm_request_sync();   // ячейка перезаписана — SET.TXT перерендерить  
+            Serial.printf("# OK saved bank %d\n", idx);    
+        } else {    
+            Serial.printf("# ERR save bank %d\n", idx);    
+        }    
     }  
     else if (strcmp(cmd, "load") == 0) {  
         char* v = strtok(NULL, " \t");  
@@ -1095,14 +1099,15 @@ static void cli_exec(char* line) {
             Serial.println("# ERR: load <0..7>");  
             return;  
         } 
-        if (af_store_load(idx)) {      
-            af_led_set_bank((uint8_t)idx);   // цвет вспышки = загруженный банк      
-            af_gpio_set_bank_code((uint8_t)idx);  // stats 'bank=' = активный банк  
-            af_voice_play((af_voice_id_t)(VOICE_PROF_1 + idx - 1));  // "профиль N"    
-            Serial.printf("# OK loaded bank %d\n", idx);    
-        } else {      
-            Serial.printf("# bank %d: empty — ignored\n", idx);      
-        }      
+        if (af_store_load(idx)) {        
+            af_led_set_bank((uint8_t)idx);   // цвет вспышки = загруженный банк        
+            af_gpio_set_bank_code((uint8_t)idx);  // stats 'bank=' = активный банк    
+            af_voice_play((af_voice_id_t)(VOICE_PROF_1 + idx - 1));  // "профиль N"      
+            af_fm_request_sync();   // cur = загруженный банк — SET.TXT перерендерить  
+            Serial.printf("# OK loaded bank %d\n", idx);      
+        } else {        
+            Serial.printf("# bank %d: empty — ignored\n", idx);        
+        }        
     }  
     else if (strcmp(cmd, "banks") == 0) {  
         char* sub = strtok(NULL, " \t");  
@@ -1119,11 +1124,12 @@ static void cli_exec(char* line) {
   
             // + очистка голосовых слотов всех банков (erase 0x140000..0x1EFFFF,    
             // окно ~3-4 с). Отказ при активном rec/play — слоты остаются.    
-            if (af_rec_erase_all()) {    
-                Serial.println("# banks clr: rec slots erased");    
-            } else {    
-                Serial.println("# banks clr: rec slots kept (rec/play active)");    
-            }    
+            if (af_rec_erase_all()) {      
+                Serial.println("# banks clr: rec slots erased");      
+            } else {      
+                Serial.println("# banks clr: rec slots kept (rec/play active)");      
+            }      
+            af_fm_request_sync();   // пресеты + слоты изменились — перерендерить  
         }      
         // Без аргументов — та же таблица, что пишется в SET.TXT (af_fm).  
         // Единый форматтер — af_cli_format_banks.  

@@ -42,6 +42,7 @@
 #include "af_pwm.h"                   // af_pwm_set_enabled — глушение выхода на окно
 #include "af_usb.h"                   // af_usb_set_muted/poll — тишина в USB на окно
 #include "af_gpio_ctl.h"              // af_gpio_set_bank_code — stats 'bank=' при автозагрузке
+#include "af_fm.h"                    // af_fm_request_sync — перерендер SET.TXT 
   
 #include "pico/stdlib.h"
 #include "hardware/flash.h"  
@@ -307,11 +308,12 @@ bool af_store_save(uint8_t idx) {
     af_set_clk();                       // возврат на 250 МГц — обязательно,
                                         // иначе следующий save входит в окно
                                         // на 125 МГц в нештатном состоянии
-    if (pwm_was) af_pwm_set_enabled(true);      // вернуть выход (мягкий рестарт
-                                              // через duty_ready в af_pwm_poll)
-    af_store_core1_unpark();
-    return true;
-}
+    if (pwm_was) af_pwm_set_enabled(true);      // вернуть выход (мягкий рестарт  
+                                              // через duty_ready в af_pwm_poll)  
+    af_store_core1_unpark();  
+    af_fm_request_sync();               // банк изменился — SET.TXT перерендерить  
+    return true;  
+}  
   
 bool af_store_load(uint8_t idx) {  
     af_bank_t b;  
@@ -412,10 +414,11 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
     af_usb_set_muted(false);            // USB -> звук    
     af_set_clk();        
     if (pwm_was) af_pwm_set_enabled(true);      
-    af_store_core1_unpark();      
-
-    Serial.println("# OK banks written");      
-}
+    af_store_core1_unpark();        
+  
+    Serial.println("# OK banks written");        
+    af_fm_request_sync();               // банки изменились — SET.TXT перерендерить  
+}  
 
 // ---------------------------------------------------------------------------    
 // Дефолтные банки - banks clr ссылается сюда

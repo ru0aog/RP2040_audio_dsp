@@ -19,7 +19,7 @@
 #include "af_rec.h"    
 #include "af_config.h"    
 #include "af_dsp.h"    
-#include "af_gpio_ctl.h"        // af_gpio_last_bank — активный слот      
+#include "af_gpio_ctl.h"       // af_gpio_last_bank — активный слот      
 #include "af_store.h"          // park/unpark, af_set_clk*, af_store_write_all    
 #include "af_capture.h"        // af_capture_pause/resume    
 #include "af_pwm.h"            // af_pwm_set_enabled/is_enabled    
@@ -27,7 +27,8 @@
 #include "pico/stdlib.h"  
 #include "hardware/flash.h"    // flash_range_erase/program    
 #include "hardware/sync.h"     // save_and_disable_interrupts    
-#include "voice/voice_14.inc"   // клип-заглушка: играется при пустом слоте   
+#include "voice/voice_14.inc"  // клип-заглушка: играется при пустом слоте
+#include "af_fm.h"             // af_fm_request_sync — обновить RECn.WAV на диске
 
 typedef enum { ST_IDLE = 0, ST_REC, ST_PLAY } rec_state_t;    
   
@@ -186,10 +187,11 @@ bool af_rec_erase_all(void) {
     if (pwm_was) af_pwm_set_enabled(true);        
     af_store_core1_unpark();        
     
-    slot_len = 0;                               // активный слот тоже пуст        
-    Serial.println("# rec: all slots erased");        
-    return true;        
-}        
+    slot_len = 0;                               // активный слот тоже пуст          
+    Serial.println("# rec: all slots erased");          
+    af_fm_request_sync();   // все RECn.WAV стали пустыми — перерендерить  
+    return true;          
+}           
   
 // --- API --------------------------------------------------------------------      
 void af_rec_init(void) {    
@@ -228,11 +230,12 @@ void af_rec_stop(void) {
                   (unsigned long)((rec_len * AF_REC_DECIM % AF_FS_OUT_HZ) * 10u / AF_FS_OUT_HZ),  
                   (unsigned)rec_bank());    
     uint8_t b = rec_bank();    
-    if (rec_slot_write(b, rec_len)) {    
-        slot_off = rec_slot_off(b);    
-        slot_len = rec_len;    
-        Serial.println("# rec: slot written");    
-    } else {    
+    if (rec_slot_write(b, rec_len)) {      
+        slot_off = rec_slot_off(b);      
+        slot_len = rec_len;      
+        Serial.println("# rec: slot written");      
+        af_fm_request_sync();   // размер RECn.WAV изменился — перерендерить dir/FAT  
+    } else {      
         Serial.println("# rec: flash write FAILED — запись только в RAM");    
     }    
 }    
