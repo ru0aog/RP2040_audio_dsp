@@ -2,11 +2,13 @@
 // ============================================================================  
 // af_store.cpp — банки настроек во flash (Core 0)  
 //  
-// Хранилище — последний сектор flash (4 КБ), тот же, что использует  
-// EEPROM-эмуляция ядра Philhower. Чтение — через EEPROM (RAM-буфер),  
+// Хранилище — последний сектор flash (4 КБ), тот же, что использует    
+// EEPROM-эмуляция ядра Philhower. Чтение — через EEPROM (RAM-буфер),    
 // запись — напрямую flash_range_erase/flash_range_program из RAM-функции    
-// do_flash_write: multicore_reset_core1 + clk 125 МГц + IRQ off,    
-// затем af_set_clk + restartCore1 (без ребута).    
+// do_flash_write. Схема окна (баг 4, все условия обязательны):    
+//   af_capture_pause → af_store_core1_park → af_set_clk_nominal (125 МГц)    
+//   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on    
+//   → af_set_clk (250 МГц) → af_capture_resume → af_store_core1_unpark    
 //  
 // Раскладка сектора:  
 //   [0..1]   magic 'A','F'  
@@ -14,8 +16,9 @@
 //   [3]      резерв  
 //   [4..]    7 записей по sizeof(af_bank_rec_t)  
 //  
-// Запись — по 'save x' / 'banks clr' и один раз при старте, если сектор    
-// пустой/чужой: af_store_poll пишет дефолтные банки (аналог banks clr).    
+// Запись — по 'save x' / 'banks clr'. Таблица банков всегда из кода:    
+// af_store_init заполняет s_sector_img дефолтами, flash не читается    
+// (отладочный режим — вернуть чтение из flash после стабилизации).    
 // Запись отложена в loop() — в boot-пути af_store_init она висла (BUGS.MD).    
 // Чтение — по 'load x' и при смене кода на GP2..GP4.    
 // ============================================================================  
@@ -39,13 +42,13 @@
 #define AF_STORE_VER      4   // было 3: банк = полный снимок RX+TX  
 #define AF_EEPROM_SIZE    1024  // 7 записей по ~90 байт + заголовок  
   
-// Смещение сектора EEPROM от начала flash (последний сектор).
-// #define AF_FLASH_OFF      (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)  
-// Фиксированный адрес: последний сектор 2-МБ flash. Работает и на 4-МБ  
-// платах (сектор внутри чипа). НЕ привязывать к PICO_FLASH_SIZE_BYTES —  
-// при сборке под 4 МБ адрес уедет за пределы 2-МБ чипа.  
-// #define AF_FLASH_OFF      0x1FF000u  
-#define AF_FLASH_OFF  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE) 
+// Смещение сектора банков от начала flash — последний сектор чипа.  
+// Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
+// EEPROM-эмуляции ядра Philhower). ВНИМАНИЕ: при сборке под 4 МБ  
+// адрес уедет на 0x3FF000 — на 2-МБ плате это за пределами чипа.  
+// Альтернатива — фиксированный 0x1FF000 (закомментирован).  
+// #define AF_FLASH_OFF      0x1FF000u    
+#define AF_FLASH_OFF  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)   
 
 // Кооперативная парковка Core 1: idleOtherCore не работает, т.к. loop1  
 // не возвращается в Arduino-обёртку и не обрабатывает FIFO-handshake.  
@@ -54,7 +57,7 @@ static volatile bool g_parked   = false;
 
 static uint8_t s_save_done = 0;   // idx успешного save — OK из poll 
   
-// Вызывается с Core 1 из af_dsp_poll. Вся функция в RAM — во время  
+// Вызывается с Core 1 из core1_main (перед af_dsp_poll). Вся функция в RAM — во время    
 // erase/program flash недоступен, spin-цикл обязан быть не во flash.  
 void __not_in_flash_func(af_store_core1_park_poll)(void) {    
     if (!g_park_req) return;    
@@ -66,17 +69,6 @@ void __not_in_flash_func(af_store_core1_park_poll)(void) {
     g_parked = false;    
     restore_interrupts(irq);    
 }
-  
-// Core 0: запросить парковку, ждать ack с таймаутом.    
-static bool park_core1(void) {      
-    g_park_req = true;      
-    __dmb();      
-    uint32_t t0 = millis();      
-    while (!g_parked) {      
-        if (millis() - t0 > 500) { g_park_req = false; return false; }      
-    }      
-    return true;      
-}    
   
 // Экспорт для af_rec: припарковать Core 1 перед flash-операцией.    
 // Возвращает false по таймауту — Core 1 продолжает работать.    
@@ -107,9 +99,10 @@ struct af_bank_rec_t {
 // Образ всего сектора — читаем, патчим, пишем целиком.    
 static uint8_t s_sector_img[FLASH_SECTOR_SIZE];    
   
-// Сектор пустой/чужой — af_store_poll запишет дефолтные банки    
-// на первой итерации loop (не в init: там запись висла).    
-static bool s_need_defaults = false;    
+// Флаг отложенной записи дефолтов через af_store_poll (не в init:      
+// там запись висла). Сейчас af_store_init всегда ставит false —      
+// таблица банков берётся из кода, flash при старте не пишется.      
+static bool s_need_defaults = false;      
   
 static uint8_t crc8(const void* p, size_t n) {  
     const uint8_t* b = (const uint8_t*)p;  
@@ -122,10 +115,11 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
     return 4 + (idx - 1) * (int)sizeof(af_bank_rec_t);  
 }  
 
-// ---------------------------------------------------------------------------  
-// Запись сектора во flash. Выполняется внутри flash_safe_execute —  
-// Core 1 припаркован, код исполняется из RAM, flash недоступен для чтения.  
-// ---------------------------------------------------------------------------  
+// ---------------------------------------------------------------------------    
+// Запись сектора во flash. Вызывается напрямую под IRQ-off из    
+// af_store_save/af_store_write_all (flash_safe_execute не используется —    
+// rc=-4 при припаркованной Core 1, см. BUGS.MD баг 1).    
+// ---------------------------------------------------------------------------    
 // Вся функция в RAM: во время erase/program XIP недоступен,    
 // вызов из flash-кода = зависание Core 0.    
 static void __not_in_flash_func(do_flash_write)(void* param) {    
@@ -158,7 +152,7 @@ void af_store_init(void) {
   
     // Таблица банков — всегда из кода: перезаписываем записи      
     // дефолтами (RX-пресеты + TX-профили 1..7). Flash-ячейки      
-    // не трогаем; save N запишет текущее, когда запись починится.      
+    // не трогаем; save N запишет текущее в сектор по запросу.        
     {      
         af_bank_t def[AF_STORE_BANKS];      
         af_store_fill_defaults(def);      
@@ -178,10 +172,9 @@ void af_store_init(void) {
   
 bool af_store_read(uint8_t idx, af_bank_t* out) {    
     if (idx < 1 || idx > AF_STORE_BANKS) return false;    
-    // Читаем из s_sector_img — наш сектор AF_FLASH_OFF, заполнен    
-    // af_store_init напрямую из XIP. EEPROM.get читал бы чужой    
-    // сектор (PICO_FLASH_SIZE_BYTES - 4096) — на 2-МБ плате он    
-    // не совпадает с AF_FLASH_OFF, и банки всегда "empty".    
+    // Читаем из s_sector_img — образ сектора AF_FLASH_OFF, заполнен      
+    // af_store_init напрямую из XIP (EEPROM.get не используем —      
+    // читаем свой сектор явно, без зависимости от эмуляции).      
     af_bank_rec_t r;    
     memcpy(&r, &s_sector_img[rec_addr(idx)], sizeof(r));    
     if (r.crc == 0xFF) return false;                       // пустая    
@@ -267,17 +260,13 @@ bool af_store_save(uint8_t idx) {
     s_sector_img[3] = 0xFF;    
     memcpy(s_sector_img + rec_addr(idx), &r, sizeof(r));     
 
-    Serial.println("# save: park core1"); Serial.flush();    
-    if (!af_store_core1_park(5000)) {  
-        Serial.println("# save: park TIMEOUT — abort");  
-        return false;  
-    }  
-    Serial.println("# save: core1 parked"); Serial.flush();   
-  
-    Serial.println("# save: clk -> nominal"); Serial.flush();      
-    af_set_clk_nominal();               // 125 МГц на окно — обязательно,  
-                                        // на 250 МГц erase/program виснет  
-  
+    if (!af_store_core1_park(5000)) {    
+        Serial.println("# save: park TIMEOUT — abort");    
+        return false;    
+    }    
+    
+    af_set_clk_nominal();               // 125 МГц на окно — обязательно,    
+                                        // на 250 МГц erase/program виснет    
     af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off  
     uint32_t ints = save_and_disable_interrupts();      
     do_flash_write(NULL);               // RAM: erase+program, XIP off      
@@ -286,13 +275,13 @@ bool af_store_save(uint8_t idx) {
                                         // XIP-кэше -> вис  
     restore_interrupts(ints);      
     af_capture_resume();                // рестарт цепочки A->B->A  
-  
     af_set_clk();                       // возврат на 250 МГц — обязательно,  
                                         // иначе следующий save входит в окно  
                                         // на 125 МГц в нештатном состоянии  
-    af_store_core1_unpark();  
-    return true;      
-}  
+    af_store_core1_unpark();    
+    s_save_done = idx;                // af_store_poll напечатает "# OK save=N"    
+    return true;        
+}
   
 bool af_store_load(uint8_t idx) {  
     af_bank_t b;  
@@ -375,24 +364,18 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
         memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));  
     }  
 
-
-    Serial.println("# save: park core1"); Serial.flush();    
-    if (!af_store_core1_park(5000)) {  
-        Serial.println("# save: park TIMEOUT — abort");  
-        return;  
-    }  
-    Serial.println("# save: core1 parked"); Serial.flush(); 
-
-    Serial.println("# save: clk -> nominal"); Serial.flush();    
-    af_set_clk_nominal();    
-
+    if (!af_store_core1_park(5000)) {    
+        Serial.println("# banks: park TIMEOUT — abort");    
+        return;    
+    }    
+  
+    af_set_clk_nominal();      
     af_capture_pause();                 // DMA-окно: ADC+DMA стоп до XIP-off  
     uint32_t ints = save_and_disable_interrupts();      
     do_flash_write(NULL);               // RAM: erase+program, XIP off      
     flash_flush_cache();                // ДО restore_interrupts — см. save  
     restore_interrupts(ints);      
     af_capture_resume();                // рестарт цепочки A->B->A  
-  
     af_set_clk();    
     af_store_core1_unpark();  
     Serial.println("# OK banks written");      
@@ -512,7 +495,7 @@ static void af_store_write_defaults(void) {
     af_store_fill_defaults(preset);      
     Serial.println("# store: no banks — writing defaults");    
     Serial.flush();    
-    af_store_write_all(preset);   // reset Core1 + erase/program + restartCore1    
+    af_store_write_all(preset);   // park + nominal + DMA-окно + erase/program    
 }    
   
 // Core 0, из loop(): отложенная запись дефолтных банков при пустом секторе.    
@@ -534,7 +517,7 @@ void af_store_poll(void) {
 //   mode 0: чистое окно (IRQ-off -> erase -> program -> IRQ-on)  
 //   mode 1: + парковка Core 1 (af_store_core1_park/unpark)  
 //   mode 2: + даунклок (af_set_clk_nominal -> окно -> af_set_clk)  
-//   mode 3: парковка + даунклок (полная схема, как af_store_save)  
+//   mode 3: парковка + даунклок + DMA-окно (полная схема, как af_store_save)    
 // ============================================================================  
   
 #define AF_TEST_FLASH_OFF   0x100000u  
@@ -577,9 +560,9 @@ static bool af_store_test_iter(uint8_t mode, uint32_t iter) {
     af_capture_pause();               // DMA-окно: ADC+DMA стоп до XIP-off  
     uint32_t ints = save_and_disable_interrupts();    
     do_test_write(NULL);    
-    flash_flush_cache();              // ДО restore_interrupts: иначе pending  
-                                      // DMA IRQ прыгнет в ISR на протухшем  
-                                      // XIP-кэше -> вис (гипотеза проверяется)  
+    flash_flush_cache();              // ДО restore_interrupts: иначе pending    
+                                      // DMA IRQ прыгнет в ISR на протухшем    
+                                      // XIP-кэше -> вис    
     restore_interrupts(ints);    
     af_capture_resume();              // рестарт цепочки A->B->A  
   

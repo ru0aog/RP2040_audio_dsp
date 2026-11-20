@@ -1137,8 +1137,47 @@ restore_interrupts + flash_flush_cache. Одна flash-операция за о�
 af_capture_pause()        <- DMA-окно: ADC off, каналы abort, IRQ off  
 af_store_core1_park()     <- Core 1 в RAM-спине с IRQ off  
 af_set_clk_nominal()      <- 125 МГц на окно  
-IRQ-off → erase/program → flash_flush_cache → IRQ-on  
+save_and_disable_interrupts()  
+do_flash_write()          <- RAM: erase+program, XIP off  
+flash_flush_cache()       <- ДО restore_interrupts  
+restore_interrupts()  
 af_set_clk()              <- возврат 250 МГц  
-af_store_core1_unpark()  
-af_capture_resume()       <- рестарт цепочки A->B->A  
+af_capture_resume()       <- рестарт цепочки A->B  
+af_store_core1_unpark()
+
+### Баг 4 — зависание при записи во flash на разгоне 250 МГц (ЗАКРЫТ)  
+  
+Симптом: `save`/`banks clr` висли недетерминированно — чаще на второй  
+записи подряд. Порт отваливался, помогал только ребут.  
+  
+Расследование (стенд `ftest`, изоляция факторов):  
+- `ftest 0` (чистое окно IRQ-off → erase/program → IRQ-on на 250 МГц) — вис.  
+- `ftest 1` (+парковка Core 1) — вис.  
+- `ftest 2` (+даунклок 125 МГц) — вис при работающем capture DMA.  
+- `ftest 3` (парковка + даунклок + пауза capture DMA) — 100/100 стабильно.  
+  
+Причина — ТРИ обязательных условия одновременно, каждое по отдельности  
+не спасает:  
+1. Даунклок до 125 МГц на окно (af_set_clk_nominal): bootrom-код  
+   erase/program нестабилен на 250 МГц.  
+2. Парковка Core 1 в RAM-спине с IRQ off (af_store_core1_park):  
+   Core 1 не должна трогать XIP во время окна.  
+3. Пауза capture DMA (af_capture_pause/resume): ADC+DMA_IRQ_0,  
+   работающие во время окна, ломают запись.  
+  
+Дополнительно:  
+- Порядок flash_flush_cache() ДО restore_interrupts() — иначе pending  
+  IRQ прыгает в ISR на протухшем XIP-кэше.  
+- af_set_clk() после окна обязателен — иначе следующая запись входит  
+  в окно на 125 МГц в нештатном состоянии (вторая запись висла именно  
+  поэтому).  
+  
+Финальная схема (af_store_save, af_store_write_all):  
+    af_capture_pause() → af_store_core1_park() → af_set_clk_nominal()  
+    → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on  
+    → af_set_clk() → af_capture_resume() → af_store_core1_unpark()  
+  
+Регрессионный тест: команда `ftest [mode] [N]` — N циклов  
+erase/program/verify в тестовый сектор 0x100000. mode: бит0=парковка,  
+бит1=даунклок. `ftest 3 100` должен проходить 100/100.  
 
