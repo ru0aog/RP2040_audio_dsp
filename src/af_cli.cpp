@@ -869,38 +869,42 @@ bool af_cli_apply_set_txt(const char* txt, size_t len) {
             }      
         }      
       
-        if (best) {      
-            const char* v = s + best_len;      
-            for (uint8_t col = 0; col <= AF_STORE_BANKS; col++) {      
-                while (v < eol && (*v == ' ' || *v == '\t')) v++;      
-                if (v >= eol || *v == '\r') break;      
-                char tok[16]; uint8_t tl = 0;      
-                while (v < eol && *v != ' ' && *v != '\t' && *v != '\r') {      
-                    if (tl < sizeof(tok) - 1) tok[tl++] = *v;      
-                    v++;      
-                }      
-                tok[tl] = '\0';      
-      
-                if (col == 0) continue;              // cur — только чтение      
-                if (!bv[col - 1]) continue;          // банк пуст — не трогаем      
-                if (strcmp(tok, "-----") == 0) continue;      
-      
-                int32_t val;      
-                if (best->type == PT_ONOFF) {      
-                    if      (strncmp(tok, "on", 2) == 0)  val = 1;      
-                    else if (strncmp(tok, "off", 3) == 0) val = 0;      
-                    else continue;      
-                } else if (best->type == PT_GAIN) {      
-                    val = (int32_t)(strtof(tok, NULL) * 256.0f + 0.5f);      
-                } else if (best->type == PT_X100) {      
-                    val = (int32_t)(strtof(tok, NULL) * 100.0f + 0.5f);      
-                } else {      
-                    val = (int32_t)strtol(tok, NULL, 10);      
-                }      
-                bank_field_set(&bk[col - 1], best, val);      
-                applied++;      
-            }      
-        }      
+        if (best) {        
+            const char* v = s + best_len;        
+            for (uint8_t col = 0; col <= AF_STORE_BANKS; col++) {        
+                while (v < eol && (*v == ' ' || *v == '\t')) v++;        
+                if (v >= eol || *v == '\r') break;        
+                char tok[16]; uint8_t tl = 0;        
+                while (v < eol && *v != ' ' && *v != '\t' && *v != '\r') {        
+                    if (tl < sizeof(tok) - 1) tok[tl++] = *v;        
+                    v++;        
+                }        
+                tok[tl] = '\0';        
+        
+                if (strcmp(tok, "-----") == 0) continue;        
+                if (col > 0 && !bv[col - 1]) continue;   // банк пуст — не трогаем        
+        
+                int32_t val;        
+                if (best->type == PT_ONOFF) {        
+                    if      (strncmp(tok, "on", 2) == 0)  val = 1;        
+                    else if (strncmp(tok, "off", 3) == 0) val = 0;        
+                    else continue;        
+                } else if (best->type == PT_GAIN) {        
+                    val = (int32_t)(strtof(tok, NULL) * 256.0f + 0.5f);        
+                } else if (best->type == PT_X100) {        
+                    val = (int32_t)(strtof(tok, NULL) * 100.0f + 0.5f);        
+                } else {        
+                    val = (int32_t)strtol(tok, NULL, 10);        
+                }        
+        
+                if (col == 0) {        
+                    best->set(val);          // cur — в живой DSP, как CLI set        
+                } else {        
+                    bank_field_set(&bk[col - 1], best, val);        
+                }        
+                applied++;        
+            }        
+        }        
         p = (eol < end) ? eol + 1 : end;      
     }      
       
