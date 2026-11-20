@@ -18,6 +18,7 @@
 #include "af_config.h"  
 #include "af_fm.h"
 #include "af_cli.h"
+#include "af_usb.h"          // af_usb_reenumerate — перемонтирование диска
  
 // Рендер таблицы banks в буфер (af_cli.cpp — там AF_PARAMS/bank_field).    
 // Возвращает длину текста без NUL.    
@@ -157,16 +158,22 @@ void af_fm_sync(void) {
 void af_fm_poll(void) {    
     // Дебаунс: хост пишет файл пачкой секторов — ждём 800 мс тишины,    
     // потом парсим SET.TXT целиком и пишем банки во flash.    
-    if (fm_dirty && (int32_t)(millis() - fm_dirty_ms) >= 800) {    
-        fm_dirty = false;    
-        const char* txt = (const char*)&fm_disk[AF_FM_SET_LBA][0];      
-        bool applied = af_cli_apply_set_txt(txt,      
-                          AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE);      
-        Serial.printf("# fm: SET.TXT %s\n",      
-                      applied ? "parsed -> banks written" : "parse failed");      
-        fm_stale = true;               // перерендерить из записанных банков       
-    }    
-    if (fm_stale) af_fm_sync();    
+    if (fm_dirty && (int32_t)(millis() - fm_dirty_ms) >= 800) {      
+        fm_dirty = false;      
+        const char* txt = (const char*)&fm_disk[AF_FM_SET_LBA][0];        
+        bool applied = af_cli_apply_set_txt(txt,        
+                          AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE);        
+        Serial.printf("# fm: SET.TXT %s\n",        
+                      applied ? "parsed -> banks written" : "parse failed");        
+        if (applied) {      
+            af_fm_sync();              // перерендерить из записанных банков      
+            af_usb_reenumerate();      // хост перечитает образ — иначе      
+                                       // его кеш перезапишет наши правки      
+        } else {      
+            fm_stale = true;           // парсинг не удался — вернуть образ      
+        }      
+    }      
+    if (fm_stale) af_fm_sync();      
 }    
   
 bool     af_fm_dirty(void)    { return fm_dirty; }  
