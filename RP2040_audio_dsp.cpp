@@ -246,8 +246,8 @@ void setup1() {
     // обращаться к flash — ни кодом, ни данными. loop1() Arduino-ядра    
     // лежит во flash, поэтому крутим свой цикл из RAM-функции.    
     
-    core1_idle_spin();   // RAM-спин с park_poll — Core 1 жива, паркуется, DSP нет
-    //core1_main();   // не возвращается  
+    //core1_idle_spin();   // FLASH-TEST стенд: RAM-спин без DSP
+    core1_main();   // не возвращается; внутри: park_poll + af_dsp_poll
 }  
 
 void loop1() {
