@@ -1,10 +1,12 @@
 // src/af_fm.cpp  
 //  
-// FAT12-диск 16 КБ в RAM. Раскладка:  
-//   LBA 0    boot sector  
-//   LBA 1    FAT (1 сектор, кластер = 1 сектор)  
-//   LBA 2    root dir (16 записей, используется одна — SET.TXT)  
-//   LBA 3..  data: SET.TXT, кластеры 2..N подряд  
+// FAT12-диск ~1.6 МБ, RAM-образ ~14 КБ (метаданные + SET.TXT). Раскладка:    
+//   LBA 0      boot sector    
+//   LBA 1..10  FAT (10 секторов, кластер = 1 сектор)    
+//   LBA 11     root dir (SET.TXT + REC1..REC7.WAV)    
+//   LBA 12..27 data: SET.TXT (RAM)    
+//   LBA 28..   REC1..REC7.WAV — виртуальные, синтез в af_fm_msc_read    
+//              (WAV 16000 Гц mono, ресемплинг из слота 7732 Гц)    
 //  
 // SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.  
 // Запись с ПК копируется в образ и ставит fm_dirty (парсер — этап 2).  
@@ -37,20 +39,14 @@ static void fm_build_boot(void) {
     memcpy(&b[3], "MSDOS5.0", 8);  
     b[11] = 0x00; b[12] = 0x02;          // 512 Б/сектор  
     b[13] = 1;                           // 1 сектор/кластер  
-    b[14] = 1;  b[15] = 0;               // reserved  
-    b[16] = 1;                           // FAT count  
-    b[17] = 16; b[18] = 0;               // root entries = 16 (1 сектор)  
     b[14] = 1;  b[15] = 0;               // reserved    
     b[16] = 1;                           // FAT count    
     b[17] = 16; b[18] = 0;               // root entries = 16 (1 сектор)    
-    const uint16_t ts = 0;               // >65535 секторов? нет — но >32МБ нет    
-    // total sectors = ~3199 < 65536 — в b[19]    
-    const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;    
-    memcpy(&b[19], &ts16, 2);    
-    b[21] = 0xF8;                        // media    
-    const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;    
+    const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;   // ~3199 < 65536    
+    memcpy(&b[19], &ts16, 2);      
+    b[21] = 0xF8;                        // media      
+    const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;      
     memcpy(&b[22], &fat_sz, 2);          // sectors/FAT = 10    
-    b[22] = 1;  b[23] = 0;               // sectors/FAT  
     b[24] = 1;  b[25] = 0;               // spt  
     b[26] = 1;  b[27] = 0;               // heads  
     b[36] = 0x80; b[38] = 0x29;  
@@ -105,12 +101,12 @@ static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,
     uint8_t* d = fm_disk[AF_FM_DIR_LBA];    
     memset(d, 0, AF_FM_SECTOR_SIZE);    
     dir_entry(&d[0], "SET     TXT", set_clusters ? 2 : 0, set_size);    
-    static const char names[7][11] = {    
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV",    
-        "REC5    WAV", "REC6    WAV", "REC7    WAV" };    
+    static const char wav_names[AF_FM_WAV_FILES][12] = {  
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV",  
+        "REC5    WAV", "REC6    WAV", "REC7    WAV" };   
     for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
         uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + i * AF_FM_WAV_CLUSTERS);    
-        dir_entry(&d[32 * (i + 1)], names[i], wav_sizes[i] ? first : 0, wav_sizes[i]);    
+        dir_entry(&d[32 * (i + 1)], wav_names[i], wav_sizes[i] ? first : 0, wav_sizes[i]);  
     }    
 }    
   
@@ -189,12 +185,12 @@ static void wav_sector(uint8_t bank, uint32_t off_in_file, uint8_t* buffer) {
     uint32_t data_bytes = out_samp * 2;    
     const int16_t* pcm = af_rec_slot_data(bank);    
     
-    for (uint32_t i = 0; i < AF_FM_SECTOR_SIZE; i++) {    
-        uint32_t p = off_in_file + i;    
-        if (p < 44) {    
-            uint8_t h[44];    
-            wav_header(h, data_bytes);    
-            buffer[i] = h[p];    
+    uint8_t h[44];      
+    wav_header(h, data_bytes);          // один раз на сектор    
+    for (uint32_t i = 0; i < AF_FM_SECTOR_SIZE; i++) {      
+        uint32_t p = off_in_file + i;      
+        if (p < 44) {      
+            buffer[i] = h[p];      
         } else {    
             uint32_t k = (p - 44) / 2;              // индекс выходного отсчёта    
             if (k >= out_samp || pcm == nullptr) { buffer[i] = 0; continue; }    
@@ -230,24 +226,16 @@ int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {
     return (int32_t)AF_FM_SECTOR_SIZE;    
 }    
   
-int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {  
-    if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;  
-    if (bufsize < AF_FM_SECTOR_SIZE) return -1;  
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);  
-    fm_dirty = true;                 // этап 2: дебаунс -> парсер -> flash  
-    return (int32_t)AF_FM_SECTOR_SIZE;  
+void af_fm_msc_flush(void) {    
+    // этап 1: пусто. Этап 2: здесь дебаунс-метка времени последней записи.    
 }  
   
-void af_fm_msc_flush(void) {  
-    // этап 1: пусто. Этап 2: здесь дебаунс-метка времени последней записи.  
-}
-
-int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {    
-    if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;    
-    if (bufsize < AF_FM_SECTOR_SIZE) return -1;    
-    if (lba >= AF_FM_WAV_LBA(0)) return -1;        // WAV — read-only    
-    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only    
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);    
-    fm_dirty = true;                 // этап 2: дебаунс -> парсер -> flash    
-    return (int32_t)AF_FM_SECTOR_SIZE;    
-}    
+int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {      
+    if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;      
+    if (bufsize < AF_FM_SECTOR_SIZE) return -1;      
+    if (lba >= AF_FM_WAV_LBA(0)) return -1;        // WAV — read-only      
+    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only      
+    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);      
+    fm_dirty = true;                 // этап 2: дебаунс -> парсер -> flash      
+    return (int32_t)AF_FM_SECTOR_SIZE;      
+}  
