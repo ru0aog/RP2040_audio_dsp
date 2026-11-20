@@ -156,42 +156,36 @@ static void core1_main(void);   // рабочий цикл Core 1, RAM-only
 
 void setup() {
 
-    af_fm_init();              // образ диска ДО af_usb_init — первые READ'ы  
-                               // хоста при монтировании должны получить FAT12  
-    af_usb_init();             // монтируем диск, потом звук  
-
-    Serial.begin(115200);
-    af_led_init();             // heartbeat (WS2812 на GP16 у Zero)
-    af_led_set(10, 0, 0);
-
-    // Ждём подключения COM-порта (USB CDC), максимум 3 с.  
-    // Как в радиомодеме: без USB-хоста ожидание не блокирует запуск.  
-    while (!Serial && millis() < 3000) delay(1);  
-
-    af_set_clk();              // разгон
-
-    watchdog_enable(3000, true);  // сторожевой 3 с
-    
-    Serial.printf("# clk_sys=%lu Hz | FLASH=%lu kHz (BAUDR=%u)\n",  
-                  (unsigned long)clock_get_hz(clk_sys),  
-                  (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000),  
-                  (unsigned)ssi_hw->baudr);  
-
-    af_dsp_init();
-    af_cli_init();
-    Serial.println("# before store_init"); Serial.flush();
-    af_store_init();
-    Serial.println("# after store_init");  Serial.flush();
-    af_rec_init();
-    af_led_set(0, 0, 10);
-    af_gpio_ctl_init();
+    // Образ диска и SET.TXT собираются ДО энумерации — как в радиомодеме:  
+    // хост при монтировании сразу видит файл с реальным размером,  
+    // пере-энумерация не нужна.  
+    af_fm_init();              // каркас FAT12  
+    af_dsp_init();             // cur = дефолты (нужен af_store_load)  
+    af_store_init();           // банки из flash  
+    af_gpio_ctl_init();        // пины -> af_store_load -> cur финальный  
     af_fm_sync();              // SET.TXT = актуальная таблица banks  
-                               // (после store_init + gpio_ctl: cur финальный)  
+    af_usb_init();             // единственная энумерация: MSC + UAC + CDC  
   
-    // Хост энумерировался в af_usb_init и закешировал dir с size=0.  
-    // Пере-энумерация — перечитает FAT/каталог с реальным размером.  
-    af_usb_reenumerate();   // хост перечитает SET.TXT с реальным размером  
+    Serial.begin(115200);  
+    af_led_init();             // heartbeat (WS2812 на GP16 у Zero)  
+    af_led_set(10, 0, 0);  
   
+    // Ждём подключения COM-порта (USB CDC), максимум 3 с.    
+    // Как в радиомодеме: без USB-хоста ожидание не блокирует запуск.    
+    while (!Serial && millis() < 3000) delay(1);    
+  
+    af_set_clk();              // разгон  
+  
+    watchdog_enable(3000, true);  // сторожевой 3 с  
+      
+    Serial.printf("# clk_sys=%lu Hz | FLASH=%lu kHz (BAUDR=%u)\n",    
+                  (unsigned long)clock_get_hz(clk_sys),    
+                  (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000),    
+                  (unsigned)ssi_hw->baudr);    
+  
+    af_cli_init();  
+    af_rec_init();  
+    af_led_set(0, 0, 10);  
     af_capture_start();  
     af_pwm_init();
     af_voice_init();
