@@ -44,8 +44,13 @@ static uint32_t t_next_poll = 0;
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7    
 static bool     sw_ptt_active = false;  // GP8 — выход PTT (playback магнитофона)    
   
-// Текущий код банка с GP2..GP4 (0 = ручной режим). Для cli_stats.  
-uint8_t af_gpio_bank_code(void) { return bank_code; }  
+// Текущий код банка с GP2..GP4 (0 = ручной режим). Для cli_stats.    
+uint8_t af_gpio_bank_code(void) { return bank_code; }    
+  
+// Установить код активного банка извне (CLI 'load N') — чтобы stats    
+// 'bank=' отражал последний применённый банк, а не только пины.    
+// Пины при следующем изменении перезапишут через apply_bank.    
+void af_gpio_set_bank_code(uint8_t code) { bank_code = code; }    
 
 // ---------------------------------------------------------------------------  
 static void apply_nr(bool grounded) {      

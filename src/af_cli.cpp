@@ -932,22 +932,24 @@ static void cli_exec(char* line) {
         char* v = strtok(NULL, " \t");  
         if (v == NULL) { Serial.println("# ERR: load <0..7>"); return; }  
         int idx = (int)strtoul(v, NULL, 10);  
-        if (idx == 0) {                          // выход в ручной режим  
-            af_led_set_bank(0);  
-            Serial.println("# OK manual mode (bank 0)");  
-            return;  
-        }  
+        if (idx == 0) {                          // выход в ручной режим    
+            af_led_set_bank(0);    
+            af_gpio_set_bank_code(0);            // stats 'bank=' = manual  
+            Serial.println("# OK manual mode (bank 0)");    
+            return;    
+        }    
         if (idx < 1 || idx > AF_STORE_BANKS) {  
             Serial.println("# ERR: load <0..7>");  
             return;  
         } 
-        if (af_store_load(idx)) {    
-            af_led_set_bank((uint8_t)idx);   // цвет вспышки = загруженный банк    
-            af_voice_play((af_voice_id_t)(VOICE_PROF_1 + idx - 1));  // "профиль N"  
-            Serial.printf("# OK loaded bank %d\n", idx);  
-        } else {    
-            Serial.printf("# bank %d: empty — ignored\n", idx);    
-        }    
+        if (af_store_load(idx)) {      
+            af_led_set_bank((uint8_t)idx);   // цвет вспышки = загруженный банк      
+            af_gpio_set_bank_code((uint8_t)idx);  // stats 'bank=' = активный банк  
+            af_voice_play((af_voice_id_t)(VOICE_PROF_1 + idx - 1));  // "профиль N"    
+            Serial.printf("# OK loaded bank %d\n", idx);    
+        } else {      
+            Serial.printf("# bank %d: empty — ignored\n", idx);      
+        }      
     }  
     else if (strcmp(cmd, "banks") == 0) {  
         char* sub = strtok(NULL, " \t");  

@@ -21,3 +21,6 @@ uint8_t af_gpio_bank_code(void);
 // Управление PTT/TX для CLI (play voice_14 в TX+PTT, аналог GP10).    
 bool af_gpio_ptt_tx_on(void);    
 void af_gpio_ptt_tx_off(void);    
+
+uint8_t af_gpio_bank_code(void);              // текущий код банка (0 = manual)  
+void    af_gpio_set_bank_code(uint8_t code);  // установить из CLI 'load N'  
