@@ -33,7 +33,7 @@
 #define AF_FM_WAV_FILES     7u    
 #define AF_FM_WAV_LBA(i)    (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)    
     
-#define AF_FM_SECTOR_COUNT  (AF_FM_WAV_LBA(AF_FM_WAV_FILES))   // ~3199    
+//#define AF_FM_SECTOR_COUNT  (AF_FM_WAV_LBA(AF_FM_WAV_FILES))   // ~3199    
 #define AF_FM_RAM_SECTORS   (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) // 28 — только они в RAM    
   
 void    af_fm_init(void);              // образ диска, пустой SET.TXT  
@@ -53,5 +53,5 @@ void    af_fm_msc_flush(void);
 #define AF_FM_WAV_HDR_MAX        512u    // заголовок WAV в пределах 1 сектора    
 
 // af_fm.h  
-#define AF_FM_FREE_SECTORS   400u    // ~200 КБ свободного пула для проверки места  
+#define AF_FM_FREE_SECTORS   0u    // ~200 КБ свободного пула для проверки места  
 #define AF_FM_SECTOR_COUNT   (AF_FM_WAV_LBA(AF_FM_WAV_FILES) + AF_FM_FREE_SECTORS)  
