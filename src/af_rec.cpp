@@ -227,17 +227,21 @@ bool af_rec_erase_all(void) {
 static void rec_fill_empty_slots(void) {  
     uint32_t n = clip_voice_14_len / AF_REC_DECIM;      // ~42223 отсч.  
     if (n > AF_REC_RAM_SAMP) n = AF_REC_RAM_SAMP;  
-    for (uint8_t b = 1; b <= AF_STORE_BANKS; b++) {  
-        if (rec_slot_len(b) != 0) continue;             // слот занят  
-        // децимация ×2 в ram_buf  
-        for (uint32_t i = 0; i < n; i++)  
-            ram_buf[i] = clip_voice_14[i * AF_REC_DECIM];  
-        Serial.printf("# rec: slot %u empty -> fill voice14 (%lu samp)\n",  
-                      (unsigned)b, (unsigned long)n);  
-        rec_slot_write(b, n);                           // flash-окно внутри  
+    bool filled = false;  
+    for (uint8_t b = 1; b <= AF_STORE_BANKS; b++) {    
+        if (rec_slot_len(b) != 0) continue;             // слот занят    
+        // децимация ×2 в ram_buf    
+        for (uint32_t i = 0; i < n; i++)    
+            ram_buf[i] = clip_voice_14[i * AF_REC_DECIM];    
+        Serial.printf("# rec: slot %u empty -> fill voice14 (%lu samp)\n",    
+                      (unsigned)b, (unsigned long)n);    
+        rec_slot_write(b, n);                           // flash-окно внутри    
+        filled = true;  
+    }    
+    if (filled) {  
+        af_fm_request_sync();    
+        af_usb_reenumerate();   // хост перечитает каталог — файлы появились  
     }  
-    af_fm_request_sync();  
-    af_usb_reenumerate();        // хост перечитает каталог — RECn.WAV с размерами  
 }  
 
 void af_rec_init(void) {
