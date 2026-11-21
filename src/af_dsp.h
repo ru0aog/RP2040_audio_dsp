@@ -32,15 +32,19 @@ bool     af_dsp_notch_on(void);
 bool     af_dsp_set_nr(bool on);  
 bool     af_dsp_nr_on(void);
 
+// Dynamic presence EQ RX: SNR-адаптивный подъём ~2.3 кГц после АРУ.  
 void    af_dsp_set_rxpres(bool on);  
 bool    af_dsp_rxpres_on(void);  
-void    af_dsp_set_rxpresmax(int32_t db_x10);  
-void    af_dsp_set_rxpresf(uint32_t hz);  
-void    af_dsp_set_rxpresq(uint32_t q_x100);  
-int32_t af_dsp_rxpres_k(void);  
-int32_t af_dsp_rxpres_env(void);  
-int32_t af_dsp_rxpres_nf(void);  
-  
+void    af_dsp_set_rxpresmax(int32_t db_x10);  // потолок подъёма, дБ x10 (0..60)  
+void    af_dsp_set_rxpresf(uint32_t hz);       // центр пика, 1000..4000 Гц  
+void    af_dsp_set_rxpresq(uint32_t q_x100);   // добротность x100 (30..300)  
+int32_t af_dsp_rxpresmax(void);                // дБ x10 (не Q15!)  
+uint32_t af_dsp_rxpresf(void);  
+uint32_t af_dsp_rxpresq(void);  
+int32_t af_dsp_rxpres_k(void);                 // сглаженный k_dyn, Q15 (stats)  
+int32_t af_dsp_rxpres_env(void);               // огибающая ВЧ-детектора (stats)  
+int32_t af_dsp_rxpres_nf(void);                // шумовой пол (stats)  
+
 // Телеграфный фильтр (3 биквада BPF + шум, после FIR).  
 // При включении подтягивает полосу FIR к f0±250 Гц, при выключении —  
 // восстанавливает сохранённую.  

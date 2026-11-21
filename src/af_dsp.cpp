@@ -242,6 +242,7 @@ static volatile bool     rx_pres_on      = (AF_RX_PRES_ON_DEFAULT != 0);
 static volatile uint32_t rx_pres_freq_hz = AF_RX_PRES_FREQ_HZ;  
 static volatile uint32_t rx_pres_q_x100  = AF_RX_PRES_Q_X100;  
 static volatile int32_t  rx_pres_max_q15 = AF_RX_PRES_MAX_Q15;  
+static int32_t           rx_presmax_db_x10 = 15;   // дБ x10 — для stats и банка  
   
 // HP-детектор ~1.5 кГц: отсекает гласные/F1, огибающая реагирует на согласные.  
 static int32_t rxp_hp_x1 = 0, rxp_hp_x2 = 0, rxp_hp_y1 = 0, rxp_hp_y2 = 0;  
@@ -855,6 +856,7 @@ bool     af_dsp_rxpres_on(void)  { return rx_pres_on; }
 void     af_dsp_set_rxpresmax(int32_t db_x10) {  
     if (db_x10 < 0)  db_x10 = 0;  
     if (db_x10 > 60) db_x10 = 60;         // потолок +6 дБ  
+    rx_presmax_db_x10 = db_x10;           // для геттера/stats/банка  
     // дБx10 -> Q15 приращения: gain_q15 = 32768*(10^(dB/20) - 1)  
     rx_pres_max_q15 = (int32_t)lrintf((powf(10.0f, db_x10 / 200.0f) - 1.0f) * 32768.0f);  
 }  
@@ -871,6 +873,9 @@ void     af_dsp_set_rxpresq(uint32_t q_x100) {
 int32_t  af_dsp_rxpres_k(void)    { return rxp_k_q15; }        // для stats  
 int32_t  af_dsp_rxpres_env(void)  { return (int32_t)(rxp_env_q16 >> 16); }  
 int32_t  af_dsp_rxpres_nf(void)   { return (int32_t)(rxp_nf_q16 >> 16); }  
+int32_t  af_dsp_rxpresmax(void)   { return rx_presmax_db_x10; }  // дБ x10, не Q15  
+uint32_t af_dsp_rxpresf(void)     { return rx_pres_freq_hz; }  
+uint32_t af_dsp_rxpresq(void)     { return rx_pres_q_x100; }  
   
 // Возвращает false, если команда отклонена (NT on — приоритет NT;  
 // CW on — NR в узкой полосе бесполезен и перегружает Core 1).    

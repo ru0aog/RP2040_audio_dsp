@@ -177,7 +177,11 @@ static void cli_stats(void) {
                   (long)af_dsp_rxpres_env(),  
                   (long)af_dsp_rxpres_nf(),  
                   (long)af_dsp_rxpres_k());  
-    
+
+    int32_t  af_dsp_rxpresmax(void) { return rx_presmax_db_x10; }  
+    uint32_t af_dsp_rxpresf(void)   { return rx_pres_freq_hz; }  
+    uint32_t af_dsp_rxpresq(void)   { return rx_pres_q_x100; }  
+
     // ---- TX: параметры передающего тракта (при tx=off неактивен) ----      
     Serial.printf("# === TX (%s) ===\n", tx ? "active" : "inactive");      
     Serial.printf("#   band    = %lu..%lu Hz   mode=%s\n",      
