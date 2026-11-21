@@ -144,20 +144,21 @@ static void snr_frame(void) {
     // OLA: окно синтеза + компенсация hann^2 (~1.5) -> *2/3.  
     // Первая половина кадра складывается с хвостом предыдущего -> на выход;  
     // вторая половина уходит в snr_tail для следующего кадра.  
-    // <<8 — компенсация /256 обратного FFT. Итог тракта:    
-    // x -> <<8 -> FFT/256 -> gain -> IFFT/256 -> <<8 -> OLA*(2/3) ~= x    
-    for (uint16_t i = 0; i < SNR_HOP; i++) {    
-        int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i]) >> SNR_Q) << 8;      
-        y = snr_tail[i] + (int32_t)(((int64_t)y * 21846) >> SNR_Q);      
-        if (y > 32767) y = 32767; else if (y < -32768) y = -32768;    
-        snr_ola[i] = (int16_t)y;    
-    }    
-    for (uint16_t i = 0; i < SNR_HOP; i++) {    
-        int32_t y = (int32_t)(((int64_t)snr_re[SNR_HOP + i] * snr_win[SNR_HOP + i]) >> SNR_Q) << 8;      
-        y = (int32_t)(((int64_t)y * 21846) >> SNR_Q);      
-        if (y > 32767) y = 32767; else if (y < -32768) y = -32768;    
-        snr_tail[i] = (int16_t)y;    
-    }    
+    // Без дополнительного сдвига: /256 обратного FFT — это и есть 1/N,      
+    // на выходе уже исходный масштаб x. Итог тракта:      
+    // x -> <<8 -> FFT/256 (=DFT(x)) -> gain -> IFFT/256 (=x) -> OLA*(2/3) ~= x      
+    for (uint16_t i = 0; i < SNR_HOP; i++) {      
+        int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i]) >> SNR_Q);        
+        y = snr_tail[i] + (int32_t)(((int64_t)y * 21846) >> SNR_Q);        
+        if (y > 32767) y = 32767; else if (y < -32768) y = -32768;      
+        snr_ola[i] = (int16_t)y;      
+    }      
+    for (uint16_t i = 0; i < SNR_HOP; i++) {      
+        int32_t y = (int32_t)(((int64_t)snr_re[SNR_HOP + i] * snr_win[SNR_HOP + i]) >> SNR_Q);        
+        y = (int32_t)(((int64_t)y * 21846) >> SNR_Q);        
+        if (y > 32767) y = 32767; else if (y < -32768) y = -32768;      
+        snr_tail[i] = (int16_t)y;      
+    }      
     if (snr_warmup > 0) snr_warmup--;  
     snr_out_avail = SNR_HOP;    
     snr_out_pos   = 0;    
