@@ -45,7 +45,28 @@ static int32_t snr_smsh   = 2;          // сдвиг сглаживания gai
 static uint8_t snr_warmup = 0;          // кадры прогрева: gain=1, только сбор шума  
 static int32_t snr_makeup = 32768;      // Q15 makeup (из nrmakeup), ×1 по умолчанию  
   
-#define SNR_GMIN  3277                  // gain floor 0.1 Q15 — против musical noise  
+#define SNR_GMIN  3277                  // gain floor 0.1 Q15 — против musical noise    
+  
+// ---- Слайсер: кадр считается квантами по тайм-бюджету (схема rsid.cpp) ----    
+#define SNR_SLICE_US  60                // тайм-квант на один вызов af_snr_push, мкс    
+#define SNR_CHUNK     32                // бабочек/бинов за итерацию внутри кванта    
+  
+typedef enum {    
+    SNR_SM_IDLE = 0,    
+    SNR_SM_LOAD,                        // окно + <<8 -> re/im    
+    SNR_SM_FFT_FWD,                     // прямой FFT по стадиям    
+    SNR_SM_BINS,                        // mag -> noise -> gain -> apply    
+    SNR_SM_FFT_INV,                     // IFFT по стадиям    
+    SNR_SM_OLA                          // окно синтеза + overlap-add    
+} snr_sm_t;    
+  
+static snr_sm_t  snr_sm       = SNR_SM_IDLE;    
+static uint16_t  snr_sm_i     = 0;      // универсальный индекс внутри стадии    
+static uint16_t  snr_sm_len   = 0;      // текущий len FFT-стадии    
+static uint16_t  snr_sm_base  = 0;      // текущий i (база блока) внутри стадии    
+static uint16_t  snr_sm_j     = 0;      // текущий j внутри блока    
+static bool      snr_sm_inv   = false;  // направление FFT    
+static uint32_t  snr_overrun  = 0;      // диагностика: кадр не успел за hop    
 
 // ---- Отладка: бин SNR_DBG_BIN (~1.2 кГц, внутри полосы) ----    
 #define SNR_DBG_BIN 20    
@@ -64,112 +85,176 @@ static uint16_t snr_isqrt(uint32_t v) {
     return (uint16_t)r;    
 }    
   
-// ---- FFT radix-2 in-place, re/im int16, scaling >>1 на стадию ----  
-static void snr_fft(int32_t *re, int32_t *im, bool inverse) {    
-    for (uint16_t i = 0; i < SNR_N; i++) {          // bit-reverse    
+// ---- FFT radix-2 in-place, re/im int32, scaling >>1 на стадию ----    
+// Пошаговый движок: snr_fft_begin() + snr_fft_step() — одна бабочка за вызов.    
+// Состояние (len/base/j) — в snr_sm_*, чтобы стадия прерывалась по кванту.    
+  
+static void snr_fft_begin(bool inverse) {    
+    snr_sm_inv = inverse;    
+    snr_sm_i   = 0;                     // фаза 0: bit-reverse    
+    snr_sm_len = 2;    
+    snr_sm_base = 0;    
+    snr_sm_j    = 0;    
+}    
+  
+// Возвращает true, когда FFT закончен.    
+static bool snr_fft_step(void) {    
+    if (snr_sm_len == 0) return true;   // защита    
+  
+    // Фаза bit-reverse: snr_sm_i < SNR_N и snr_sm_len == 2 && base==0 && j==0    
+    // — различаем по snr_sm_base == 0xFFFF-маркеру не нужен:    
+    // используем snr_sm_j == 0xFFFF как признак "в стадиях".    
+    if (snr_sm_j != 0xFFFF) {           // bit-reverse ещё идёт    
+        uint16_t i = snr_sm_i;    
         uint16_t j = snr_rev[i];    
         if (j > i) {    
             int32_t t;    
-            t = re[i]; re[i] = re[j]; re[j] = t;    
-            t = im[i]; im[i] = im[j]; im[j] = t;    
+            t = snr_re[i]; snr_re[i] = snr_re[j]; snr_re[j] = t;    
+            t = snr_im[i]; snr_im[i] = snr_im[j]; snr_im[j] = t;    
         }    
+        if (++snr_sm_i >= SNR_N) {    
+            snr_sm_j = 0xFFFF;          // переход к стадиям    
+            snr_sm_len = 2; snr_sm_base = 0; snr_sm_i = 0;    
+        }    
+        return false;    
     }    
-    for (uint16_t len = 2; len <= SNR_N; len <<= 1) {    
-        uint16_t half = len >> 1;    
-        uint16_t step = SNR_N / len;    
-        for (uint16_t i = 0; i < SNR_N; i += len) {    
-            for (uint16_t j = 0; j < half; j++) {    
-                uint16_t tw = j * step;    
-                int32_t wr = snr_tw_re[tw];    
-                int32_t wi = inverse ? -snr_tw_im[tw] : snr_tw_im[tw];    
-                uint16_t a = i + j, b = a + half;    
-                int32_t br = re[b], bi = im[b];    
-                int32_t tr = (int32_t)(((int64_t)br * wr - (int64_t)bi * wi) >> SNR_Q);      
-                int32_t ti = (int32_t)(((int64_t)br * wi + (int64_t)bi * wr) >> SNR_Q);      
-                re[b] = (re[a] - tr) >> 1;    
-                im[b] = (im[a] - ti) >> 1;    
-                re[a] = (re[a] + tr) >> 1;    
-                im[a] = (im[a] + ti) >> 1;    
+  
+    // Стадии бабочек    
+    for (;;) {    
+        uint16_t half = snr_sm_len >> 1;    
+        uint16_t step = SNR_N / snr_sm_len;    
+        uint16_t tw = snr_sm_j * step;    
+        int32_t wr = snr_tw_re[tw];    
+        int32_t wi = snr_sm_inv ? -snr_tw_im[tw] : snr_tw_im[tw];    
+        uint16_t a = snr_sm_base + snr_sm_j, b = a + half;    
+        int32_t br = snr_re[b], bi = snr_im[b];    
+        int32_t tr = (int32_t)(((int64_t)br * wr - (int64_t)bi * wi) >> SNR_Q);    
+        int32_t ti = (int32_t)(((int64_t)br * wi + (int64_t)bi * wr) >> SNR_Q);    
+        snr_re[b] = (snr_re[a] - tr) >> 1;    
+        snr_im[b] = (snr_im[a] - ti) >> 1;    
+        snr_re[a] = (snr_re[a] + tr) >> 1;    
+        snr_im[a] = (snr_im[a] + ti) >> 1;    
+  
+        if (++snr_sm_j >= half) {    
+            snr_sm_j = 0;    
+            snr_sm_base += snr_sm_len;    
+            if (snr_sm_base >= SNR_N) {    
+                snr_sm_base = 0;    
+                snr_sm_len <<= 1;    
+                if (snr_sm_len > SNR_N) return true;   // FFT закончен    
             }    
         }    
+        return false;                   // одна бабочка за вызов    
     }    
 }    
   
-// ---- Обработка одного кадра ----    
-static void snr_frame(void) {    
-    // Окно + предусиление <<8: компенсация /256 прямого FFT.      
-    // Бины получаются ~x*256*win — в int32 помещаются с запасом.    
-    for (uint16_t i = 0; i < SNR_N; i++) {    
-        int32_t x = snr_in[i] << 8;      
-        snr_re[i] = (int32_t)(((int64_t)x * snr_win[i]) >> SNR_Q);      
-        snr_im[i] = 0;    
-    }    
-    snr_fft(snr_re, snr_im, false);  
+// ---- Стейт-машина кадра: вызывается квантами из af_snr_push ----    
+// Каждая стадия делает не более SNR_CHUNK единиц работы за итерацию,    
+// внешний цикл ограничен тайм-бюджетом SNR_SLICE_US.    
   
-    // Per-bin: magnitude -> minima tracker -> gain -> apply  
-    for (uint16_t k = 0; k < SNR_BINS; k++) {  
-        int32_t re = snr_re[k], im = snr_im[k];      
-        // re,im ~2^23 -> квадраты ~2^46: int64 + >>16 -> ~2^30 в uint32,      
-        // isqrt -> mag ~2^15 (uint16)      
-        uint16_t mag = snr_isqrt((uint32_t)(        
-            ((int64_t)re * re + (int64_t)im * im) >> 16));        
-        if (k == SNR_DBG_BIN) snr_dbg_mag = mag;   // отладка: mag бина ~1.2 кГц  
-      
-        uint32_t n = snr_noise[k];      
-        if (mag < n) n = mag;                       // быстро вниз    
-        else         n += (mag - n) >> 6;           // медленно вверх ~1с    
-        snr_noise[k] = n;    
+static void snr_sm_service(void) {    
+    const uint32_t t0 = micros();    
+    do {    
+        switch (snr_sm) {    
   
-        // gain = 1 - depth * n/mag, floor GMIN  
-        int32_t g = 32768;  
-        if (mag > 0) {  
-            int32_t sub = (int32_t)(((int64_t)snr_depth * n) / mag);  
-            g = 32768 - sub;  
-        }  
-        if (g < SNR_GMIN) g = SNR_GMIN;  
-        if (g > 32768)    g = 32768;  
+        case SNR_SM_IDLE:    
+            return;    
   
-        int32_t gs;  
-        if (snr_warmup > 0) {  
-            gs = 32768;                 // прогрев: прозрачно, только сбор шумовой оценки  
-        } else {  
-            gs = snr_gain[k] + ((g - snr_gain[k]) >> snr_smsh);  
-        }  
-        snr_gain[k] = gs;      
+        case SNR_SM_LOAD: {             // окно + <<8 -> re/im    
+            uint16_t n = 0;    
+            for (; snr_sm_i < SNR_N && n < SNR_CHUNK; snr_sm_i++, n++) {    
+                int32_t x = snr_in[snr_sm_i] << 8;    
+                snr_re[snr_sm_i] = (int32_t)(((int64_t)x * snr_win[snr_sm_i]) >> SNR_Q);    
+                snr_im[snr_sm_i] = 0;    
+            }    
+            if (snr_sm_i >= SNR_N) { snr_fft_begin(false); snr_sm = SNR_SM_FFT_FWD; }    
+            break;    
+        }    
   
-        snr_re[k] = (int32_t)(((int64_t)re * gs) >> SNR_Q);      
-        snr_im[k] = (int32_t)(((int64_t)im * gs) >> SNR_Q);      
-        if (k > 0 && k < SNR_N / 2) {               // conjugate symmetric  
-            snr_re[SNR_N - k] = snr_re[k];  
-            snr_im[SNR_N - k] = -snr_im[k];  
-        }  
-    }  
+        case SNR_SM_FFT_FWD: {    
+            uint16_t n = 0;    
+            while (n < SNR_CHUNK) {    
+                if (snr_fft_step()) { snr_sm = SNR_SM_BINS; snr_sm_i = 0; break; }    
+                n++;    
+            }    
+            break;    
+        }    
   
-    snr_fft(snr_re, snr_im, true);                  // IFFT (scaling тот же)  
+        case SNR_SM_BINS: {             // mag -> noise -> gain -> apply    
+            uint16_t n = 0;    
+            for (; snr_sm_i < SNR_BINS && n < SNR_CHUNK; snr_sm_i++, n++) {    
+                uint16_t k = snr_sm_i;    
+                int32_t re = snr_re[k], im = snr_im[k];    
+                uint16_t mag = snr_isqrt((uint32_t)(    
+                    ((int64_t)re * re + (int64_t)im * im) >> 16));    
+                if (k == SNR_DBG_BIN) snr_dbg_mag = mag;    
   
-    // OLA: окно синтеза + компенсация hann^2 (~1.5) -> *2/3.  
-    // Первая половина кадра складывается с хвостом предыдущего -> на выход;  
-    // вторая половина уходит в snr_tail для следующего кадра.  
-    // IFFT/256 даёт 256*g*x*win (вход был <<8): нужен >>8 на выходе.  
-    // Итог тракта:  
-    // x -> <<8 -> FFT/256 (=DFT(x)) -> gain -> IFFT/256 (=256*x*win)  
-    //   -> *win -> >>8 -> OLA*(2/3) ~= x  
-    for (uint16_t i = 0; i < SNR_HOP; i++) {        
-        int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i]) >> (SNR_Q + 8));          
-        y = snr_tail[i] + (int32_t)(((int64_t)y * 21846) >> SNR_Q);          
-        if (y > 32767) y = 32767; else if (y < -32768) y = -32768;        
-        snr_ola[i] = (int16_t)y;        
-    }        
-    for (uint16_t i = 0; i < SNR_HOP; i++) {        
-        int32_t y = (int32_t)(((int64_t)snr_re[SNR_HOP + i] * snr_win[SNR_HOP + i]) >> (SNR_Q + 8));          
-        y = (int32_t)(((int64_t)y * 21846) >> SNR_Q);          
-        if (y > 32767) y = 32767; else if (y < -32768) y = -32768;        
-        snr_tail[i] = (int16_t)y;        
-    }        
-    if (snr_warmup > 0) snr_warmup--;  
-    snr_out_avail = SNR_HOP;    
-    snr_out_pos   = 0;    
-}  
+                uint32_t nn = snr_noise[k];    
+                if (mag < nn) nn = mag;    
+                else          nn += (mag - nn) >> 6;    
+                snr_noise[k] = nn;    
+  
+                int32_t g = 32768;    
+                if (mag > 0) {    
+                    int32_t sub = (int32_t)(((int64_t)snr_depth * nn) / mag);    
+                    g = 32768 - sub;    
+                }    
+                if (g < SNR_GMIN) g = SNR_GMIN;    
+                if (g > 32768)    g = 32768;    
+  
+                int32_t gs;    
+                if (snr_warmup > 0) gs = 32768;    
+                else gs = snr_gain[k] + ((g - snr_gain[k]) >> snr_smsh);    
+                snr_gain[k] = gs;    
+  
+                snr_re[k] = (int32_t)(((int64_t)re * gs) >> SNR_Q);    
+                snr_im[k] = (int32_t)(((int64_t)im * gs) >> SNR_Q);    
+                if (k > 0 && k < SNR_N / 2) {    
+                    snr_re[SNR_N - k] = snr_re[k];    
+                    snr_im[SNR_N - k] = -snr_im[k];    
+                }    
+            }    
+            if (snr_sm_i >= SNR_BINS) { snr_fft_begin(true); snr_sm = SNR_SM_FFT_INV; }    
+            break;    
+        }    
+  
+        case SNR_SM_FFT_INV: {    
+            uint16_t n = 0;    
+            while (n < SNR_CHUNK) {    
+                if (snr_fft_step()) { snr_sm = SNR_SM_OLA; snr_sm_i = 0; break; }    
+                n++;    
+            }    
+            break;    
+        }    
+  
+        case SNR_SM_OLA: {              // окно синтеза + overlap-add    
+            // Итог тракта: x -> <<8 -> FFT/256 -> gain -> IFFT/256    
+            //   -> *win -> >>(Q+8) -> OLA*(2/3) ~= x    
+            uint16_t n = 0;    
+            for (; snr_sm_i < SNR_N && n < SNR_CHUNK; snr_sm_i++, n++) {    
+                uint16_t i = snr_sm_i;    
+                int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i]) >> (SNR_Q + 8));    
+                y = (int32_t)(((int64_t)y * 21846) >> SNR_Q);    
+                if (i < SNR_HOP) {    
+                    y = snr_tail[i] + y;    
+                    if (y > 32767) y = 32767; else if (y < -32768) y = -32768;    
+                    snr_ola[i] = (int16_t)y;    
+                } else {    
+                    if (y > 32767) y = 32767; else if (y < -32768) y = -32768;    
+                    snr_tail[i - SNR_HOP] = (int16_t)y;    
+                }    
+            }    
+            if (snr_sm_i >= SNR_N) {    
+                if (snr_warmup > 0) snr_warmup--;    
+                snr_out_avail = SNR_HOP;    
+                snr_out_pos   = 0;    
+                snr_sm = SNR_SM_IDLE;    
+            }    
+            break;    
+        }    
+        }    
+    } while ((int32_t)(micros() - t0) < SNR_SLICE_US);    
+}    
   
 void af_snr_init(void) {  
     for (uint16_t i = 0; i < SNR_N; i++) {  
@@ -198,8 +283,11 @@ void af_snr_reset(void) {
         snr_noise[k] = 0;  
         snr_gain[k]  = 32768;  
     }  
-    snr_in_pos = snr_out_pos = snr_out_avail = 0;  
-    snr_warmup = 8;                     // ~66 мс прозрачного вывода на сбор шума  
+    snr_in_pos = snr_out_pos = snr_out_avail = 0;    
+    snr_sm = SNR_SM_IDLE;    
+    snr_sm_i = snr_sm_len = snr_sm_base = snr_sm_j = 0;    
+    snr_overrun = 0;    
+    snr_warmup = 8;                     // ~66 мс прозрачного вывода на сбор шума    
 }  
   
 int32_t af_snr_push(int32_t x) {    
@@ -212,15 +300,21 @@ int32_t af_snr_push(int32_t x) {
     // Вход: пишем в кадр; по заполнении HOP — обработка    
     snr_in[snr_in_pos++] = (int16_t)x;      
     if (snr_in_pos >= SNR_N) snr_in_pos = 0;    
-    if (snr_in_pos == 0) {    
+    if (snr_in_pos == 0) {      
         // кадр готов: in[] содержит последние 256 отсчётов.    
-        // Первый кадр — после полного заполнения (256 отсчётов),    
-        // далее каждые 128: после memmove pos=128 -> wrap через HOP.    
-        snr_frame();    
+        // Если SM ещё занята предыдущим кадром — overrun: кадр пропускаем,    
+        // но входное кольцо всё равно сдвигаем (дырка в выходе, не рассинхрон).    
+        if (snr_sm == SNR_SM_IDLE) {    
+            snr_sm   = SNR_SM_LOAD;    
+            snr_sm_i = 0;    
+        } else {    
+            snr_overrun++;    
+        }    
         memmove(&snr_in[0], &snr_in[SNR_HOP], SNR_HOP * sizeof(int16_t));    
         snr_in_pos = SNR_HOP;    
     }    
-    // makeup  
+    snr_sm_service();                   // квант работы на каждый входной отсчёт    
+    // makeup    
     y = (int32_t)(((int64_t)y * snr_makeup) >> SNR_Q);  
     if (y > 32767) y = 32767; else if (y < -32768) y = -32768;  
     return y;  
@@ -234,3 +328,4 @@ uint32_t af_snr_dbg_mag(void)   { return snr_dbg_mag; }
 uint32_t af_snr_dbg_noise(void) { return snr_noise[SNR_DBG_BIN]; }  
 int32_t  af_snr_dbg_gain(void)  { return snr_gain[SNR_DBG_BIN]; }  
 
+uint32_t af_snr_dbg_overrun(void) { return snr_overrun; }  

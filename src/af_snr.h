@@ -15,3 +15,4 @@ void    af_snr_set_makeup(int32_t q15);// выходной makeup, 0..131072
 uint32_t af_snr_dbg_mag(void);  
 uint32_t af_snr_dbg_noise(void);  
 int32_t  af_snr_dbg_gain(void);  
+uint32_t af_snr_dbg_overrun(void);

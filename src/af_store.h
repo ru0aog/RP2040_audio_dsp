@@ -70,10 +70,12 @@ struct af_bank_t {
     uint16_t tx_shelf_q;    // добротность x100    
     uint8_t  tx_exc_on;     // ВЧ-эксайтер    
     uint16_t tx_excmix;     // подмес эксайтера, Q15    
-    uint8_t  tx_notch_on;   // TX-нотчи    
-    uint16_t tx_notch1_hz;    
-    uint16_t tx_notch2_hz;    
-};    
+    uint8_t  tx_notch_on;   // TX-нотчи      
+    uint16_t tx_notch1_hz;      
+    uint16_t tx_notch2_hz;      
+    uint8_t  nr_mode;       // движок NR: 0 = LMS-ALE, 1 = спектральный FFT-256  
+    uint8_t  _pad;          // выравнивание/резерв  
+};      
   
 // Инициализация EEPROM. Вызывать из setup() до af_gpio_ctl_init().  
 void af_store_init(void);  
