@@ -2,8 +2,9 @@
 //  
 // Хранилище банков настроек во flash (последний сектор, Core 0).      
 // 7 ячеек; каждая — полный снимок настраиваемых параметров RX и TX.    
-// NT/NR/rxnotch on/off в банке не хранятся — включаются по обстановке    
-// (пины GP5/GP6 и консоль); их параметры настройки (mu, depth) — хранятся.    
+// NT/NR/rxnotch on/off в банке не хранятся — включаются по обстановке  
+// (пины GP5/GP6 и консоль); их параметры настройки (mu, depth) — хранятся.  
+// rx_pres_on хранится — это параметр звучания, а не оперативный режим.  
   
 #pragma once    
   
@@ -29,9 +30,13 @@ struct af_bank_t {
     uint16_t lim_ceil;      // потолок лимитера    
     uint16_t nr_depth;      // глубина NR, Q15    
     uint32_t nr_makeup;     // makeup NR, Q15 (до 131072 — не влезает в u16)    
-    uint16_t nt_mu;         // шаг NLMS нотча    
-    uint16_t nr_mu;         // шаг LMS NR    
-    // --- TX ---    
+    uint16_t nt_mu;         // шаг NLMS нотча  
+    uint16_t nr_mu;         // шаг LMS NR  
+    uint8_t  rx_pres_on;    // dynamic presence EQ RX (0/1)  
+    uint16_t rx_presmax;    // потолок подъёма, дБ x10 (15 = +1.5 дБ)  
+    uint16_t rx_pres_freq;  // центр пика, Гц (1000..4000)  
+    uint16_t rx_pres_q;     // добротность x100 (100 = 1.00)  
+    // --- TX ---  
     uint16_t tx_lo_hz;      // речевая полоса TX    
     uint16_t tx_hi_hz;    
     uint16_t tx_ratio_x10;  // компрессия x10 (40 = 4:1)    

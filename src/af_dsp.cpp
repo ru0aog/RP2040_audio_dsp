@@ -238,7 +238,7 @@ static inline int32_t __not_in_flash_func(rx_notch_push)(int32_t x) {
 // огибающей ВЧ-полосы с трекером шумового пола: в паузах k→0, шум не  
 // поднимается. Всё int32/Q15/Q24, деления только per-block.  
 // ---------------------------------------------------------------------------  
-static volatile bool     rx_pres_on      = false;  
+static volatile bool     rx_pres_on      = (AF_RX_PRES_ON_DEFAULT != 0);  
 static volatile uint32_t rx_pres_freq_hz = AF_RX_PRES_FREQ_HZ;  
 static volatile uint32_t rx_pres_q_x100  = AF_RX_PRES_Q_X100;  
 static volatile int32_t  rx_pres_max_q15 = AF_RX_PRES_MAX_Q15;  
@@ -310,8 +310,9 @@ static inline int32_t __not_in_flash_func(rx_pres_push)(int32_t x) {
         rxp_env_q16 += (d * (d > 0 ? (int64_t)AF_RX_PRES_ENV_ATT_Q24  
                                    : (int64_t)AF_RX_PRES_ENV_REL_Q24)) >> 24;  
   
-        // k -> rxp_k_tgt_q15: атака ~10 мс, спад ~100 мс  
-        // (константы Q24 per-sample — как AF_TX_PRES_K_* в TX).  
+        // k -> rxp_k_tgt_q15: атака ~20 мс, спад ~200 мс  
+        // (константы Q24 как AF_TX_PRES_K_*, но вызов децимирован ÷2 —  
+        //  постоянные времени вдвое длиннее TX-номинала).  
         int32_t dk = rxp_k_tgt_q15 - rxp_k_q15;  
         rxp_k_q15 += (int32_t)(((int64_t)dk *  
             (dk > 0 ? (int64_t)AF_RX_PRES_K_ATT_Q24  
@@ -335,10 +336,12 @@ static void __not_in_flash_func(rx_pres_block_update)(void) {
     int32_t env = (int32_t)(rxp_env_q16 >> 16);  
     int32_t nf  = (int32_t)(rxp_nf_q16 >> 16);  
   
-    // Трекер nf: вниз быстро, вверх — сдвиговая EMA; только при низкой  
-    // огибающей (env < 2*nf — речь не попадает в оценку шума).  
+    // Трекер nf: вниз — быстрая EMA 1/64 (следует за падением шума,  
+    // но не за одиночным фединговым провалом), вверх — медленная  
+    // EMA 1/4096; только при низкой огибающей (env < 2*nf — речь  
+    // не попадает в оценку шума).  
     if (env < nf) {  
-        rxp_nf_q16 = rxp_env_q16;                       // вниз — мгновенно  
+        rxp_nf_q16 += (rxp_env_q16 - rxp_nf_q16) >> 6;   // вниз — EMA 1/64  
     } else if (env < 2 * nf) {  
         rxp_nf_q16 += (rxp_env_q16 - rxp_nf_q16) >> AF_RX_PRES_NF_UP_SHIFT;  
     }  
@@ -842,7 +845,9 @@ void af_dsp_set_rxpres(bool on) {
         rxp_pk_x1 = rxp_pk_x2 = rxp_pk_y1 = rxp_pk_y2 = 0;  
         rxp_env_q16 = rxp_nf_q16 = (int64_t)256 << 16;  
         rxp_k_q15 = rxp_k_tgt_q15 = 0;  
-        rx_pres_pk_design(32768);         // байпас-коэффициенты  
+        // rx_pres_pk_design здесь НЕ вызываем: пишет rxp_pk_* с Core 0,  
+        // а block_update пишет их же с Core 1 — гонка на один блок.  
+        // k=0 → ближайший block_update сам опубликует байпас-коэффициенты.  
     }  
     rx_pres_on = on;  
 }  

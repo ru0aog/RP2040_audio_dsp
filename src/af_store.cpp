@@ -10,7 +10,7 @@
 //   → af_set_clk_nominal (125 МГц) → af_capture_pause → af_pwm off    
 //   → IRQ-off → do_flash_write → flash_flush_cache → IRQ-on    
 //   → af_capture_resume → af_usb_set_muted(false)    
-//   → af_set_clk (250 МГц) → af_pwm restore → af_store_core1_unpark    
+//   → af_set_clk (320 МГц) → af_pwm restore → af_store_core1_unpark  
 // af_pwm off — глушение выхода: без него на границах окна слышен щелчок.      
 // USB-мьют: poll пишет нули (fade-out/in в af_usb). Промывка poll'ами      
 // убрана — tight-loop с блокирующим usb_out.write() вешал ftest,      
@@ -51,7 +51,7 @@
   
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
-#define AF_STORE_VER      4   // было 3: банк = полный снимок RX+TX  
+#define AF_STORE_VER      5   // было 4: +rx_pres_* в af_bank_t (RX presence EQ)  
   
 // Смещение сектора банков от начала flash — последний сектор чипа.  
 // Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
@@ -228,9 +228,13 @@ void af_store_snapshot(af_bank_t* out) {
     out->lim_ceil     = (uint16_t)af_dsp_limceil();      
     out->nr_depth     = (uint16_t)af_dsp_nrdepth();      
     out->nr_makeup    = (uint32_t)af_dsp_nrmakeup();      
-    out->nt_mu        = (uint16_t)af_dsp_ntmu();      
-    out->nr_mu        = (uint16_t)af_dsp_nrmu();      
-    // TX      
+    out->nt_mu        = (uint16_t)af_dsp_ntmu();  
+    out->nr_mu        = (uint16_t)af_dsp_nrmu();  
+    out->rx_pres_on   = af_dsp_rxpres_on() ? 1 : 0;  
+    out->rx_presmax   = (uint16_t)af_dsp_rxpresmax();  
+    out->rx_pres_freq = (uint16_t)af_dsp_rxpresf();  
+    out->rx_pres_q    = (uint16_t)af_dsp_rxpresq();  
+    // TX  
     out->tx_lo_hz      = (uint16_t)af_tx_lo_hz();        
     out->tx_hi_hz      = (uint16_t)af_tx_hi_hz();        
     out->tx_ratio_x10  = (uint16_t)af_tx_ratio();      
@@ -305,7 +309,7 @@ bool af_store_save(uint8_t idx) {
     restore_interrupts(ints);
     af_capture_resume();                // рестарт цепочки A->B->A
     af_usb_set_muted(false);            // USB -> звук
-    af_set_clk();                       // возврат на 250 МГц — обязательно,
+    af_set_clk();                       // возврат на 320 МГц — обязательно,  
                                         // иначе следующий save входит в окно
                                         // на 125 МГц в нештатном состоянии
     if (pwm_was) af_pwm_set_enabled(true);      // вернуть выход (мягкий рестарт  
@@ -338,9 +342,15 @@ bool af_store_load(uint8_t idx) {
     af_dsp_set_limceil((int32_t)b.lim_ceil);    
     af_dsp_set_nrdepth((int32_t)b.nr_depth);    
     af_dsp_set_nrmakeup((int32_t)b.nr_makeup);    
-    af_dsp_set_ntmu((int32_t)b.nt_mu);    
-    af_dsp_set_nrmu((int32_t)b.nr_mu);    
-    // TX: весь тракт. Порядок — как в tx_apply_profile: сначала    
+    af_dsp_set_ntmu((int32_t)b.nt_mu);  
+    af_dsp_set_nrmu((int32_t)b.nr_mu);  
+    // RX presence: параметры до флага on — при включении блок  
+    // стартует с уже загруженными f/q/max, а не со старыми.  
+    af_dsp_set_rxpresmax((int32_t)b.rx_presmax);  
+    af_dsp_set_rxpresf((uint32_t)b.rx_pres_freq);  
+    af_dsp_set_rxpresq((uint32_t)b.rx_pres_q);  
+    af_dsp_set_rxpres(b.rx_pres_on != 0);  
+    // TX: весь тракт. Порядок — как в tx_apply_profile: сначала  
     // параметры, от которых зависят пересчёты (split, presfreq/q,    
     // shelffreq/q, notchf), затем on/off и уровни.    
     af_tx_set_band(b.tx_lo_hz, b.tx_hi_hz);    
@@ -438,8 +448,12 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].agc_min_x100 = (uint16_t)(AGC_MIN_GAIN * 100.0f + 0.5f);      
         b[i].lim_ceil = LIMIT_CEIL;      
         b[i].nr_depth = NR_DEPTH_Q15;  b[i].nr_makeup = NR_MAKEUP_Q15;      
-        b[i].nt_mu = NOTCH_MU_Q;  b[i].nr_mu = NR_MU_Q;      
-        // TX — рабочая точка (как базис tx_apply_profile)      
+        b[i].nt_mu = NOTCH_MU_Q;  b[i].nr_mu = NR_MU_Q;  
+        b[i].rx_pres_on   = AF_RX_PRES_ON_DEFAULT;  
+        b[i].rx_presmax   = 15;                    // +1.5 дБ  
+        b[i].rx_pres_freq = AF_RX_PRES_FREQ_HZ;    // 2300  
+        b[i].rx_pres_q    = AF_RX_PRES_Q_X100;     // 100  
+        // TX — рабочая точка (как базис tx_apply_profile)  
         b[i].tx_lo_hz = 300;  b[i].tx_hi_hz = 2700;      
         b[i].tx_ratio_x10 = 40;  b[i].tx_clip = 26000;      
         b[i].tx_agc_target = 18000;  b[i].tx_agc_max_x10 = AF_TX_AGC_MAX_X10;      
