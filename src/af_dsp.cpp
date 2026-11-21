@@ -256,6 +256,7 @@ static int32_t rxp_pk_b0 = 32768, rxp_pk_b1 = 0, rxp_pk_b2 = 0,
   
 static int64_t rxp_env_q16    = (int64_t)256 << 16;  // EMA |hp|, Q16  
 static int64_t rxp_nf_q16     = (int64_t)256 << 16;  // noise floor, Q16  
+static int64_t rx_in_lvl_q16  = (int64_t)256 << 16;  // EMA |x| после FIR, Q16 (S-meter)  
 static int32_t rxp_k_q15      = 0;                   // сглаженный k_dyn, Q15  
 static int32_t rxp_k_tgt_q15  = 0;                   // цель k (per-block)  
 static uint8_t rxp_decim      = 0;                   // дециматор sidechain ÷2  
@@ -876,6 +877,7 @@ int32_t  af_dsp_rxpres_nf(void)   { return (int32_t)(rxp_nf_q16 >> 16); }
 int32_t  af_dsp_rxpresmax(void)   { return rx_presmax_db_x10; }  // дБ x10, не Q15  
 uint32_t af_dsp_rxpresf(void)     { return rx_pres_freq_hz; }  
 uint32_t af_dsp_rxpresq(void)     { return rx_pres_q_x100; }  
+int32_t  af_dsp_rx_in_lvl(void)   { return (int32_t)(rx_in_lvl_q16 >> 16); }  
   
 // Возвращает false, если команда отклонена (NT on — приоритет NT;  
 // CW on — NR в узкой полосе бесполезен и перегружает Core 1).    
@@ -1138,8 +1140,12 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 out_emit(t);    
                 continue;      
             }      
-            y = af_fir_push(y);    
-            if (cw_on) {    
+            y = af_fir_push(y);  
+            {   // S-meter: EMA |y| Q16, ~10 мс — уровень в полосе до CW/NT/NR/АРУ  
+                int64_t ay = (y < 0) ? -(int64_t)y : (int64_t)y;  
+                rx_in_lvl_q16 += ((ay << 16) - rx_in_lvl_q16) >> 6;  
+            }  
+            if (cw_on) {  
                 // Добавка шума: LFSR xorshift32, уровень из `cw noise`.  
                 // Фильтр всегда возбуждён — не звенит на тишине;  
                 // сигнал проходит без порогов (сквелча нет).  

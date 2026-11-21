@@ -178,6 +178,11 @@ static void cli_stats(void) {
                   (long)af_dsp_rxpres_env(),  
                   (long)af_dsp_rxpres_nf(),  
                   (long)af_dsp_rxpres_k());  
+    {   // S-meter: уровень после FIR в линейных единицах и dBFS  
+        int32_t lvl = af_dsp_rx_in_lvl();  
+        Serial.printf("#   inlvl   = %ld (%.1f dBFS)\n", (long)lvl,  
+                      20.0 * log10((lvl + 1) / 32768.0));  
+    }  
 
     // ---- TX: параметры передающего тракта (при tx=off неактивен) ----      
     Serial.printf("# === TX (%s) ===\n", tx ? "active" : "inactive");      

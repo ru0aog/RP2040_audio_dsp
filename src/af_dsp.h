@@ -44,6 +44,7 @@ uint32_t af_dsp_rxpresq(void);
 int32_t af_dsp_rxpres_k(void);                 // сглаженный k_dyn, Q15 (stats)  
 int32_t af_dsp_rxpres_env(void);               // огибающая ВЧ-детектора (stats)  
 int32_t af_dsp_rxpres_nf(void);                // шумовой пол (stats)  
+int32_t af_dsp_rx_in_lvl(void);                // уровень входа после FIR (S-meter)  
 
 // Телеграфный фильтр (3 биквада BPF + шум, после FIR).  
 // При включении подтягивает полосу FIR к f0±250 Гц, при выключении —  
