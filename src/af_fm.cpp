@@ -365,9 +365,20 @@ static void ul_feed(const uint8_t* buf) {
     ul_last_ms = millis();    
     uint32_t pos = 0;    
   
-    if (ul_file_off == 0) {    
-        uint32_t data_off = ul_parse_header(buf, AF_FM_SECTOR_SIZE);    
-        if (data_off == 0) { ul_abort("bad WAV header"); return; }    
+    if (ul_file_off == 0) {      
+        uint32_t data_off = ul_parse_header(buf, AF_FM_SECTOR_SIZE);      
+        if (data_off == 0) {  
+            Serial.printf("# fm: REC%u.WAV bad header, first 32 bytes:\n# ",  
+                          (unsigned)ul_bank);  
+            for (uint8_t i = 0; i < 32; i++)  
+                Serial.printf("%02x ", buf[i]);  
+            Serial.printf("\n# ascii: ");  
+            for (uint8_t i = 0; i < 32; i++)  
+                Serial.printf("%c", (buf[i] >= 32 && buf[i] < 127) ? buf[i] : '.');  
+            Serial.println();  
+            ul_abort("bad WAV header");  
+            return;  
+        }      
         Serial.printf("# fm: REC%u.WAV upload: %lu Hz %u ch %u bit\n",    
                       (unsigned)ul_bank, (unsigned long)ul_rate,    
                       (unsigned)ul_channels, (unsigned)ul_bits);    
@@ -450,27 +461,32 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
     if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;          
     if (bufsize < AF_FM_SECTOR_SIZE) return -1;          
   
-    // WAV-область: перезапись RECn.WAV = аплоад в слот n.    
-    if (lba >= AF_FM_WAV_LBA(0)) {    
-        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
-            uint32_t start = AF_FM_WAV_LBA(i);    
-            if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {    
-                if (!ul_active) {    
-                    if (!ul_begin(i + 1, lba)) return -1;    
-                } else if (ul_bank != (uint8_t)(i + 1)) {    
-                    return -1;                        // одна сессия за раз    
-                }    
-                if (lba != ul_lba_next) {             // только последовательно    
-                    ul_abort("non-sequential LBA");    
-                    return -1;    
-                }    
-                ul_feed(buffer);    
-                ul_lba_next = lba + 1;    
-                return (int32_t)AF_FM_SECTOR_SIZE;    
-            }    
-        }    
-        return -1;                                    // зазор между файлами    
-    }    
+    // WAV-область: перезапись RECn.WAV = аплоад в слот n.  
+    // Всегда возвращаем OK — ошибка провоцирует бесконечные ретраи хоста.  
+    if (lba >= AF_FM_WAV_LBA(0)) {      
+        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {      
+            uint32_t start = AF_FM_WAV_LBA(i);      
+            if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {      
+                if (!ul_active) {      
+                    if (!ul_begin(i + 1, lba))  
+                        return (int32_t)AF_FM_SECTOR_SIZE;   // rec/play busy — проглотить  
+                } else if (ul_bank != (uint8_t)(i + 1)) {      
+                    return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить  
+                }      
+                if (lba != ul_lba_next) {             // только последовательно      
+                    Serial.printf("# fm: REC%u.WAV non-seq LBA %lu (expect %lu)\n",  
+                                  (unsigned)ul_bank, (unsigned long)lba,  
+                                  (unsigned long)ul_lba_next);  
+                    ul_abort("non-sequential LBA");      
+                    return (int32_t)AF_FM_SECTOR_SIZE;      
+                }      
+                ul_feed(buffer);      
+                ul_lba_next = lba + 1;      
+                return (int32_t)AF_FM_SECTOR_SIZE;      
+            }      
+        }      
+        return (int32_t)AF_FM_SECTOR_SIZE;            // зазор — проглотить      
+    }      
   
     if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only          
     memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);            
