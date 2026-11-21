@@ -458,10 +458,12 @@ static void ul_commit(void) {
     Serial.printf("# fm: REC%u.WAV -> slot %u, %lu samples%s\n",    
                   (unsigned)bank, (unsigned)bank, (unsigned long)n,    
                   ul_trunc ? " (truncated)" : "");    
-    if (af_rec_slot_write(bank, n))    
-        af_fm_request_sync();                           // размер WAV обновился    
-    else    
-        Serial.println("# fm: slot write failed");    
+    if (af_rec_slot_write(bank, n)) {  
+        af_fm_request_sync();                           // размер WAV обновился  
+        af_usb_reenumerate();                           // хост перечитает каталог  
+    } else {  
+        Serial.println("# fm: slot write failed");  
+    }  
 }    
 
 int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {    

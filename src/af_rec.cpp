@@ -236,7 +236,8 @@ static void rec_fill_empty_slots(void) {
                       (unsigned)b, (unsigned long)n);  
         rec_slot_write(b, n);                           // flash-окно внутри  
     }  
-    af_fm_request_sync();                               // обновить RECn.WAV  
+    af_fm_request_sync();  
+    af_usb_reenumerate();        // хост перечитает каталог — RECn.WAV с размерами  
 }  
 
 void af_rec_init(void) {
