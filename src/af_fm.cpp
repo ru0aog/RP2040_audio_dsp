@@ -55,7 +55,35 @@ static int16_t  ul_prev     = 0;       // предыдущий входной о
 static bool     ul_trunc    = false;   // ram_buf заполнен — хвост отброшен    
 static uint8_t  ul_tail[8];            // недошедший кусок фрейма между секторами    
 static uint8_t  ul_tail_len = 0;    
-  
+
+// --- Перехват dir-записей: первый кластер файла -> банк ----------------------  
+// Windows при замене делает delete+create: dir-запись с именем RECn.WAV и  
+// первым кластером появляется ДО записи данных. Данные идут в свободный пул  
+// подряд от первого кластера — мапим их в слот по имени, а не по LBA.  
+static uint16_t dir_first_cl[AF_FM_WAV_FILES + 1];   // [bank 1..7] -> cluster, 0=нет  
+
+static uint16_t rd16(const uint8_t* p);
+
+// Разбор записанного сектора root dir: обновить dir_first_cl[].  
+static void dir_track(const uint8_t* d) {  
+    static const char wav_names[AF_FM_WAV_FILES][12] = {  
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV",  
+        "REC5    WAV", "REC6    WAV", "REC7    WAV" };  
+    for (uint8_t e = 0; e < 16; e++) {               // 16 записей по 32 Б  
+        const uint8_t* p = d + e * 32;  
+        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {  
+            if (memcmp(p, wav_names[i], 11) == 0) {  
+                uint16_t cl = rd16(p + 26);  
+                if (cl != dir_first_cl[i + 1]) {  
+                    dir_first_cl[i + 1] = cl;  
+                    Serial.printf("# fm: dir REC%u.WAV -> cluster %u\n",  
+                                  (unsigned)(i + 1), (unsigned)cl);  
+                }  
+            }  
+        }  
+    }  
+}  
+
 // ---------------------------------------------------------------------------  
 // Построение образа  
 // ---------------------------------------------------------------------------  
@@ -147,6 +175,7 @@ static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,
 // ---------------------------------------------------------------------------  
   
 void af_fm_init(void) {  
+    memset(dir_first_cl, 0, sizeof(dir_first_cl));  
     memset(fm_disk, 0, sizeof(fm_disk));  
     fm_build_boot();    
     static const uint16_t zero7[7] = {0};    
@@ -498,38 +527,57 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
     if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;          
     if (bufsize < AF_FM_SECTOR_SIZE) return -1;          
   
-    // WAV-область: перезапись RECn.WAV = аплоад в слот n.  
-    // Всегда возвращаем OK — ошибка провоцирует бесконечные ретраи хоста.  
+    // WAV-область: перезапись RECn.WAV = аплоад в слот n.    
+    // Всегда возвращаем OK — ошибка провоцирует бесконечные ретраи хоста.    
     if (lba >= AF_FM_WAV_LBA(0)) {        
-        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {        
-            uint32_t start = AF_FM_WAV_LBA(i);        
-            if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {        
-                if (!ul_active)  
-                    Serial.printf("# fm: write hit REC%u area, lba=%lu\n",  
-                                  (unsigned)(i + 1), (unsigned long)lba);  
-                if (!ul_active) {        
-                    if (!ul_begin(i + 1, lba))    
-                        return (int32_t)AF_FM_SECTOR_SIZE;   // rec/play busy — проглотить  
-                } else if (ul_bank != (uint8_t)(i + 1)) {      
-                    return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить  
-                }      
-                if (lba != ul_lba_next) {             // только последовательно      
-                    Serial.printf("# fm: REC%u.WAV non-seq LBA %lu (expect %lu)\n",  
-                                  (unsigned)ul_bank, (unsigned long)lba,  
-                                  (unsigned long)ul_lba_next);  
-                    ul_abort("non-sequential LBA");      
-                    return (int32_t)AF_FM_SECTOR_SIZE;      
-                }      
-                ul_feed(buffer);      
-                ul_lba_next = lba + 1;      
-                return (int32_t)AF_FM_SECTOR_SIZE;      
-            }      
-        }      
-        return (int32_t)AF_FM_SECTOR_SIZE;            // зазор — проглотить      
-    }      
-  
-    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only          
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);            
+        // Свободный пул: данные нового файла. Банк — по первому кластеру  
+        // из dir-записи (dir_track), а не по LBA.  
+        uint8_t bank = 0;  
+        if (lba >= AF_FM_FREE_LBA) {  
+            uint16_t cl = (uint16_t)(lba - AF_FM_DATA_START + 2);   // LBA -> кластер  
+            for (uint8_t i = 1; i <= AF_FM_WAV_FILES; i++) {  
+                if (dir_first_cl[i] && cl >= dir_first_cl[i]) {  
+                    // кластеры файла идут подряд от первого  
+                    if (cl - dir_first_cl[i] < AF_FM_WAV_CLUSTERS) bank = i;  
+                    break;  
+                }  
+            }  
+            if (bank == 0)  
+                return (int32_t)AF_FM_SECTOR_SIZE;    // пул без имени — проглотить  
+        } else {  
+            for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {        
+                uint32_t start = AF_FM_WAV_LBA(i);        
+                if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {        
+                    bank = i + 1;  
+                    break;  
+                }  
+            }  
+            if (bank == 0)  
+                return (int32_t)AF_FM_SECTOR_SIZE;    // зазор — проглотить  
+        }  
+        if (!ul_active) {        
+            if (!ul_begin(bank, lba))    
+                return (int32_t)AF_FM_SECTOR_SIZE;   // rec/play busy — проглотить    
+        } else if (ul_bank != bank) {        
+            return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить    
+        }        
+        if (lba != ul_lba_next) {             // только последовательно        
+            Serial.printf("# fm: REC%u.WAV non-seq LBA %lu (expect %lu)\n",    
+                          (unsigned)ul_bank, (unsigned long)lba,    
+                          (unsigned long)ul_lba_next);    
+            ul_abort("non-sequential LBA");        
+            return (int32_t)AF_FM_SECTOR_SIZE;        
+        }        
+        ul_feed(buffer);        
+        ul_lba_next = lba + 1;        
+        return (int32_t)AF_FM_SECTOR_SIZE;        
+    }        
+    
+    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only            
+    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);              
+    // Перехват root dir: хост создал/обновил RECn.WAV — запомнить кластер.  
+    if (lba == AF_FM_DIR_LBA) dir_track(fm_disk[lba]);  
+
     // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..27).    
     // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    
     // не должны триггерить парсинг и перемонтирование — иначе цикл.    

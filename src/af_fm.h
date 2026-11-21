@@ -53,5 +53,6 @@ void    af_fm_msc_flush(void);
 #define AF_FM_WAV_HDR_MAX        512u    // заголовок WAV в пределах 1 сектора    
 
 // af_fm.h  
-#define AF_FM_FREE_SECTORS   0u    // ~200 КБ свободного пула для проверки места  
-#define AF_FM_SECTOR_COUNT   (AF_FM_WAV_LBA(AF_FM_WAV_FILES) + AF_FM_FREE_SECTORS)  
+#define AF_FM_FREE_SECTORS   400u  // ~200 КБ пул: сюда хост пишет данные новых файлов  
+#define AF_FM_FREE_LBA       AF_FM_WAV_LBA(AF_FM_WAV_FILES)  
+#define AF_FM_SECTOR_COUNT   (AF_FM_FREE_LBA + AF_FM_FREE_SECTORS)  
