@@ -46,7 +46,8 @@ static uint32_t ul_file_off = 0;       // байт, прочитанный из 
 static uint32_t ul_data_end = 0;       // конец data-чанка (байт в файле)    
 static uint32_t ul_rate     = 0;       // частота входного WAV    
 static uint16_t ul_channels = 0;    
-static uint16_t ul_bits     = 0;    
+static uint16_t ul_bits     = 0;      
+static uint16_t ul_codec    = 1;       // WAV format tag: 1=PCM, 6=A-law, 7=μ-law  
 static uint16_t ul_balign   = 0;       // block align (байт на фрейм)    
 static uint32_t ul_in_pos   = 0;       // позиция во входном потоке (фреймы)    
 static uint32_t ul_out_pos  = 0;       // записано выходных отсчётов в ram_buf    
@@ -279,7 +280,7 @@ static bool ul_begin(uint8_t bank, uint32_t lba) {
     ul_last_ms  = millis();    
     ul_file_off = 0;    
     ul_data_end = 0;    
-    ul_rate = 0; ul_channels = 0; ul_bits = 0; ul_balign = 0;    
+    ul_rate = 0; ul_channels = 0; ul_bits = 0; ul_balign = 0; ul_codec = 1;      
     ul_in_pos = 0; ul_out_pos = 0; ul_prev = 0;    
     ul_trunc = false; ul_tail_len = 0;    
     return true;    
@@ -297,15 +298,20 @@ static uint32_t ul_parse_header(const uint8_t* buf, uint32_t avail) {
     while (pos + 8 <= avail && pos + 8 <= 512) {    
         uint32_t csz = rd32(buf + pos + 4);    
         if (memcmp(buf + pos, "fmt ", 4) == 0 && csz >= 16) {    
-            uint16_t tag = rd16(buf + pos + 8);    
-            if (tag != 1) return 0;                 // только PCM (не float/adpcm)    
-            ul_channels = rd16(buf + pos + 10);    
-            ul_rate     = rd32(buf + pos + 12);    
-            ul_balign   = rd16(buf + pos + 20);    
-            ul_bits     = rd16(buf + pos + 22);    
-            if (ul_channels < 1 || ul_channels > 2) return 0;    
-            if (ul_bits != 8 && ul_bits != 16 && ul_bits != 24 && ul_bits != 32)    
-                return 0;    
+            uint16_t tag = rd16(buf + pos + 8);      
+            if (tag != 1 && tag != 6 && tag != 7) return 0;  // PCM/A-law/μ-law  
+            ul_codec    = tag;  
+            ul_channels = rd16(buf + pos + 10);      
+            ul_rate     = rd32(buf + pos + 12);      
+            ul_balign   = rd16(buf + pos + 20);      
+            ul_bits     = rd16(buf + pos + 22);      
+            if (ul_channels < 1 || ul_channels > 2) return 0;      
+            if (ul_codec == 1) {  
+                if (ul_bits != 8 && ul_bits != 16 && ul_bits != 24 && ul_bits != 32)  
+                    return 0;  
+            } else {  
+                ul_bits = 8;                        // G.711 — всегда 8 бит/сэмпл  
+            }  
             if (ul_balign == 0)    
                 ul_balign = (uint16_t)(ul_channels * (ul_bits / 8));    
             if (ul_rate < 4000 || ul_rate > 192000) return 0;    
@@ -319,14 +325,36 @@ static uint32_t ul_parse_header(const uint8_t* buf, uint32_t avail) {
     }    
     return 0;                                       // data-чанк не найден в 1-м секторе    
 }    
+
+// ДЕКОДЕРЫ
+
+// G.711 A-law -> int16 (стандартное разворачивание).  
+static int16_t alaw_decode(uint8_t a) {  
+    a ^= 0x55;  
+    int32_t t = (a & 0x0F) << 4;  
+    uint8_t seg = (a & 0x70) >> 4;  
+    if (seg == 0)      t += 8;  
+    else if (seg == 1) t += 0x108;  
+    else               t = (t + 0x108) << (seg - 1);  
+    return (int16_t)((a & 0x80) ? t : -t);  
+}  
   
+// G.711 μ-law -> int16.  
+static int16_t ulaw_decode(uint8_t u) {  
+    u = ~u;  
+    int32_t t = (((u & 0x0F) << 3) + 0x84) << ((u & 0x70) >> 4);  
+    return (int16_t)((u & 0x80) ? (0x84 - t) : (t - 0x84));  
+}  
+
 // Извлечение одного входного отсчёта (mono = усреднение каналов) -> int16.    
-static int16_t ul_sample(const uint8_t* p) {    
-    int32_t sum = 0;    
-    for (uint16_t c = 0; c < ul_channels; c++) {    
-        const uint8_t* s = p + c * (ul_bits / 8);    
-        int32_t v;    
-        switch (ul_bits) {    
+static int16_t ul_sample(const uint8_t* p) {      
+    int32_t sum = 0;      
+    for (uint16_t c = 0; c < ul_channels; c++) {      
+        const uint8_t* s = p + c * (ul_bits / 8);      
+        int32_t v;      
+        if (ul_codec == 6)      v = alaw_decode(s[0]);  
+        else if (ul_codec == 7) v = ulaw_decode(s[0]);  
+        else switch (ul_bits) {      
             case 8:  v = ((int32_t)s[0] - 128) << 8; break;    
             case 16: v = (int16_t)rd16(s); break;    
             case 24: v = ((int32_t)s[0] | ((int32_t)s[1] << 8) |    
@@ -379,9 +407,9 @@ static void ul_feed(const uint8_t* buf) {
             ul_abort("bad WAV header");  
             return;  
         }      
-        Serial.printf("# fm: REC%u.WAV upload: %lu Hz %u ch %u bit\n",    
-                      (unsigned)ul_bank, (unsigned long)ul_rate,    
-                      (unsigned)ul_channels, (unsigned)ul_bits);    
+        Serial.printf("# fm: REC%u.WAV upload: %lu Hz %u ch %u bit codec=%u\n",      
+                      (unsigned)ul_bank, (unsigned long)ul_rate,      
+                      (unsigned)ul_channels, (unsigned)ul_bits, (unsigned)ul_codec);      
         pos = data_off;    
     }    
   
