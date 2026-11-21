@@ -23,9 +23,9 @@
 #define AF_FM_SET_CLUSTERS  16u                               // резерв под SET.TXT    
 #define AF_FM_SET_LBA       AF_FM_DATA_START    
     
-// WAV: 16000 Гц mono 16-bit, ресемплинг из 7732 Гц.    
-// out_samp_max = 56000*16000/7732 + 1 ~= 115884; +44 Б заголовок.    
-#define AF_FM_WAV_RATE      16000u    
+// WAV: 8000 Гц mono 16-bit, ресемплинг из 7732 Гц.      
+// out_samp_max = 56000*8000/7732 + 1 ~= 57942; +44 Б заголовок.      
+#define AF_FM_WAV_RATE      8000u      
 #define AF_FM_REC_RATE      7732u    
 #define AF_FM_WAV_MAX_SAMP  ((AF_REC_RAM_SAMP * AF_FM_WAV_RATE) / AF_FM_REC_RATE + 2u)    
 #define AF_FM_WAV_MAX_BYTES (44u + AF_FM_WAV_MAX_SAMP * 2u)    
