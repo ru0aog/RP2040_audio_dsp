@@ -12,10 +12,10 @@
 #include <string.h>    
 #include "af_snr.h"    
   
-#define SNR_N    256                    // FFT size  
-#define SNR_HOP  128                    // 50% overlap  
-#define SNR_BINS (SNR_N / 2 + 1)        // 129 бинов, шаг ~60.4 Гц @15464  
-#define SNR_Q    15  
+#define SNR_N    128  
+#define SNR_HOP  64  
+#define SNR_BINS (SNR_N/2 + 1)   // 65 
+#define SNR_Q    15                     // twiddles/окно/gain — Q15    
   
 // ---- Таблицы (init) ----  
 static int16_t snr_win[SNR_N];          // Hann Q15  
@@ -26,8 +26,8 @@ static uint16_t snr_rev[SNR_N];         // bit-reverse
 // ---- Состояние кадра ----    
 // int32: бины после FFT/256 с <<8-предусилением достигают ~2^23,    
 // int16 переполнялся бы на каждой стадии    
-static int32_t snr_re[SNR_N];    
-static int32_t snr_im[SNR_N];    
+static int16_t snr_re[SNR_N];   // int16 + >>1 на стадию, как fft_i/fft_q в rsid  
+static int16_t snr_im[SNR_N];  
 static int16_t snr_ola[SNR_HOP];        // выходной буфер кадра (128 отсчётов)  
 static int16_t snr_tail[SNR_HOP];       // хвост предыдущего кадра для overlap  
 static int16_t snr_in[SNR_N];           // входное кольцо кадра  
@@ -70,7 +70,7 @@ static bool      snr_sm_br    = false;  // фаза bit-reverse (иначе j=0 
 static uint32_t  snr_overrun  = 0;      // диагностика: кадр не успел за hop    
 
 // ---- Отладка: бин SNR_DBG_BIN (~1.2 кГц, внутри полосы) ----    
-#define SNR_DBG_BIN 20    
+#define SNR_DBG_BIN 10                  // ~1.2 кГц при N=128    
 static uint16_t snr_dbg_mag = 0; 
 
 // ---- isqrt uint32 ----  
@@ -232,8 +232,8 @@ static void snr_sm_service(void) {
             uint16_t n = 0;    
             for (; snr_sm_i < SNR_N && n < SNR_CHUNK; snr_sm_i++, n++) {    
                 uint16_t i = snr_sm_i;    
-                int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i]) >> (SNR_Q + 8));    
-                y = (int32_t)(((int64_t)y * 21846) >> SNR_Q);    
+                // re = x*W/128 после IFFT; re*W*21846 >> 8 = x*w^2*(2/3) — единичное усиление    
+                int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i] * 21846) >> 8);      
                 if (i < SNR_HOP) {    
                     y = snr_tail[i] + y;    
                     if (y > 32767) y = 32767; else if (y < -32768) y = -32768;    
@@ -259,10 +259,10 @@ void af_snr_init(void) {
     for (uint16_t i = 0; i < SNR_N; i++) {  
         snr_win[i] = (int16_t)(32767.0f * 0.5f *  
                      (1.0f - cosf(2.0f * (float)M_PI * i / SNR_N)));  
-        uint16_t r = 0;  
-        for (uint16_t b = 0; b < 8; b++)            // log2(256)=8  
-            r |= ((i >> b) & 1) << (7 - b);  
-        snr_rev[i] = r;  
+        uint16_t r = 0;    
+        for (uint16_t b = 0; b < 7; b++)            // log2(128)=7    
+            r |= ((i >> b) & 1) << (6 - b);    
+        snr_rev[i] = r;    
     }  
     for (uint16_t i = 0; i < SNR_N / 2; i++) {  
         float a = 2.0f * (float)M_PI * i / SNR_N;  
