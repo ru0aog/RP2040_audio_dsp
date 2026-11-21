@@ -36,6 +36,8 @@ struct af_bank_t {
     uint16_t rx_presmax;    // потолок подъёма, дБ x10 (15 = +1.5 дБ)  
     uint16_t rx_pres_freq;  // центр пика, Гц (1000..4000)  
     uint16_t rx_pres_q;     // добротность x100 (100 = 1.00)  
+    uint8_t  nb_on;         // noise blanker RX (0/1)  
+    uint16_t nb_thr_x10;    // порог NB x10 (30 = x3.0)  
     // --- TX ---  
     uint16_t tx_lo_hz;      // речевая полоса TX    
     uint16_t tx_hi_hz;    

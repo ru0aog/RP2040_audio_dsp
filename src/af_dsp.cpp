@@ -282,7 +282,15 @@ static volatile uint32_t rx_pres_freq_hz = AF_RX_PRES_FREQ_HZ;
 static volatile uint32_t rx_pres_q_x100  = AF_RX_PRES_Q_X100;  
 static volatile int32_t  rx_pres_max_q15 = AF_RX_PRES_MAX_Q15;  
 static int32_t           rx_presmax_db_x10 = 15;   // дБ x10 — для stats и банка  
-  
+
+// --- Noise Blanker RX (125 ksps, после CIC до HB) ---  
+static volatile bool nb_on = AF_NB_ON_DEFAULT;  
+static volatile int32_t nb_thr_x10 = AF_NB_THR_X10;  
+static int32_t  nb_env = 256;        // медленная EMA |x|, стартовый фон  
+static int32_t  nb_last = 0;         // последний «чистый» отсчёт (hold)  
+static uint8_t  nb_hold_cnt = 0;     // остаток удержания blank  
+static volatile uint32_t nb_hits = 0;// срабатываний с прошлого чтения stats  
+
 // HP-детектор ~1.5 кГц: отсекает гласные/F1, огибающая реагирует на согласные.  
 static int32_t rxp_hp_x1 = 0, rxp_hp_x2 = 0, rxp_hp_y1 = 0, rxp_hp_y2 = 0;  
 static int32_t rxp_hp_b0 = 0, rxp_hp_b1 = 0, rxp_hp_b2 = 0,  
@@ -917,7 +925,20 @@ int32_t  af_dsp_rxpres_env(void)  { return (int32_t)(rxp_env_q16 >> 16); }
 int32_t  af_dsp_rxpres_nf(void)   { return (int32_t)(rxp_nf_q16 >> 16); }  
 int32_t  af_dsp_rxpresmax(void)   { return rx_presmax_db_x10; }  // дБ x10, не Q15  
 uint32_t af_dsp_rxpresf(void)     { return rx_pres_freq_hz; }  
-uint32_t af_dsp_rxpresq(void)     { return rx_pres_q_x100; }  
+uint32_t af_dsp_rxpresq(void)     { return rx_pres_q_x100; }
+void     af_dsp_set_nb(bool on) {  
+    if (on && !nb_on) { nb_env = 256; nb_last = 0; nb_hold_cnt = 0; } // чистый старт  
+    nb_on = on;  
+}  
+bool     af_dsp_nb_on(void) { return nb_on; }  
+void     af_dsp_set_nbthr(int32_t x10) {  
+    if (x10 < AF_NB_THR_MIN) x10 = AF_NB_THR_MIN;  
+    if (x10 > AF_NB_THR_MAX) x10 = AF_NB_THR_MAX;  
+    nb_thr_x10 = x10;  
+}  
+int32_t  af_dsp_nbthr(void) { return nb_thr_x10; }  
+// Срабатываний с прошлого чтения (stats/dump). Чтение сбрасывает.  
+uint32_t af_dsp_nb_hits(void) { uint32_t h = nb_hits; nb_hits = 0; return h; }  
 int32_t  af_dsp_rx_in_lvl(void)   { return (int32_t)(rx_in_lvl_q16 >> 16); }  
 // Пик |x| после FIR с момента прошлого чтения (stats/dump). Чтение сбрасывает.  
 int32_t  af_dsp_rx_in_peak(void)  { int32_t p = rx_in_peak; rx_in_peak = 0; return p; }  
@@ -1180,7 +1201,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rxp_hp_x1 = rxp_hp_x2 = rxp_hp_y1 = rxp_hp_y2 = 0;  
         rxp_pk_x1 = rxp_pk_x2 = rxp_pk_y1 = rxp_pk_y2 = 0;  
         rxp_env_q16 = rxp_nf_q16 = (int64_t)256 << 16;  
-        rxp_k_q15 = rxp_k_tgt_q15 = 0;  
+        rxp_k_q15 = rxp_k_tgt_q15 = 0;
+        nb_env = 256;  nb_last = 0;  nb_hold_cnt = 0;  
         agc_avg_q16  = (int64_t)4096 << 16;  
         lim_peak_q16 = (int64_t)2048 << 16;  
         rx_in_lvl_q16 = (int64_t)256 << 16;    
@@ -1212,7 +1234,23 @@ void __not_in_flash_func(af_dsp_poll)(void) {
   
             // Децимация 250k -> 15.625k: CIC/2 -> HB/2 -> HB/2 -> HB/2
             int32_t y;  
-            if (!cic_push(x, &y))        continue;  
+            if (!cic_push(x, &y))        continue;
+            // Noise Blanker: импульсные помехи до HB/FIR (125 ksps).  
+            // |y| > env*thr -> hold последнего чистого отсчёта + AF_NB_HOLD  
+            // на хвост. env — EMA |y| k=1/1024; в blank env не обновляем,  
+            // чтобы импульс не задирал собственный порог.  
+            if (nb_on) {  
+                int32_t ay = (y < 0) ? -y : y;  
+                if (nb_hold_cnt > 0 || ay > (nb_env * nb_thr_x10) / 10) {  
+                    if (nb_hold_cnt == 0) nb_hits++;  
+                    nb_hold_cnt = AF_NB_HOLD;  
+                    y = nb_last;  
+                } else {  
+                    nb_env += (ay - nb_env) >> 10;  
+                    nb_last = y;  
+                }  
+                if (nb_hold_cnt > 0) nb_hold_cnt--;  
+            }  
             if (!hb_push(&hb[0], y, &y)) continue;  
             if (!hb_push(&hb[1], y, &y)) continue;  
             if (!hb_push(&hb[2], y, &y)) continue;  

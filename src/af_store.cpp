@@ -51,7 +51,7 @@
   
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
-#define AF_STORE_VER      5   // было 4: +rx_pres_* в af_bank_t (RX presence EQ)  
+#define AF_STORE_VER      6   // было 5: +nb_* в af_bank_t (RX noise blanker)    
   
 // Смещение сектора банков от начала flash — последний сектор чипа.  
 // Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
@@ -230,11 +230,13 @@ void af_store_snapshot(af_bank_t* out) {
     out->nr_makeup    = (uint32_t)af_dsp_nrmakeup();      
     out->nt_mu        = (uint16_t)af_dsp_ntmu();  
     out->nr_mu        = (uint16_t)af_dsp_nrmu();  
-    out->rx_pres_on   = af_dsp_rxpres_on() ? 1 : 0;  
-    out->rx_presmax   = (uint16_t)af_dsp_rxpresmax();  
-    out->rx_pres_freq = (uint16_t)af_dsp_rxpresf();  
-    out->rx_pres_q    = (uint16_t)af_dsp_rxpresq();  
-    // TX  
+    out->rx_pres_on   = af_dsp_rxpres_on() ? 1 : 0;    
+    out->rx_presmax   = (uint16_t)af_dsp_rxpresmax();    
+    out->rx_pres_freq = (uint16_t)af_dsp_rxpresf();    
+    out->rx_pres_q    = (uint16_t)af_dsp_rxpresq();    
+    out->nb_on        = af_dsp_nb_on() ? 1 : 0;    
+    out->nb_thr_x10   = (uint16_t)af_dsp_nbthr();    
+    // TX    
     out->tx_lo_hz      = (uint16_t)af_tx_lo_hz();        
     out->tx_hi_hz      = (uint16_t)af_tx_hi_hz();        
     out->tx_ratio_x10  = (uint16_t)af_tx_ratio();      
@@ -348,11 +350,14 @@ bool af_store_load(uint8_t idx) {
     af_dsp_set_nrmu((int32_t)b.nr_mu);  
     // RX presence: параметры до флага on — при включении блок  
     // стартует с уже загруженными f/q/max, а не со старыми.  
-    af_dsp_set_rxpresmax((int32_t)b.rx_presmax);  
-    af_dsp_set_rxpresf((uint32_t)b.rx_pres_freq);  
-    af_dsp_set_rxpresq((uint32_t)b.rx_pres_q);  
-    af_dsp_set_rxpres(b.rx_pres_on != 0);  
-    // TX: весь тракт. Порядок — как в tx_apply_profile: сначала  
+    af_dsp_set_rxpresmax((int32_t)b.rx_presmax);    
+    af_dsp_set_rxpresf((uint32_t)b.rx_pres_freq);    
+    af_dsp_set_rxpresq((uint32_t)b.rx_pres_q);    
+    af_dsp_set_rxpres(b.rx_pres_on != 0);    
+    // Noise blanker: порог до флага on — блок стартует с загруженным thr.    
+    af_dsp_set_nbthr((int32_t)b.nb_thr_x10);    
+    af_dsp_set_nb(b.nb_on != 0);    
+    // TX: весь тракт. Порядок — как в tx_apply_profile: сначала    
     // параметры, от которых зависят пересчёты (split, presfreq/q,    
     // shelffreq/q, notchf), затем on/off и уровни.    
     af_tx_set_band(b.tx_lo_hz, b.tx_hi_hz);    
@@ -452,11 +457,13 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].lim_ceil = LIMIT_CEIL;      
         b[i].nr_depth = NR_DEPTH_Q15;  b[i].nr_makeup = NR_MAKEUP_Q15;      
         b[i].nt_mu = NOTCH_MU_Q;  b[i].nr_mu = NR_MU_Q;  
-        b[i].rx_pres_on   = AF_RX_PRES_ON_DEFAULT;  
-        b[i].rx_presmax   = 15;                    // +1.5 дБ  
-        b[i].rx_pres_freq = AF_RX_PRES_FREQ_HZ;    // 2300  
-        b[i].rx_pres_q    = AF_RX_PRES_Q_X100;     // 100  
-        // TX — рабочая точка (как базис tx_apply_profile)  
+        b[i].rx_pres_on   = AF_RX_PRES_ON_DEFAULT;    
+        b[i].rx_presmax   = 15;                    // +1.5 дБ    
+        b[i].rx_pres_freq = AF_RX_PRES_FREQ_HZ;    // 2300    
+        b[i].rx_pres_q    = AF_RX_PRES_Q_X100;     // 100    
+        b[i].nb_on        = AF_NB_ON_DEFAULT;      // 0 — выключен    
+        b[i].nb_thr_x10   = AF_NB_THR_X10;         // 30 = x3.0    
+        // TX — рабочая точка (как базис tx_apply_profile)    
         b[i].tx_lo_hz = 300;  b[i].tx_hi_hz = 2700;      
         b[i].tx_ratio_x10 = 40;  b[i].tx_clip = 26000;      
         b[i].tx_agc_target = 18000;  b[i].tx_agc_max_x10 = AF_TX_AGC_MAX_X10;      

@@ -53,6 +53,13 @@ int32_t af_dsp_rxpres_nf(void);                // шумовой пол (stats)
 int32_t af_dsp_rx_in_lvl(void);                // уровень входа после FIR (S-meter)  
 int32_t af_dsp_rx_in_peak(void);               // пик |x| после FIR с прошлого чтения (сбрасывает)  
 
+// Noise Blanker RX: подавитель импульсных помех на 125 ksps (после CIC).  
+void     af_dsp_set_nb(bool on);  
+bool     af_dsp_nb_on(void);  
+void     af_dsp_set_nbthr(int32_t x10);   // порог x10 (15..100, 30 = x3.0)  
+int32_t  af_dsp_nbthr(void);  
+uint32_t af_dsp_nb_hits(void);            // срабатываний с прошлого чтения (сбрасывает)  
+
 // Телеграфный фильтр (3 биквада BPF + шум, после FIR).  
 // При включении подтягивает полосу FIR к f0±250 Гц, при выключении —  
 // восстанавливает сохранённую.  
@@ -131,5 +138,3 @@ int32_t af_dsp_nrdepth(void);
 void    af_dsp_set_nrmakeup(int32_t v);  // makeup-gain Q15, 0..131072  
 int32_t af_dsp_nrmakeup(void);  
 
-void    af_dsp_set_nrmode(uint8_t m);  // 0=LMS, 1=spectral  
-uint8_t af_dsp_nrmode(void);  
