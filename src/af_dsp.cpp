@@ -232,6 +232,133 @@ static inline int32_t __not_in_flash_func(rx_notch_push)(int32_t x) {
 }  
 
 // ---------------------------------------------------------------------------  
+// Dynamic Presence EQ RX: SNR-адаптивный подъём ~2.3 кГц.  
+// Порт AF_TX_PRES_* из af_tx.cpp. Peaking-биквад после АРУ (урок BUG-007:  
+// АЧХ-формирующие каскады — после контура АРУ). k_dyn управляется  
+// огибающей ВЧ-полосы с трекером шумового пола: в паузах k→0, шум не  
+// поднимается. Всё int32/Q15/Q24, деления только per-block.  
+// ---------------------------------------------------------------------------  
+static volatile bool     rx_pres_on      = false;  
+static volatile uint32_t rx_pres_freq_hz = AF_RX_PRES_FREQ_HZ;  
+static volatile uint32_t rx_pres_q_x100  = AF_RX_PRES_Q_X100;  
+static volatile int32_t  rx_pres_max_q15 = AF_RX_PRES_MAX_Q15;  
+  
+// HP-детектор ~1.5 кГц: отсекает гласные/F1, огибающая реагирует на согласные.  
+static int32_t rxp_hp_x1 = 0, rxp_hp_x2 = 0, rxp_hp_y1 = 0, rxp_hp_y2 = 0;  
+static int32_t rxp_hp_b0 = 0, rxp_hp_b1 = 0, rxp_hp_b2 = 0,  
+               rxp_hp_a1 = 0, rxp_hp_a2 = 0;  
+  
+// Peaking-биквад (Q15 DF-I, полный набор коэффициентов — глубина меняется).  
+static int32_t rxp_pk_x1 = 0, rxp_pk_x2 = 0, rxp_pk_y1 = 0, rxp_pk_y2 = 0;  
+static int32_t rxp_pk_b0 = 32768, rxp_pk_b1 = 0, rxp_pk_b2 = 0,  
+               rxp_pk_a1 = 0, rxp_pk_a2 = 0;   // старт = байпас  
+  
+static int64_t rxp_env_q16    = (int64_t)256 << 16;  // EMA |hp|, Q16  
+static int64_t rxp_nf_q16     = (int64_t)256 << 16;  // noise floor, Q16  
+static int32_t rxp_k_q15      = 0;                   // сглаженный k_dyn, Q15  
+static int32_t rxp_k_tgt_q15  = 0;                   // цель k (per-block)  
+static uint8_t rxp_decim      = 0;                   // дециматор sidechain ÷2  
+  
+// Проектирование HP-детектора (RBJ high-pass). Core 0, float допустим.  
+static void rx_pres_hp_design(void) {  
+    const float w = 2.0f * PI * (float)AF_RX_PRES_HP_HZ / (float)AF_FS_OUT_HZ;  
+    const float alpha = sinf(w) / (2.0f * 0.7071f);   // Q = 0.707  
+    const float a0 = 1.0f + alpha;  
+    rxp_hp_b0 = (int32_t)lrintf((1.0f + cosf(w)) * 0.5f / a0 * 32768.0f);  
+    rxp_hp_b1 = (int32_t)lrintf(-(1.0f + cosf(w)) / a0 * 32768.0f);  
+    rxp_hp_b2 = rxp_hp_b0;  
+    rxp_hp_a1 = (int32_t)lrintf(-2.0f * cosf(w) / a0 * 32768.0f);  
+    rxp_hp_a2 = (int32_t)lrintf((1.0f - alpha) / a0 * 32768.0f);  
+    __dmb();  
+}  
+  
+// Проектирование peaking-биквада с заданным подъёмом gain_q15 (32768 = +0 дБ,  
+// 32768+rx_pres_max_q15 = полный подъём). Core 0 / per-block, float допустим.  
+static void __not_in_flash_func(rx_pres_pk_design)(int32_t gain_q15) {  
+    const float A  = (float)gain_q15 / 32768.0f;   // линейное усиление пика:  
+                                                  // max_q15 = (A_max-1)*32768   
+    const float w  = 2.0f * PI * (float)rx_pres_freq_hz / (float)AF_FS_OUT_HZ;  
+    const float Q  = (float)rx_pres_q_x100 / 100.0f;  
+    const float alpha = sinf(w) / (2.0f * Q);  
+    const float a0 = 1.0f + alpha / A;  
+    rxp_pk_b0 = (int32_t)lrintf((1.0f + alpha * A) / a0 * 32768.0f);  
+    rxp_pk_b1 = (int32_t)lrintf(-2.0f * cosf(w) / a0 * 32768.0f);  
+    rxp_pk_b2 = (int32_t)lrintf((1.0f - alpha * A) / a0 * 32768.0f);  
+    rxp_pk_a1 = rxp_pk_b1;  
+    rxp_pk_a2 = (int32_t)lrintf((1.0f - alpha / A) / a0 * 32768.0f);  
+    __dmb();  
+}  
+  
+// Один отсчёт: HP-детектор + EMA + peaking. k_dyn пересчитывается per-block  
+// в af_dsp_poll (децимировано ÷2) — здесь только фильтрация.  
+static inline int32_t __not_in_flash_func(rx_pres_push)(int32_t x) {  
+    // HP-детектор (DF-I, Q15)  
+    int64_t acc = (int64_t)rxp_hp_b0 * x + (int64_t)rxp_hp_b1 * rxp_hp_x1  
+                + (int64_t)rxp_hp_b2 * rxp_hp_x2  
+                - (int64_t)rxp_hp_a1 * rxp_hp_y1  
+                - (int64_t)rxp_hp_a2 * rxp_hp_y2;  
+    int32_t hp = (int32_t)(acc >> 15);  
+    rxp_hp_x2 = rxp_hp_x1; rxp_hp_x1 = x;  
+    rxp_hp_y2 = rxp_hp_y1; rxp_hp_y1 = hp;  
+  
+    // EMA |hp| Q16 + сглаживание k: децимировано ÷2.  
+    if (++rxp_decim >= 2) {  
+        rxp_decim = 0;  
+        int64_t ahp = (hp < 0) ? -(int64_t)hp : (int64_t)hp;  
+        int64_t tgt = ahp << 16;  
+        int64_t d = tgt - rxp_env_q16;  
+        rxp_env_q16 += (d * (d > 0 ? (int64_t)AF_RX_PRES_ENV_ATT_Q24  
+                                   : (int64_t)AF_RX_PRES_ENV_REL_Q24)) >> 24;  
+  
+        // k -> rxp_k_tgt_q15: атака ~10 мс, спад ~100 мс  
+        // (константы Q24 per-sample — как AF_TX_PRES_K_* в TX).  
+        int32_t dk = rxp_k_tgt_q15 - rxp_k_q15;  
+        rxp_k_q15 += (int32_t)(((int64_t)dk *  
+            (dk > 0 ? (int64_t)AF_RX_PRES_K_ATT_Q24  
+                    : (int64_t)AF_RX_PRES_K_REL_Q24)) >> 24);  
+    }  
+  
+    // Peaking-биквад (DF-I, Q15); при k=0 коэффициенты = байпас  
+    acc = (int64_t)rxp_pk_b0 * x + (int64_t)rxp_pk_b1 * rxp_pk_x1  
+        + (int64_t)rxp_pk_b2 * rxp_pk_x2  
+        - (int64_t)rxp_pk_a1 * rxp_pk_y1  
+        - (int64_t)rxp_pk_a2 * rxp_pk_y2;  
+    int32_t y = (int32_t)(acc >> 15);  
+    rxp_pk_x2 = rxp_pk_x1; rxp_pk_x1 = x;  
+    rxp_pk_y2 = rxp_pk_y1; rxp_pk_y1 = y;  
+    return y;  
+}  
+  
+// Per-block пересчёт k_dyn и коэффициентов пика. Вызывается из af_dsp_poll  
+// один раз на выходной отсчётный блок (не per-sample).  
+static void __not_in_flash_func(rx_pres_block_update)(void) {  
+    int32_t env = (int32_t)(rxp_env_q16 >> 16);  
+    int32_t nf  = (int32_t)(rxp_nf_q16 >> 16);  
+  
+    // Трекер nf: вниз быстро, вверх — сдвиговая EMA; только при низкой  
+    // огибающей (env < 2*nf — речь не попадает в оценку шума).  
+    if (env < nf) {  
+        rxp_nf_q16 = rxp_env_q16;                       // вниз — мгновенно  
+    } else if (env < 2 * nf) {  
+        rxp_nf_q16 += (rxp_env_q16 - rxp_nf_q16) >> AF_RX_PRES_NF_UP_SHIFT;  
+    }  
+    if (rxp_nf_q16 < ((int64_t)AF_RX_PRES_NF_MIN << 16))  
+        rxp_nf_q16 = (int64_t)AF_RX_PRES_NF_MIN << 16;  
+    nf = (int32_t)(rxp_nf_q16 >> 16);  
+  
+    // k = clamp((env - 2*nf) / (8*nf), 0, 1) в Q15 — одно деление per-block.  
+    int32_t num = env - 2 * nf;  
+    int32_t den = 8 * nf;  
+    int32_t k = (num <= 0) ? 0 : (num >= den) ? 32768  
+                              : (int32_t)(((int64_t)num << 15) / den);  
+  
+    rxp_k_tgt_q15 = k;   // сглаживание — в rx_pres_push (per-sample, ÷2)  
+  
+    // Пересчёт коэффициентов пика под текущий сглаженный k.  
+    rx_pres_pk_design(32768 + (int32_t)(((int64_t)rxp_k_q15 * rx_pres_max_q15) >> 15));  
+}  
+
+// ---------------------------------------------------------------------------  
 // Телеграфный фильтр: AF_CW_SECTIONS каскадных биквадов BPF (RBJ, Q15).  
 // Коэффициенты пересчитываются на Core 0 при смене f0/BW.  
 // Каскад из N одинаковых секций сужает полосу: BW_sec = BW / sqrt(2^(1/N)-1).  
@@ -707,7 +834,38 @@ void af_dsp_set_rxnotch(bool on) {
     }    
     rx_notch_on = on;  
 }  
-bool af_dsp_rxnotch_on(void) { return rx_notch_on; }  
+bool af_dsp_rxnotch_on(void) { return rx_notch_on; }
+
+void af_dsp_set_rxpres(bool on) {  
+    if (on && !rx_pres_on) {              // чистый старт — без щелчка  
+        rxp_hp_x1 = rxp_hp_x2 = rxp_hp_y1 = rxp_hp_y2 = 0;  
+        rxp_pk_x1 = rxp_pk_x2 = rxp_pk_y1 = rxp_pk_y2 = 0;  
+        rxp_env_q16 = rxp_nf_q16 = (int64_t)256 << 16;  
+        rxp_k_q15 = rxp_k_tgt_q15 = 0;  
+        rx_pres_pk_design(32768);         // байпас-коэффициенты  
+    }  
+    rx_pres_on = on;  
+}  
+bool     af_dsp_rxpres_on(void)  { return rx_pres_on; }  
+void     af_dsp_set_rxpresmax(int32_t db_x10) {  
+    if (db_x10 < 0)  db_x10 = 0;  
+    if (db_x10 > 60) db_x10 = 60;         // потолок +6 дБ  
+    // дБx10 -> Q15 приращения: gain_q15 = 32768*(10^(dB/20) - 1)  
+    rx_pres_max_q15 = (int32_t)lrintf((powf(10.0f, db_x10 / 200.0f) - 1.0f) * 32768.0f);  
+}  
+void     af_dsp_set_rxpresf(uint32_t hz) {  
+    if (hz < 1000) hz = 1000;  
+    if (hz > 4000) hz = 4000;  
+    rx_pres_freq_hz = hz;  
+}  
+void     af_dsp_set_rxpresq(uint32_t q_x100) {  
+    if (q_x100 < 30)  q_x100 = 30;  
+    if (q_x100 > 300) q_x100 = 300;  
+    rx_pres_q_x100 = q_x100;  
+}  
+int32_t  af_dsp_rxpres_k(void)    { return rxp_k_q15; }        // для stats  
+int32_t  af_dsp_rxpres_env(void)  { return (int32_t)(rxp_env_q16 >> 16); }  
+int32_t  af_dsp_rxpres_nf(void)   { return (int32_t)(rxp_nf_q16 >> 16); }  
   
 // Возвращает false, если команда отклонена (NT on — приоритет NT;  
 // CW on — NR в узкой полосе бесполезен и перегружает Core 1).    
@@ -884,7 +1042,9 @@ void af_dsp_init(void) {
   
     af_fir_init();  
     cw_design();          // начальные коэффициенты CW-секций  
-    rx_notch_design();    // коэффициенты фиксированных нотчей RX  
+    rx_notch_design();    // коэффициенты фиксированных нотчей RX
+    rx_pres_hp_design();      // HP-детектор presence  
+    rx_pres_pk_design(32768); // peaking = байпас при старте  
     af_tx_init();         // TX: FIR-компрессор-клиппер    
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
@@ -983,8 +1143,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             if (notch_on) y = notch_lms_push(y);  
             if (nr_on)    y = nr_lms_push(y);  
             int16_t s = agc_limit(y);          
-            if (rx_notch_on) s = (int16_t)rx_notch_push(s);  // гребёнка — после АРУ,    
-                                                           // чтобы контур не «отменял» нотчи    
+            if (rx_notch_on) s = (int16_t)rx_notch_push(s);  // гребёнка — после АРУ,  
+                                                           // чтобы контур не «отменял» нотчи  
+            if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —  
+                                                           // подъём до +6 дБ может превысить int16  
             if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса    
             s = af_voice_mix(s);                       // голосовые сообщения          
             if (af_rec_active == 2) s = af_rec_mix(s); // подмес воспроизведения слота
@@ -996,7 +1158,9 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 ramp_val += 100;    
             }    
             out_emit(sat16(s));  
-        }  
+        }  // конец for по отсчётам блока  
+        if (rx_pres_on && !tx_on && !bypass_on) rx_pres_block_update();  
+
         af_capture_release();    
     
         const uint32_t dt = time_us_32() - t0;    

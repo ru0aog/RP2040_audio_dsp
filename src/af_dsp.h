@@ -30,7 +30,16 @@ bool     af_dsp_notch_on(void);
   
 // Шумоподавление NR. Возвращает false, если отклонено (NT on или CW on)  
 bool     af_dsp_set_nr(bool on);  
-bool     af_dsp_nr_on(void);  
+bool     af_dsp_nr_on(void);
+
+void    af_dsp_set_rxpres(bool on);  
+bool    af_dsp_rxpres_on(void);  
+void    af_dsp_set_rxpresmax(int32_t db_x10);  
+void    af_dsp_set_rxpresf(uint32_t hz);  
+void    af_dsp_set_rxpresq(uint32_t q_x100);  
+int32_t af_dsp_rxpres_k(void);  
+int32_t af_dsp_rxpres_env(void);  
+int32_t af_dsp_rxpres_nf(void);  
   
 // Телеграфный фильтр (3 биквада BPF + шум, после FIR).  
 // При включении подтягивает полосу FIR к f0±250 Гц, при выключении —  

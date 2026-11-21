@@ -84,6 +84,19 @@
 #define AF_RX_NOTCH_R_Q15       32650   // r = 0.995 (шире -> 32000)  
 #define AF_RX_NOTCH_ON_DEFAULT  1       // 1 = нотчи включены при старте  
 
+// Dynamic Presence EQ RX: SNR-адаптивный подъём ~2.3 кГц (порт AF_TX_PRES_*).  
+#define AF_RX_PRES_HP_HZ        1500u   // срез HP-детектора  
+#define AF_RX_PRES_ENV_ATT_Q24  300000u // EMA огибающей: атака ~3 мс  
+#define AF_RX_PRES_ENV_REL_Q24  30000u  // спад ~50 мс  
+#define AF_RX_PRES_NF_UP_SHIFT  12      // nf вверх ~медленно (EMA 1/4096)  
+#define AF_RX_PRES_NF_MIN       8u      // защита от деления на ноль  
+#define AF_RX_PRES_K_ATT_Q24    100000u // k_dyn: атака ~10 мс  
+#define AF_RX_PRES_K_REL_Q24    15000u  // спад ~100 мс  
+#define AF_RX_PRES_FREQ_HZ      2300u   // центр presence-пика  
+#define AF_RX_PRES_Q_X100       100u    // Q = 1.00  
+#define AF_RX_PRES_MAX_Q15      (int32_t)(0.1885f * 32768.0f)  // +1.5 дБ дефолт  
+#define AF_RX_PRES_ON_DEFAULT   0  
+
 // ---------------------------------------------------------------------------    
 // TX-тракт (SSB): речевая полоса, компрессор, клиппер    
 // ---------------------------------------------------------------------------    
