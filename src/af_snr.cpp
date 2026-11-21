@@ -47,6 +47,12 @@ static int32_t snr_makeup = 32768;      // Q15 makeup (из nrmakeup), ×1 по 
   
 #define SNR_GMIN  3277                  // gain floor 0.1 Q15 — против musical noise  
 
+// ---- Полоса обработки NR: 100..3500 Гц @ fs=15464, шаг 60.4 Гц ----
+// Бин 2 = 120.8 Гц, бин 58 = 3503.6 Гц. Вне полосы NR бесполезен —
+// пост-FIR всё равно отрежет; не тратим такты на 129 бинов.
+#define SNR_BIN_LO 2
+#define SNR_BIN_HI 58
+
 // ---- Отладка: бин SNR_DBG_BIN (~1.2 кГц, внутри полосы) ----    
 #define SNR_DBG_BIN 20    
 static uint16_t snr_dbg_mag = 0; 
@@ -119,8 +125,10 @@ static void snr_frame(void) {
     }    
     snr_fft(snr_re, snr_im, false);  
   
-    // Per-bin: magnitude -> minima tracker -> gain -> apply  
-    for (uint16_t k = 0; k < SNR_BINS; k++) {  
+    // Per-bin: magnitude -> minima tracker -> gain -> apply.
+    // Только полоса 100..3500 Гц; бины вне её не трогаем — остаются
+    // эрмитовыми (gain=1), пост-FIR отрежет их.
+    for (uint16_t k = SNR_BIN_LO; k <= SNR_BIN_HI; k++) {
         int32_t re = snr_re[k], im = snr_im[k];      
         // re,im <= 2^15: re²+im² <= 2^31 — влезает в uint32
         uint32_t sq = (uint32_t)(re * re) + (uint32_t)(im * im);
