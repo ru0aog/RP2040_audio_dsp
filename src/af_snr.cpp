@@ -44,7 +44,6 @@ static int32_t snr_depth  = 24576;      // beta Q15 (из nrdepth)
 static int32_t snr_smsh   = 2;          // сдвиг сглаживания gain  
 static uint8_t snr_warmup = 0;          // кадры прогрева: gain=1, только сбор шума  
 static int32_t snr_makeup = 32768;      // Q15 makeup (из nrmakeup), ×1 по умолчанию  
-static bool    snr_first  = true;       // первый кадр: n = mag (первичная оценка шума)
   
 #define SNR_GMIN  3277                  // gain floor 0.1 Q15 — против musical noise  
 
@@ -128,13 +127,17 @@ static void snr_frame(void) {
             ((int64_t)re * re + (int64_t)im * im) >> 16));    
         if (k == SNR_DBG_BIN) snr_dbg_mag = mag;   // отладка: mag бина ~1.2 кГц  
       
-        uint32_t n;
-        if (snr_first) {
-            n = mag;                                // первичная оценка = текущий спектр
+        uint32_t n = snr_noise[k];
+        if (snr_warmup > 0) {
+            // warmup: n = max(n, mag) — набираем пиковую оценку шума
+            if (mag > n) n = mag;
+        } else if (mag < n) {
+            n = mag;                                // быстро вниз
         } else {
-            n = snr_noise[k];
-            if (mag < n) n = mag;                   // быстро вниз
-            else         n += (mag - n) >> 6;       // медленно вверх ~1с
+            // медленно вверх, но не меньше шага 1 (иначе застревает на 0)
+            uint32_t inc = (mag - n) >> 6;
+            if (inc == 0) inc = 1;
+            n += inc;
         }
         snr_noise[k] = n;
 
@@ -165,8 +168,6 @@ static void snr_frame(void) {
             snr_im[SNR_N - k] = -snr_im[k];  
         }  
     }
-    snr_first = false;                              // первичная оценка снята
-
     snr_fft(snr_re, snr_im, true);                  // IFFT (scaling тот же)
   
     // OLA: окно синтеза + компенсация hann^2 (~1.5) -> *2/3.  
@@ -221,8 +222,7 @@ void af_snr_reset(void) {
         snr_gain[k]  = 32768;  
     }  
     snr_in_pos = snr_out_pos = snr_out_avail = 0;  
-    snr_warmup = 2;                     // 2 кадра (33 мс) — только заполнение OLA
-    snr_first  = true;                  // первичная оценка шума по первому кадру
+    snr_warmup = 2;                     // 2 кадра (33 мс) — набор пиковой оценки шума
 }  
   
 int32_t af_snr_push(int32_t x) {    
