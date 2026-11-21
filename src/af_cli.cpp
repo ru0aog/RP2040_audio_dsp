@@ -174,11 +174,10 @@ static void cli_stats(void) {
                   (long)af_dsp_nrmakeup(),    
                   (long)af_dsp_ntmu(),    
                   (long)af_dsp_nrmu());    
-    Serial.printf("#   snr     : mag=%lu n=%lu g=%ld ovr=%lu (bin20 ~1.2kHz)\n",    
-                  (unsigned long)af_snr_dbg_mag(),    
-                  (unsigned long)af_snr_dbg_noise(),    
-                  (long)af_snr_dbg_gain(),  
-                  (unsigned long)af_snr_dbg_overrun());  
+    Serial.printf("#   snr     : mag=%lu n=%lu g=%ld (bin20 ~1.2kHz)\n",  
+                  (unsigned long)af_snr_dbg_mag(),  
+                  (unsigned long)af_snr_dbg_noise(),  
+                  (long)af_snr_dbg_gain());  
     Serial.printf("#   rxpres  = %s pmax=%ld f=%lu q=%lu   env=%ld nf=%ld k=%ld\n",  
                   af_dsp_rxpres_on() ? "on" : "off",  
                   (long)af_dsp_rxpresmax(),  
@@ -693,8 +692,7 @@ static const af_param_t AF_PARAMS[] = {
     { "agc min",     PT_X100,  offsetof(af_bank_t, agc_min_x100),   p_set_agcmin },  
     { "lim ceil",    PT_U16,   offsetof(af_bank_t, lim_ceil),       P_SET(af_dsp_set_limceil) },  
     { "nr depth",    PT_U16,   offsetof(af_bank_t, nr_depth),       P_SET(af_dsp_set_nrdepth) },  
-    { "nr makeup",   PT_U16,   offsetof(af_bank_t, nr_makeup),      P_SET(af_dsp_set_nrmakeup) },
-    { "nr mode",     PT_U8,    offsetof(af_bank_t, nr_mode),        P_SET(af_dsp_set_nrmode) },  
+    { "nr makeup",   PT_U16,   offsetof(af_bank_t, nr_makeup),      P_SET(af_dsp_set_nrmakeup) },  
     { "nt mu",       PT_U16,   offsetof(af_bank_t, nt_mu),          P_SET(af_dsp_set_ntmu) },  
     { "nr mu",       PT_U16,   offsetof(af_bank_t, nr_mu),          P_SET(af_dsp_set_nrmu) },  
     { "rx pres",     PT_ONOFF, offsetof(af_bank_t, rx_pres_on),     P_SET(af_dsp_set_rxpres) },  
@@ -1031,17 +1029,15 @@ static void cli_exec(char* line) {
     else if (strcmp(cmd, "nr") == 0) {    
         char* s = strtok(NULL, " \t");    
         if (s == NULL) { Serial.println("# ERR: nr on|off|spec|lms"); return; }    
-        if (strcmp(s, "spec") == 0) {      
-            af_dsp_set_nrmode(1);      
-            af_fm_request_sync();   // nr mode — банковый параметр, cur изменился  
-            Serial.println("# OK nrmode=spec (спектральный FFT-256)");      
-            return;      
-        }      
-        if (strcmp(s, "lms") == 0) {      
-            af_dsp_set_nrmode(0);      
-            af_fm_request_sync();  
-            Serial.println("# OK nrmode=lms (LMS-ALE)");      
-            return;      
+        if (strcmp(s, "spec") == 0) {    
+            af_dsp_set_nrmode(1);    
+            Serial.println("# OK nrmode=spec (спектральный FFT-256)");    
+            return;    
+        }    
+        if (strcmp(s, "lms") == 0) {    
+            af_dsp_set_nrmode(0);    
+            Serial.println("# OK nrmode=lms (LMS-ALE)");    
+            return;    
         }    
         bool on = (strcmp(s, "on") == 0);      
         if (af_dsp_set_nr(on)) {        
