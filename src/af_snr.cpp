@@ -48,16 +48,17 @@ static int32_t snr_makeup = 32768;      // Q15 makeup (из nrmakeup), ×1 по 
 #define SNR_GMIN  3277                  // gain floor 0.1 Q15 — против musical noise  
   
 // ---- isqrt uint32 ----  
-static uint16_t snr_isqrt(uint32_t v) {  
-    uint32_t r = 0, b = 0x8000;  
-    while (b > v) b >>= 2;  
-    while (b) {  
-        if (v >= r + b) { v -= r + b; r = (r >> 1) + b; }  
-        else r >>= 1;  
-        b >>= 2;  
-    }  
-    return (uint16_t)r;  
-}  
+// ---- isqrt uint32: классический битовый, b — степень 4 ----    
+static uint16_t snr_isqrt(uint32_t v) {    
+    uint32_t r = 0, b = 1u << 30;         // наибольшая степень 4 <= uint32    
+    while (b > v) b >>= 2;    
+    while (b) {    
+        if (v >= r + b) { v -= r + b; r = (r >> 1) + b; }    
+        else r >>= 1;    
+        b >>= 2;    
+    }    
+    return (uint16_t)r;    
+}    
   
 // ---- FFT radix-2 in-place, re/im int16, scaling >>1 на стадию ----  
 static void snr_fft(int32_t *re, int32_t *im, bool inverse) {    
