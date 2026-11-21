@@ -212,8 +212,8 @@ void af_fm_sync(void) {
         // Re-enumerate только при появлении файла (пусто -> непусто):    
         // заливка voice14, первая запись в слот. Изменение размера    
         // существующего файла — без перемонтирования.    
-        if (!first_sync && prev_sizes[i] == 0 && wav_sizes[i] != 0)    
-            fm_sizes_changed = true;    
+        if (!first_sync && prev_sizes[i] == 44 && wav_sizes[i] != 44)      
+            fm_sizes_changed = true;      
         prev_sizes[i] = wav_sizes[i];    
     }        
     first_sync = false;    
