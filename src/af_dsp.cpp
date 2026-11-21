@@ -1012,7 +1012,7 @@ int32_t af_dsp_nrmakeup(void) { return nr_makeup_q15; }
 void af_dsp_set_bypass(bool on) { bypass_on = on; }  
 // Запрос сброса состояния тракта — выполняется на Core 1 в af_dsp_poll.  
 // Вызывать после af_capture_resume() в af_store_save.  
-void af_dsp_request_reset(void) { dsp_reset_req = true; __dmb(); }  
+void af_dsp_reset_state(void) { dsp_reset_req = true; __dmb(); }  
 void af_dsp_set_ramp(bool on) { ramp_on = on; ramp_val = 0; }  
 bool af_dsp_ramp_on(void)     { return ramp_on; }  
 bool     af_dsp_agc_on(void)     { return agc_on; }  

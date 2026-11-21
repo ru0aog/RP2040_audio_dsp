@@ -25,7 +25,7 @@
 #define PIN_PICO   25   // LED_BUILTIN на обычной Pico  
 
 static uint8_t s_bank = 0;      // текущий банк, задаёт af_led_set_bank()  
-static bool    s_enabled = true; // led off — heartbeat заглушен  
+static bool    s_enabled = false; // heartbeat заглушен при старте, включается 'led on'    
   
 void af_led_set_bank(uint8_t bank) { s_bank = bank; }  
   
