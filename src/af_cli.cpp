@@ -1031,15 +1031,17 @@ static void cli_exec(char* line) {
     else if (strcmp(cmd, "nr") == 0) {    
         char* s = strtok(NULL, " \t");    
         if (s == NULL) { Serial.println("# ERR: nr on|off|spec|lms"); return; }    
-        if (strcmp(s, "spec") == 0) {    
-            af_dsp_set_nrmode(1);    
-            Serial.println("# OK nrmode=spec (спектральный FFT-256)");    
-            return;    
-        }    
-        if (strcmp(s, "lms") == 0) {    
-            af_dsp_set_nrmode(0);    
-            Serial.println("# OK nrmode=lms (LMS-ALE)");    
-            return;    
+        if (strcmp(s, "spec") == 0) {      
+            af_dsp_set_nrmode(1);      
+            af_fm_request_sync();   // nr mode — банковый параметр, cur изменился  
+            Serial.println("# OK nrmode=spec (спектральный FFT-256)");      
+            return;      
+        }      
+        if (strcmp(s, "lms") == 0) {      
+            af_dsp_set_nrmode(0);      
+            af_fm_request_sync();  
+            Serial.println("# OK nrmode=lms (LMS-ALE)");      
+            return;      
         }    
         bool on = (strcmp(s, "on") == 0);      
         if (af_dsp_set_nr(on)) {        
