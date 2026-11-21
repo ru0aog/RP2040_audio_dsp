@@ -53,16 +53,16 @@ static uint16_t snr_dbg_mag = 0;
 
 // ---- isqrt uint32 ----  
 // ---- isqrt uint32: классический битовый, b — степень 4 ----    
-static uint16_t snr_isqrt(uint32_t v) {    
-    uint32_t r = 0, b = 1u << 30;         // наибольшая степень 4 <= uint32    
-    while (b > v) b >>= 2;    
-    while (b) {    
-        if (v >= r + b) { v -= r + b; r = (r >> 1) + b; }    
-        else r >>= 1;    
-        b >>= 2;    
-    }    
-    return (uint16_t)r;    
-} 
+static inline uint16_t snr_isqrt(uint32_t v) {
+    uint32_t r = 0, b = 1u << 30;
+    while (b > v) b >>= 2;
+    while (b) {
+        if (v >= r + b) { v -= r + b; r = (r >> 1) + b; }
+        else r >>= 1;
+        b >>= 2;
+    }
+    return (uint16_t)r;
+}
 
 static inline int32_t snr_sat16(int32_t x) {
     if (x > 32767) return 32767;
@@ -147,7 +147,10 @@ static void snr_frame(void) {
         if (mag > (int32_t)n * 3) {          // SNR > ~10 дБ — сигнал
             g = 32768;
         } else {
-            int32_t sub = (int32_t)(((int64_t)snr_depth * n) / (mag ? mag : 1));
+            // деление заменено сдвигом по старшему биту (ошибка ≤2x — для гейта OK)
+            uint32_t m = mag ? mag : 1;
+            int sh = 31 - __builtin_clz(m);
+            int32_t sub = (int32_t)(((int64_t)snr_depth * n) >> sh);
             g = 32768 - sub;
             if (g < SNR_GMIN) g = SNR_GMIN;
         }
