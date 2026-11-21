@@ -135,8 +135,12 @@ static uint32_t af_saved_hi_hz = AF_BAND_NARROW_HI_HZ;
 static int16_t af_fir_taps[2][AF_FIR_N];    
 static volatile const int16_t* af_fir_taps_cur = af_fir_taps[0];    
 static uint8_t af_fir_taps_w = 0;              // индекс записи (0/1)    
-static int32_t af_fir_buf[AF_FIR_N] = {};    
-static int     af_fir_idx = 0;    
+static int32_t af_fir_buf[AF_FIR_N] = {};      
+static int     af_fir_idx = 0;  
+// Второй экземпляр FIR — постфильтр после АРУ: режет внеполосный мусор,  
+// который NR/makeup/АРУ поднимают за пределами полосы. Те же тапы.  
+static int32_t af_fir_buf2[AF_FIR_N] = {};  
+static int     af_fir_idx2 = 0;  
     
 static void af_fir_init(void) {    
     const int   M     = (AF_FIR_N - 1) / 2;    
@@ -184,8 +188,27 @@ static inline int32_t __not_in_flash_func(af_fir_push)(int32_t x) {
         if (++lo >= AF_FIR_N) lo = 0;    
         if (--hi < 0)        hi = AF_FIR_N - 1;    
     }    
-    acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf[lo];    
-    return (int32_t)((acc + (1 << 14)) >> 15);   // Q15 → масштаб, +0.5 LSB  
+    acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf[lo];      
+    return (int32_t)((acc + (1 << 14)) >> 15);   // Q15 → масштаб, +0.5 LSB    
+}    
+  
+// Постфильтр после АРУ — тот же набор тапов, своё состояние.  
+static inline int32_t __not_in_flash_func(af_fir_push2)(int32_t x) {  
+    af_fir_buf2[af_fir_idx2] = x;  
+    if (++af_fir_idx2 >= AF_FIR_N) af_fir_idx2 = 0;  
+  
+    const int16_t* taps = (const int16_t*)af_fir_taps_cur;  
+    int64_t acc = 0;  
+    int lo = af_fir_idx2;  
+    int hi = af_fir_idx2 + AF_FIR_N - 1;  
+    if (hi >= AF_FIR_N) hi -= AF_FIR_N;  
+    for (int k = 0; k < AF_FIR_N / 2; k++) {  
+        acc += (int32_t)taps[k] * (af_fir_buf2[lo] + af_fir_buf2[hi]);  
+        if (++lo >= AF_FIR_N) lo = 0;  
+        if (--hi < 0)        hi = AF_FIR_N - 1;  
+    }  
+    acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf2[lo];  
+    return (int32_t)((acc + (1 << 14)) >> 15);  
 }  
 
 // ---------------------------------------------------------------------------  
@@ -1119,8 +1142,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             memset(hb[s].d, 0, sizeof(hb[s].d));  
             hb[s].w = 0; hb[s].phase = 0;  
         }  
-        memset(af_fir_buf, 0, sizeof(af_fir_buf));  
+        memset(af_fir_buf, 0, sizeof(af_fir_buf));    
         af_fir_idx = 0;  
+        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));  
+        af_fir_idx2 = 0;  
         memset(notch_buf, 0, sizeof(notch_buf));  
         memset(notch_w,   0, sizeof(notch_w));  
         memset(notch_v,   0, sizeof(notch_v));  
@@ -1205,9 +1230,12 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             }  
             if (notch_on) y = notch_lms_push(y);  
             if (nr_on)    y = nr_lms_push(y);  
-            int16_t s = agc_limit(y);          
-            if (rx_notch_on) s = (int16_t)rx_notch_push(s);  // гребёнка — после АРУ,  
-                                                           // чтобы контур не «отменял» нотчи  
+            int16_t s = agc_limit(y);  
+            // Гребёнка — после АРУ (контур не «отменяет» нотчи), но ДО пост-FIR:  
+            // предельный цикл Q15-нотчей звенит на частотах 3/4/5 кГц вне полосы —  
+            // постфильтр этот звон отрезает. Нотчи 1/2 кГц внутри полосы работают.  
+            if (rx_notch_on) s = (int16_t)rx_notch_push(s);  
+            s = sat16(af_fir_push2(s));   // пост-FIR: срез внеполосного мусора после АРУ/NR  
             if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —  
                                                            // подъём до +6 дБ может превысить int16  
             if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса    
