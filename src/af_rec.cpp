@@ -110,7 +110,9 @@ int16_t* af_rec_ram_buf(void) {
 bool af_rec_is_busy(void) {      
     return state != ST_IDLE;      
 }      
-      
+
+static bool rec_slot_write(uint8_t bank, uint32_t n_samp);  // определена ниже  
+
 // Коммит ram_buf -> слот bank (flash-окно ~1.5-2 с, мьют тракта).      
 // Вызывается из af_fm_poll по таймауту после последнего сектора WAV.      
 bool af_rec_slot_write(uint8_t bank, uint32_t n_samp) {      

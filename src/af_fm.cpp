@@ -177,7 +177,9 @@ void af_fm_sync(void) {
     fm_build_dir(fm_set_len, set_clusters, wav_sizes);    
     fm_stale = false;    
 }    
-  
+
+static void ul_commit(void);   // определена ниже — коммит аплоада по таймауту  
+
 void af_fm_poll(void) {      
     // Коммит аплоада WAV: 1.5 с тишины после последнего сектора.    
     if (ul_active && (int32_t)(millis() - ul_last_ms) >= 1500)    
@@ -341,34 +343,22 @@ static int16_t ul_sample(const uint8_t* p) {
   
 // Ресемплер: входной отсчёт -> выходные отсчёты в ram_buf (линейная интерполяция).    
 // Шаг: in_pos продвигается на ul_rate за каждый выходной отсчёт 7732 Гц.    
-static void ul_push(int16_t cur) {    
-    int16_t* dst = af_rec_ram_buf();    
-    if (dst == nullptr) { ul_abort("no ram_buf"); return; }    
-    // Выходные отсчёты между предыдущим и текущим входным    
-    while (!ul_trunc) {    
-        // позиция следующего выходного отсчёта во входных единицах (Q32)    
-        // out k соответствует входному времени k * ul_rate / 7732    
-        // храним накопитель: next_in = ul_out_pos * ul_rate (в единицах 1/7732 сэмпла)    
-        uint64_t next_in = (uint64_t)ul_out_pos * ul_rate;    
-        uint64_t cur_in  = (uint64_t)ul_in_pos * AF_FM_REC_RATE;    
-        if (next_in >= cur_in + AF_FM_REC_RATE) break;  // выходной ещё не наступил    
-        // дробная часть между prev и cur    
-        uint32_t fr = (uint32_t)(next_in - cur_in);     // 0..7731    
-        int32_t a = ul_prev, b = cur;    
-        int32_t v = a + ((b - a) * (int32_t)fr) / (int32_t)AF_FM_REC_RATE;    
-        if (v > 32767) v = 32767;    
-        if (v < -32768) v = -32768;    
-        if (ul_out_pos < AF_REC_RAM_SAMP) {    
-            dst[ul_out_pos] = (int16_t)v;    
-            ul_out_pos++;    
-        } else {    
-            ul_trunc = true;                          // слот полон — хвост отбрасываем    
-            break;    
-        }    
-    }    
-    ul_prev = cur;    
-    ul_in_pos++;    
-}    
+static void ul_push(int16_t cur) {  
+    if (ul_out_pos >= AF_REC_RAM_SAMP) { ul_trunc = true; return; }  
+    // Интерполяция между ul_prev (in_pos-1) и cur (in_pos):  
+    // окно [cur_in, cur_in + REC_RATE) соответствует входному интервалу.  
+    uint64_t cur_in  = (ul_in_pos > 0) ? (uint64_t)(ul_in_pos - 1) * AF_FM_REC_RATE : 0;  
+    uint64_t next_in = (uint64_t)ul_out_pos * ul_rate;  
+    while (next_in < cur_in + AF_FM_REC_RATE) {  
+        uint32_t fr = (uint32_t)(next_in - cur_in);  
+        int32_t v = ul_prev + (int32_t)(((int64_t)(cur - ul_prev) * fr) / AF_FM_REC_RATE);  
+        af_rec_ram_buf()[ul_out_pos++] = (int16_t)v;  
+        if (ul_out_pos >= AF_REC_RAM_SAMP) { ul_trunc = true; break; }  
+        next_in = (uint64_t)ul_out_pos * ul_rate;  
+    }  
+    ul_prev = cur;  
+    ul_in_pos++;  
+}  
   
 // Обработка одного записанного сектора WAV-файла.    
 static void ul_feed(const uint8_t* buf) {    
