@@ -25,7 +25,8 @@ static uint16_t snr_rev[SNR_N];         // bit-reverse
 // ---- Состояние кадра ----  
 static int16_t snr_re[SNR_N];  
 static int16_t snr_im[SNR_N];  
-static int16_t snr_ola[SNR_N];          // аккумулятор overlap-add  
+static int16_t snr_ola[SNR_HOP];        // выходной буфер кадра (128 отсчётов)  
+static int16_t snr_tail[SNR_HOP];       // хвост предыдущего кадра для overlap  
 static int16_t snr_in[SNR_N];           // входное кольцо кадра  
 static uint16_t snr_in_pos = 0;         // позиция записи во входной кадр  
 static uint16_t snr_out_pos = 0;        // позиция чтения из OLA  
@@ -127,11 +128,17 @@ static void snr_frame(void) {
   
     snr_fft(snr_re, snr_im, true);                  // IFFT (scaling тот же)  
   
-    // OLA: окно синтеза + компенсация hann^2 суммы (~1.5) -> *2/3  
-    for (uint16_t i = 0; i < SNR_N; i++) {  
-        int32_t y = (snr_re[i] * snr_win[i]) >> SNR_Q;  
-        y = (snr_ola[i] + ((y * 21846) >> SNR_Q));  // 21846 = 2/3 Q15  
-        snr_ola[i] = (int16_t)y;  
+    // OLA: окно синтеза + компенсация hann^2 (~1.5) -> *2/3.  
+    // Первая половина кадра складывается с хвостом предыдущего -> на выход;  
+    // вторая половина уходит в snr_tail для следующего кадра.  
+    // <<4 — компенсация >>1 x 8 стадий IFFT (см. баг 3).  
+    for (uint16_t i = 0; i < SNR_HOP; i++) {  
+        int32_t y = ((snr_re[i] * snr_win[i]) >> SNR_Q) << 4;  
+        snr_ola[i] = (int16_t)(snr_tail[i] + ((y * 21846) >> SNR_Q));  
+    }  
+    for (uint16_t i = 0; i < SNR_HOP; i++) {  
+        int32_t y = ((snr_re[SNR_HOP + i] * snr_win[SNR_HOP + i]) >> SNR_Q) << 4;  
+        snr_tail[i] = (int16_t)((y * 21846) >> SNR_Q);  
     }  
     snr_out_avail = SNR_HOP;  
     snr_out_pos   = 0;  
@@ -169,12 +176,6 @@ void af_snr_reset(void) {
 int32_t af_snr_push(int32_t x) {  
     // Выход: читаем из OLA-хвоста; пока не накоплен — нули (latency fill)  
     int32_t y = 0;  
-    if (snr_out_avail > 0) {  
-        y = snr_ola[snr_out_pos];  
-        snr_ola[snr_out_pos] = 0;                   // освобождаем для след. кадра  
-        snr_out_pos++;  
-        snr_out_avail--;  
-    }  
     // Вход: пишем в кадр; по заполнении HOP — обработка  
     snr_in[snr_in_pos++] = (int16_t)x;  
     if (snr_in_pos >= SNR_N) snr_in_pos = 0;  

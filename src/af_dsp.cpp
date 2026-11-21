@@ -1022,11 +1022,12 @@ void af_dsp_set_nrmu(int32_t v) {
     if (v > 32768) v = 32768;  
     nr_mu = v;  
 }  
-void af_dsp_set_nrdepth(int32_t v) {  
-    if (v < 0)     v = 0;  
-    if (v > 65536) v = 65536;  
+void af_dsp_set_nrdepth(int32_t v) {    
+    if (v < 0)     v = 0;    
+    if (v > 65536) v = 65536;    
     nr_depth_q15 = v;  
-}  
+    af_snr_set_depth(v > 32768 ? 32768 : v);   // spec: beta Q15  
+}    
 void af_dsp_set_nrmakeup(int32_t v) {  
     if (v < 0)      v = 0;  
     if (v > 131072) v = 131072;   // до ×4  
@@ -1091,8 +1092,9 @@ void af_dsp_init(void) {
     cw_design();          // начальные коэффициенты CW-секций  
     rx_notch_design();    // коэффициенты фиксированных нотчей RX
     rx_pres_hp_design();      // HP-детектор presence  
-    rx_pres_pk_design(32768); // peaking = байпас при старте  
-    af_tx_init();         // TX: FIR-компрессор-клиппер    
+    rx_pres_pk_design(32768); // peaking = байпас при старте    
+    af_snr_init();            // таблицы окна/twiddles/bit-reverse спектрального NR  
+    af_tx_init();         // TX: FIR-компрессор-клиппер      
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
     memset(&out_usb, 0, sizeof(out_usb));    
