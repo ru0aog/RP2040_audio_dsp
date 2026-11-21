@@ -179,10 +179,12 @@ static void cli_stats(void) {
                   (long)af_dsp_rxpres_env(),  
                   (long)af_dsp_rxpres_nf(),  
                   (long)af_dsp_rxpres_k());  
-    {   // S-meter: уровень после FIR в линейных единицах и dBFS  
+    {   // S-meter: уровень и пик после FIR в линейных единицах и dBFS  
         int32_t lvl = af_dsp_rx_in_lvl();  
-        Serial.printf("#   inlvl   = %ld (%.1f dBFS)\n", (long)lvl,  
-                      20.0 * log10((lvl + 1) / 32768.0));  
+        int32_t pk  = af_dsp_rx_in_peak();   // чтение сбрасывает пик  
+        Serial.printf("#   inlvl   = %ld (%.1f dBFS)   inpk=%ld (%.1f dBFS)\n",  
+                      (long)lvl, 20.0 * log10((lvl + 1) / 32768.0),  
+                      (long)pk,  20.0 * log10((pk + 1) / 32768.0));  
     }  
 
     // ---- TX: параметры передающего тракта (при tx=off неактивен) ----      
@@ -306,8 +308,8 @@ static void cli_dump(void) {
     const uint32_t cap   = af_capture_dropped();  
     const uint32_t isr   = af_cap_isr_count;  
   
-    Serial.printf(    
-        "# L0=%lu.%lu%% L1=%lu.%lu%% blk=%lu max=%luus inlvl=%ld |"    
+    Serial.printf(  
+        "# L0=%lu.%lu%% L1=%lu.%lu%% blk=%lu max=%luus inlvl=%ld inpk=%ld |"  
         " cap: isr=%lu d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"    
         " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"    
         " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu gap=%luus ff=%lu ws=%lu av=%lu |"    
@@ -318,7 +320,8 @@ static void cli_dump(void) {
         (unsigned long)(af_dsp_load_permille() % 10u),    
         (unsigned long)(pub - p_pub),    
         (unsigned long)af_dsp_max_block_us(),    
-        (long)af_dsp_rx_in_lvl(),    
+        (long)af_dsp_rx_in_lvl(),  
+        (long)af_dsp_rx_in_peak(),  
         (unsigned long)(isr - p_isr), (unsigned long)(cap - p_cap),  
         (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,  
         (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,  
