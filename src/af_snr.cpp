@@ -79,8 +79,8 @@ static void snr_fft(int32_t *re, int32_t *im, bool inverse) {
                 int32_t wi = inverse ? -snr_tw_im[tw] : snr_tw_im[tw];    
                 uint16_t a = i + j, b = a + half;    
                 int32_t br = re[b], bi = im[b];    
-                int32_t tr = (br * wr - bi * wi) >> SNR_Q;    
-                int32_t ti = (br * wi + bi * wr) >> SNR_Q;    
+                int32_t tr = (int32_t)(((int64_t)br * wr - (int64_t)bi * wi) >> SNR_Q);      
+                int32_t ti = (int32_t)(((int64_t)br * wi + (int64_t)bi * wr) >> SNR_Q);      
                 re[b] = (re[a] - tr) >> 1;    
                 im[b] = (im[a] - ti) >> 1;    
                 re[a] = (re[a] + tr) >> 1;    
@@ -95,8 +95,8 @@ static void snr_frame(void) {
     // Окно + предусиление <<8: компенсация /256 прямого FFT.      
     // Бины получаются ~x*256*win — в int32 помещаются с запасом.    
     for (uint16_t i = 0; i < SNR_N; i++) {    
-        int32_t x = snr_in[i] << 8;    
-        snr_re[i] = (x * snr_win[i]) >> SNR_Q;    
+        int32_t x = snr_in[i] << 8;      
+        snr_re[i] = (int32_t)(((int64_t)x * snr_win[i]) >> SNR_Q);      
         snr_im[i] = 0;    
     }    
     snr_fft(snr_re, snr_im, false);  
@@ -131,8 +131,8 @@ static void snr_frame(void) {
         }  
         snr_gain[k] = gs;      
   
-        snr_re[k] = (re * gs) >> SNR_Q;    
-        snr_im[k] = (im * gs) >> SNR_Q;    
+        snr_re[k] = (int32_t)(((int64_t)re * gs) >> SNR_Q);      
+        snr_im[k] = (int32_t)(((int64_t)im * gs) >> SNR_Q);      
         if (k > 0 && k < SNR_N / 2) {               // conjugate symmetric  
             snr_re[SNR_N - k] = snr_re[k];  
             snr_im[SNR_N - k] = -snr_im[k];  
@@ -147,14 +147,14 @@ static void snr_frame(void) {
     // <<8 — компенсация /256 обратного FFT. Итог тракта:    
     // x -> <<8 -> FFT/256 -> gain -> IFFT/256 -> <<8 -> OLA*(2/3) ~= x    
     for (uint16_t i = 0; i < SNR_HOP; i++) {    
-        int32_t y = ((snr_re[i] * snr_win[i]) >> SNR_Q) << 8;    
-        y = snr_tail[i] + ((y * 21846) >> SNR_Q);    
+        int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i]) >> SNR_Q) << 8;      
+        y = snr_tail[i] + (int32_t)(((int64_t)y * 21846) >> SNR_Q);      
         if (y > 32767) y = 32767; else if (y < -32768) y = -32768;    
         snr_ola[i] = (int16_t)y;    
     }    
     for (uint16_t i = 0; i < SNR_HOP; i++) {    
-        int32_t y = ((snr_re[SNR_HOP + i] * snr_win[SNR_HOP + i]) >> SNR_Q) << 8;    
-        y = (y * 21846) >> SNR_Q;    
+        int32_t y = (int32_t)(((int64_t)snr_re[SNR_HOP + i] * snr_win[SNR_HOP + i]) >> SNR_Q) << 8;      
+        y = (int32_t)(((int64_t)y * 21846) >> SNR_Q);      
         if (y > 32767) y = 32767; else if (y < -32768) y = -32768;    
         snr_tail[i] = (int16_t)y;    
     }    
