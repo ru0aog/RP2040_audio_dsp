@@ -51,3 +51,7 @@ void    af_fm_msc_flush(void);
 // Аплоад WAV: перезапись RECn.WAV -> конвертация -> слот банка n.    
 #define AF_FM_UPLOAD_TIMEOUT_MS  1500u   // коммит после последнего сектора    
 #define AF_FM_WAV_HDR_MAX        512u    // заголовок WAV в пределах 1 сектора    
+
+// af_fm.h  
+#define AF_FM_FREE_SECTORS   400u    // ~200 КБ свободного пула для проверки места  
+#define AF_FM_SECTOR_COUNT   (AF_FM_WAV_LBA(AF_FM_WAV_FILES) + AF_FM_FREE_SECTORS)  

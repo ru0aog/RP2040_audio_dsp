@@ -109,10 +109,14 @@ static void fm_build_fat(uint16_t set_clusters, const uint16_t* wav_clusters) {
     memset(f, 0, AF_FM_FAT_SECTORS * AF_FM_SECTOR_SIZE);    
     f[0] = 0xF8; f[1] = 0xFF; f[2] = 0xFF;    
     if (set_clusters) fat_chain(f, 2, set_clusters);    
-    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
-        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + i * AF_FM_WAV_CLUSTERS);    
-        if (wav_clusters[i]) fat_chain(f, first, wav_clusters[i]);    
-    }    
+    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {  
+        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + i * AF_FM_WAV_CLUSTERS);  
+        fat_chain(f, first, AF_FM_WAV_CLUSTERS);  
+    }  
+    // Свободный пул в конце диска: кластеры за пределами цепочек RECn  
+    // остаются неразмеченными -> Windows видит свободное место и  
+    // пропускает проверку при копировании/замене файлов.  
+    // (ничего дополнительно делать не нужно — неразмеченные = свободные)  
 }    
   
 static void dir_entry(uint8_t* e, const char* name83, uint16_t cl, uint32_t size) {    
