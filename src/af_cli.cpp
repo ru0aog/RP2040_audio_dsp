@@ -48,7 +48,8 @@ static void cli_help(void) {
     Serial.println("#   band <lo> <hi>    — полоса ПФ, Гц (напр. band 300 3000)");    
     Serial.println("#   nt on|off         — автонотч NT");    
     Serial.println("#   ntmu <0..32768>   — шаг NLMS нотча (эксперт)");    
-    Serial.println("#   nr on|off         — шумоподавление NR");    
+    Serial.println("#   nr on|off         — шумоподавление NR");      
+    Serial.println("#   nr spec|lms       — движок NR: спектральный (FFT) | LMS-ALE");      
     Serial.println("#   nrmu <0..32768>   — шаг LMS NR (эксперт)");    
     Serial.println("#   nrdepth <q15>     — глубина подавления NR (32768 = полная)");    
     Serial.println("#   nrmakeup <q15>    — makeup-gain NR (65536 = x2)");    
@@ -148,11 +149,12 @@ static void cli_stats(void) {
     Serial.printf("#   band    = %lu..%lu Hz\n",      
                   (unsigned long)af_dsp_band_lo_hz(),      
                   (unsigned long)af_dsp_band_hi_hz());      
-    Serial.printf("#   nt      = %s   nr      = %s   bypass  = %s   ramp    = %s\n",      
-                  af_dsp_notch_on()  ? "on" : "off",      
-                  af_dsp_nr_on()     ? "on" : "off",      
-                  af_dsp_bypass_on() ? "on" : "off",      
-                  af_dsp_ramp_on()   ? "on" : "off");      
+    Serial.printf("#   nt      = %s   nr      = %s(%s) bypass  = %s   ramp    = %s\n",        
+                  af_dsp_notch_on()  ? "on" : "off",        
+                  af_dsp_nr_on()     ? "on" : "off",        
+                  af_dsp_nrmode()    ? "spec" : "lms",    
+                  af_dsp_bypass_on() ? "on" : "off",        
+                  af_dsp_ramp_on()   ? "on" : "off");        
     Serial.printf("#   cw      = %s   f0=%lu bw=%lu noise=%lu\n",      
                   af_dsp_cw_on() ? "on" : "off",      
                   (unsigned long)af_dsp_cw_freq(),      
@@ -1019,19 +1021,29 @@ static void cli_exec(char* line) {
         if (rc == 2)      
             Serial.println("# note: NR off (приоритет NT, совместная работа не поддерживается)");  
     }  
-    else if (strcmp(cmd, "nr") == 0) {  
-        char* s = strtok(NULL, " \t");  
-        if (s == NULL) { Serial.println("# ERR: nr on|off"); return; }  
-        bool on = (strcmp(s, "on") == 0);    
-        if (af_dsp_set_nr(on)) {      
-            if (on) af_voice_play(VOICE_NR_ON);   // "адаптивное шумоподавление включено"  
-            Serial.printf("# OK nr=%s\n", on ? "on" : "off");      
-        } else {        
-            Serial.println(af_dsp_cw_on()    
-                ? "# nr: rejected (CW on — выключите CW: cw off)"    
-                : "# nr: rejected (NT on — приоритет NT)");        
-        }  
-    }
+    else if (strcmp(cmd, "nr") == 0) {    
+        char* s = strtok(NULL, " \t");    
+        if (s == NULL) { Serial.println("# ERR: nr on|off|spec|lms"); return; }    
+        if (strcmp(s, "spec") == 0) {    
+            af_dsp_set_nrmode(1);    
+            Serial.println("# OK nrmode=spec (спектральный FFT-256)");    
+            return;    
+        }    
+        if (strcmp(s, "lms") == 0) {    
+            af_dsp_set_nrmode(0);    
+            Serial.println("# OK nrmode=lms (LMS-ALE)");    
+            return;    
+        }    
+        bool on = (strcmp(s, "on") == 0);      
+        if (af_dsp_set_nr(on)) {        
+            if (on) af_voice_play(VOICE_NR_ON);   // "адаптивное шумоподавление включено"    
+            Serial.printf("# OK nr=%s\n", on ? "on" : "off");        
+        } else {          
+            Serial.println(af_dsp_cw_on()      
+                ? "# nr: rejected (CW on — выключите CW: cw off)"      
+                : "# nr: rejected (NT on — приоритет NT)");          
+        }    
+    }  
     else if (strncmp(cmd, "rxnotch", 7) == 0) {  
         char* v = strtok(NULL, " \t");  
         if (v && strcmp(v, "on") == 0)       { af_dsp_set_rxnotch(true);  Serial.println("# OK rxnotch=on"); }  

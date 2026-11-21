@@ -162,10 +162,11 @@ void af_snr_init(void) {
 }  
   
 void af_snr_reset(void) {  
-    memset(snr_ola, 0, sizeof(snr_ola));  
-    memset(snr_in,  0, sizeof(snr_in));  
-    memset(snr_re,  0, sizeof(snr_re));  
-    memset(snr_im,  0, sizeof(snr_im));  
+    memset(snr_ola,  0, sizeof(snr_ola));    
+    memset(snr_tail, 0, sizeof(snr_tail));    
+    memset(snr_in,   0, sizeof(snr_in));    
+    memset(snr_re,   0, sizeof(snr_re));    
+    memset(snr_im,   0, sizeof(snr_im));    
     for (uint16_t k = 0; k < SNR_BINS; k++) {  
         snr_noise[k] = 0;  
         snr_gain[k]  = 32768;  
