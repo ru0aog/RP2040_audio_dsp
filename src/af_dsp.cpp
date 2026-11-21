@@ -27,9 +27,20 @@
 #include "af_rec.h"       // запись/воспроизведение цифрового магнитофона
 #include "af_snr.h"
 
-static uint8_t nr_mode = 0;   // 0=LMS ALE, 1=spectral  
-uint8_t  af_dsp_nrmode(void)          { return nr_mode; }  
-void     af_dsp_set_nrmode(uint8_t m) { nr_mode = m ? 1 : 0; af_snr_reset(); }  
+static uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
+static volatile bool snr_reset_req = false;  // запрос сброса spec-NR (Core 0 -> Core 1)  
+  
+uint8_t af_dsp_nrmode(void) { return nr_mode; }  
+  
+// Core 0: только ставит флаг — сам сброс выполняет af_dsp_poll на Core 1,  
+// иначе memset(snr_re/im/ola/tail) гоняется с af_snr_push -> битый кадр.  
+void af_dsp_set_nrmode(uint8_t m) {  
+    m = m ? 1 : 0;  
+    if (nr_mode == m) return;            // повторный вызов — no-op, без лишнего сброса  
+    nr_mode = m;  
+    snr_reset_req = true;  
+    __dmb();  
+}  
 
 // ---------------------------------------------------------------------------  
 // Half-band дециматоры — коэффициенты 1:1 из rx_dsp.cpp приёмника  
@@ -1175,11 +1186,19 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rx_in_lvl_q16 = (int64_t)256 << 16;    
         rx_in_peak = 0;    
         out_fill_pos = 0;    
-        af_snr_reset();          // кадры/OLA/шумовая оценка спектрального NR    
-        __dmb();    
-    }    
-      
-    const volatile uint16_t* blk;      
+        af_snr_reset();          // кадры/OLA/шумовая оценка спектрального NR      
+        __dmb();      
+    }      
+  
+    // Отложенный сброс spec-NR по запросу Core 0 (nr spec|lms, load банка):  
+    // выполняется здесь, на Core 1 — af_snr_push в этот момент не работает.  
+    if (snr_reset_req) {  
+        snr_reset_req = false;  
+        af_snr_reset();  
+        __dmb();  
+    }  
+        
+    const volatile uint16_t* blk;           
     while (budget-- > 0 && (blk = af_capture_get_block()) != NULL) {  
         const uint32_t t0 = time_us_32();   // busy = только обработка блока    
   
