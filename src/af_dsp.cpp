@@ -25,7 +25,12 @@
 #include "af_tx.h"        // передающий тракт SSB    
 #include "af_pwm.h"       // af_pwm_set_tx_pin — выход GP0(RX)/GP1(TX) 
 #include "af_rec.h"       // запись/воспроизведение цифрового магнитофона
-  
+#include "af_snr.h"
+
+static uint8_t nr_mode = 0;   // 0=LMS ALE, 1=spectral  
+uint8_t  af_dsp_nrmode(void)          { return nr_mode; }  
+void     af_dsp_set_nrmode(uint8_t m) { nr_mode = m ? 1 : 0; af_snr_reset(); }  
+
 // ---------------------------------------------------------------------------  
 // Half-band дециматоры — коэффициенты 1:1 из rx_dsp.cpp приёмника  
 // ---------------------------------------------------------------------------  
@@ -1229,7 +1234,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 y = cw_push(sat16(y + noise));  
             }  
             if (notch_on) y = notch_lms_push(y);  
-            if (nr_on)    y = nr_lms_push(y);  
+            if (nr_on)    y = (nr_mode == 1) ? af_snr_push(y) : nr_lms_push(y); 
             int16_t s = agc_limit(y);  
             // Гребёнка — после АРУ (контур не «отменяет» нотчи), но ДО пост-FIR:  
             // предельный цикл Q15-нотчей звенит на частотах 3/4/5 кГц вне полосы —  
