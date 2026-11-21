@@ -269,14 +269,17 @@ static void ul_abort(const char* why) {
 }    
   
 // Начало сессии: запись в первый сектор файла RECn.WAV.    
-static bool ul_begin(uint8_t bank, uint32_t lba) {    
-    if (af_rec_is_busy()) {    
-        Serial.println("# fm: upload rejected — rec/play busy");    
-        return false;    
-    }    
-    ul_active   = true;    
-    ul_bank     = bank;    
-    ul_lba_next = lba;    
+static bool ul_begin(uint8_t bank, uint32_t lba) {      
+    if (af_rec_is_busy()) {      
+        Serial.println("# fm: upload rejected — rec/play busy");      
+        return false;      
+    }      
+    ul_active   = true;      
+    ul_bank     = bank;      
+    ul_lba_next = lba;      
+    Serial.printf("# fm: upload begin: REC%u.WAV lba=%lu (file start %lu)\n",  
+                  (unsigned)bank, (unsigned long)lba,  
+                  (unsigned long)AF_FM_WAV_LBA(bank - 1));  
     ul_last_ms  = millis();    
     ul_file_off = 0;    
     ul_data_end = 0;    
@@ -491,12 +494,15 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
   
     // WAV-область: перезапись RECn.WAV = аплоад в слот n.  
     // Всегда возвращаем OK — ошибка провоцирует бесконечные ретраи хоста.  
-    if (lba >= AF_FM_WAV_LBA(0)) {      
-        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {      
-            uint32_t start = AF_FM_WAV_LBA(i);      
-            if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {      
-                if (!ul_active) {      
-                    if (!ul_begin(i + 1, lba))  
+    if (lba >= AF_FM_WAV_LBA(0)) {        
+        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {        
+            uint32_t start = AF_FM_WAV_LBA(i);        
+            if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {        
+                if (!ul_active)  
+                    Serial.printf("# fm: write hit REC%u area, lba=%lu\n",  
+                                  (unsigned)(i + 1), (unsigned long)lba);  
+                if (!ul_active) {        
+                    if (!ul_begin(i + 1, lba))    
                         return (int32_t)AF_FM_SECTOR_SIZE;   // rec/play busy — проглотить  
                 } else if (ul_bank != (uint8_t)(i + 1)) {      
                     return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить  
