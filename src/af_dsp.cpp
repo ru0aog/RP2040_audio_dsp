@@ -286,7 +286,7 @@ static int32_t           rx_presmax_db_x10 = 15;   // дБ x10 — для stats 
 // --- Noise Blanker RX (125 ksps, после CIC до HB) ---  
 static volatile bool nb_on = AF_NB_ON_DEFAULT;  
 static volatile int32_t nb_thr_x10 = AF_NB_THR_X10;  
-static int32_t  nb_env = 256;        // медленная EMA |x|, стартовый фон  
+static int32_t  nb_env = 8192;       // медленная EMA |y|, старт ~средний уровень  
 static int32_t  nb_last = 0;         // последний «чистый» отсчёт (hold)  
 static uint8_t  nb_hold_cnt = 0;     // остаток удержания blank  
 static volatile uint32_t nb_hits = 0;// срабатываний с прошлого чтения stats  
@@ -926,10 +926,10 @@ int32_t  af_dsp_rxpres_nf(void)   { return (int32_t)(rxp_nf_q16 >> 16); }
 int32_t  af_dsp_rxpresmax(void)   { return rx_presmax_db_x10; }  // дБ x10, не Q15  
 uint32_t af_dsp_rxpresf(void)     { return rx_pres_freq_hz; }  
 uint32_t af_dsp_rxpresq(void)     { return rx_pres_q_x100; }
-void     af_dsp_set_nb(bool on) {  
-    if (on && !nb_on) { nb_env = 256; nb_last = 0; nb_hold_cnt = 0; } // чистый старт  
-    nb_on = on;  
-}  
+void     af_dsp_set_nb(bool on) {    
+    if (on && !nb_on) { nb_env = 8192; nb_last = 0; nb_hold_cnt = 0; } // чистый старт    
+    nb_on = on;    
+}    
 bool     af_dsp_nb_on(void) { return nb_on; }  
 void     af_dsp_set_nbthr(int32_t x10) {  
     if (x10 < AF_NB_THR_MIN) x10 = AF_NB_THR_MIN;  
@@ -1202,7 +1202,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rxp_pk_x1 = rxp_pk_x2 = rxp_pk_y1 = rxp_pk_y2 = 0;  
         rxp_env_q16 = rxp_nf_q16 = (int64_t)256 << 16;  
         rxp_k_q15 = rxp_k_tgt_q15 = 0;
-        nb_env = 256;  nb_last = 0;  nb_hold_cnt = 0;  
+        nb_env = 8192;  nb_last = 0;  nb_hold_cnt = 0;    
         agc_avg_q16  = (int64_t)4096 << 16;  
         lim_peak_q16 = (int64_t)2048 << 16;  
         rx_in_lvl_q16 = (int64_t)256 << 16;    
@@ -1237,16 +1237,21 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             if (!cic_push(x, &y))        continue;
             // Noise Blanker: импульсные помехи до HB/FIR (125 ksps).  
             // |y| > env*thr -> hold последнего чистого отсчёта + AF_NB_HOLD  
-            // на хвост. env — EMA |y| k=1/1024; в blank env не обновляем,  
-            // чтобы импульс не задирал собственный порог.  
+            // на хвост. env — EMA |y| k=1/1024, обновляется значением,    
+            // ограниченным порогом: импульс не задирает собственный порог.    
             if (nb_on) {  
                 int32_t ay = (y < 0) ? -y : y;  
-                if (nb_hold_cnt > 0 || ay > (nb_env * nb_thr_x10) / 10) {  
+                int32_t thr = (nb_env * nb_thr_x10) / 10;  
+                // env обновляется ВСЕГДА, но значением, ограниченным порогом:  
+                // фон подтягивает env к уровню сигнала, а импульс (ay >> thr)  
+                // вносит не больше thr — не задирает собственный порог.  
+                int32_t ev = (ay > thr) ? thr : ay;  
+                nb_env += (ev - nb_env) >> 10;  
+                if (nb_hold_cnt > 0 || ay > thr) {  
                     if (nb_hold_cnt == 0) nb_hits++;  
                     nb_hold_cnt = AF_NB_HOLD;  
                     y = nb_last;  
                 } else {  
-                    nb_env += (ay - nb_env) >> 10;  
                     nb_last = y;  
                 }  
                 if (nb_hold_cnt > 0) nb_hold_cnt--;  
