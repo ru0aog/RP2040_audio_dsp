@@ -162,8 +162,8 @@ static void snr_sm_service(void) {
         case SNR_SM_LOAD: {             // окно + <<8 -> re/im    
             uint16_t n = 0;    
             for (; snr_sm_i < SNR_N && n < SNR_CHUNK; snr_sm_i++, n++) {    
-                int32_t x = snr_in[snr_sm_i] << 8;    
-                snr_re[snr_sm_i] = (int32_t)(((int64_t)x * snr_win[snr_sm_i]) >> SNR_Q);    
+                int32_t x = snr_in[snr_sm_i];         // int16-тракт: без предусиления  
+                snr_re[snr_sm_i] = (int16_t)((x * snr_win[snr_sm_i]) >> SNR_Q);      
                 snr_im[snr_sm_i] = 0;    
             }    
             if (snr_sm_i >= SNR_N) { snr_fft_begin(false); snr_sm = SNR_SM_FFT_FWD; }    
@@ -184,8 +184,8 @@ static void snr_sm_service(void) {
             for (; snr_sm_i < SNR_BINS && n < SNR_CHUNK; snr_sm_i++, n++) {    
                 uint16_t k = snr_sm_i;    
                 int32_t re = snr_re[k], im = snr_im[k];    
-                uint16_t mag = snr_isqrt((uint32_t)(    
-                    ((int64_t)re * re + (int64_t)im * im) >> 16));    
+                // re,im <= 32767: сумма квадратов <= 2.1e9 — влезает в uint32 без сдвига  
+                uint16_t mag = snr_isqrt((uint32_t)(re * re + im * im));      
                 if (k == SNR_DBG_BIN) snr_dbg_mag = mag;    
   
                 uint32_t nn = snr_noise[k];    
@@ -227,13 +227,14 @@ static void snr_sm_service(void) {
         }    
   
         case SNR_SM_OLA: {              // окно синтеза + overlap-add    
-            // Итог тракта: x -> <<8 -> FFT/256 -> gain -> IFFT/256    
-            //   -> *win -> >>(Q+8) -> OLA*(2/3) ~= x    
+            // Итог тракта: x -> *win -> FFT/128 -> gain -> IFFT/128  
+            //   -> *win*(4/3) -> OLA ~= x  
             uint16_t n = 0;    
             for (; snr_sm_i < SNR_N && n < SNR_CHUNK; snr_sm_i++, n++) {    
                 uint16_t i = snr_sm_i;    
-                // re = x*W/128 после IFFT; re*W*21846 >> 8 = x*w^2*(2/3) — единичное усиление    
-                int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i] * 21846) >> 8);      
+                // re = x*win/2 после IFFT; re*win*21846>>15 = x*win^2/3; <<1 -> *2/3  
+                // сумма win^2 по 50% overlap = 1.5 -> итог ~x (единичное усиление)  
+                int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i] * 21846) >> SNR_Q) << 1;           
                 if (i < SNR_HOP) {    
                     y = snr_tail[i] + y;    
                     if (y > 32767) y = 32767; else if (y < -32768) y = -32768;    
@@ -313,7 +314,8 @@ int32_t af_snr_push(int32_t x) {
         memmove(&snr_in[0], &snr_in[SNR_HOP], SNR_HOP * sizeof(int16_t));    
         snr_in_pos = SNR_HOP;    
     }    
-    snr_sm_service();                   // квант работы на каждый входной отсчёт    
+    static uint8_t svc_div = 0;  
+    if (++svc_div >= 4) { svc_div = 0; snr_sm_service(); }  
     // makeup    
     y = (int32_t)(((int64_t)y * snr_makeup) >> SNR_Q);  
     if (y > 32767) y = 32767; else if (y < -32768) y = -32768;  
