@@ -47,3 +47,7 @@ uint32_t af_fm_set_size(void);         // размер SET.TXT, байт
 int32_t af_fm_msc_read (uint32_t lba, void* buffer, uint32_t bufsize);  
 int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize);  
 void    af_fm_msc_flush(void);  
+
+// Аплоад WAV: перезапись RECn.WAV -> конвертация -> слот банка n.    
+#define AF_FM_UPLOAD_TIMEOUT_MS  1500u   // коммит после последнего сектора    
+#define AF_FM_WAV_HDR_MAX        512u    // заголовок WAV в пределах 1 сектора    

@@ -91,16 +91,39 @@ static const int16_t* rec_slot_data(void) {
     return (const int16_t*)(XIP_BASE + slot_off + AF_REC_HDR_SIZE);    
 }    
 
-// --- Экспорт слотов для af_fm (WAV-файлы на диске) ---------------------------    
-uint32_t af_rec_slot_len(uint8_t bank) {    
-    if (bank < 1 || bank > AF_STORE_BANKS) return 0;    
-    return rec_slot_len(bank);    
-}    
-    
-const int16_t* af_rec_slot_data(uint8_t bank) {    
-    if (bank < 1 || bank > AF_STORE_BANKS) return nullptr;    
-    return (const int16_t*)(XIP_BASE + rec_slot_off(bank) + AF_REC_HDR_SIZE);    
-}    
+// --- Экспорт слотов для af_fm (WAV-файлы на диске) ---------------------------      
+uint32_t af_rec_slot_len(uint8_t bank) {      
+    if (bank < 1 || bank > AF_STORE_BANKS) return 0;      
+    return rec_slot_len(bank);      
+}      
+      
+const int16_t* af_rec_slot_data(uint8_t bank) {      
+    if (bank < 1 || bank > AF_STORE_BANKS) return nullptr;      
+    return (const int16_t*)(XIP_BASE + rec_slot_off(bank) + AF_REC_HDR_SIZE);      
+}      
+  
+// --- Экспорт для аплоада WAV (af_fm): запись в ram_buf + коммит в слот -------      
+int16_t* af_rec_ram_buf(void) {      
+    return ram_buf;      
+}      
+      
+bool af_rec_is_busy(void) {      
+    return state != ST_IDLE;      
+}      
+      
+// Коммит ram_buf -> слот bank (flash-окно ~1.5-2 с, мьют тракта).      
+// Вызывается из af_fm_poll по таймауту после последнего сектора WAV.      
+bool af_rec_slot_write(uint8_t bank, uint32_t n_samp) {      
+    if (state != ST_IDLE) return false;      
+    if (bank < 1 || bank > AF_STORE_BANKS) return false;      
+    if (n_samp == 0 || n_samp > AF_REC_RAM_SAMP) return false;      
+    if (!rec_slot_write(bank, n_samp)) return false;      
+    if (bank == rec_bank()) {           // активный слот — обновить кэш      
+        slot_off = rec_slot_off(bank);      
+        slot_len = n_samp;      
+    }      
+    return true;      
+}      
 
 // --- Flash-окно: erase+program слота. Вся функция в RAM. ----------------------    
 // param = {off, src, bytes}: erase AF_REC_SLOT_SIZE, затем program src.    

@@ -55,3 +55,8 @@ bool af_rec_erase_all(void);   // очистка всех 7 слотов (banks 
 // data = XIP-указатель на PCM слота (NULL если bank вне диапазона).    
 uint32_t       af_rec_slot_len(uint8_t bank);    
 const int16_t* af_rec_slot_data(uint8_t bank);    
+
+// --- Аплоад WAV с ПК (af_fm) -------------------------------------------------    
+int16_t*     af_rec_ram_buf(void);                    // буфер для конвертации    
+bool         af_rec_is_busy(void);                    // rec/play идёт    
+bool         af_rec_slot_write(uint8_t bank, uint32_t n_samp);  // ram_buf -> flash    

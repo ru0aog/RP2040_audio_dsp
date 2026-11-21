@@ -8,8 +8,13 @@
 //   LBA 28..   REC1..REC7.WAV — виртуальные, синтез в af_fm_msc_read    
 //              (WAV 16000 Гц mono, ресемплинг из слота 7732 Гц)    
 //  
-// SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.    
-// Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.    
+// SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.      
+// Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.      
+//      
+// Аплоад: перезапись RECn.WAV -> стриминг-конвертер -> ram_buf -> слот n.      
+// Любой WAV (PCM 8/16/24/32 бит, mono/stereo, любая частота): ресемплинг      
+// в 7732 Гц mono int16, обрезка по длительности слота (~7.2 с). Коммит —      
+// по таймауту 1.5 с после последнего сектора (flash-окно в af_rec_slot_write).
   
 #include <Arduino.h>  
 #include <string.h>  
@@ -30,7 +35,25 @@ static uint8_t  fm_disk[AF_FM_RAM_SECTORS][AF_FM_SECTOR_SIZE];  // ~14 КБ
 static uint32_t fm_set_len = 0;        // байт в SET.TXT  
 static bool     fm_dirty   = false;    // ПК писал — ждёт парсера    
 static bool     fm_stale   = true;     // SET.TXT устарел — регенерировать    
-static uint32_t fm_dirty_ms = 0;       // millis() последней записи (дебаунс)    
+static uint32_t fm_dirty_ms = 0;       // millis() последней записи (дебаунс)      
+  
+// --- Аплоад WAV: состояние сессии -------------------------------------------    
+static bool     ul_active   = false;   // идёт приём RECn.WAV    
+static uint8_t  ul_bank     = 0;       // целевой банк (1..7)    
+static uint32_t ul_lba_next = 0;       // ожидаемый LBA (последовательная запись)    
+static uint32_t ul_last_ms  = 0;       // millis() последнего сектора    
+static uint32_t ul_file_off = 0;       // байт, прочитанный из файла    
+static uint32_t ul_data_end = 0;       // конец data-чанка (байт в файле)    
+static uint32_t ul_rate     = 0;       // частота входного WAV    
+static uint16_t ul_channels = 0;    
+static uint16_t ul_bits     = 0;    
+static uint16_t ul_balign   = 0;       // block align (байт на фрейм)    
+static uint32_t ul_in_pos   = 0;       // позиция во входном потоке (фреймы)    
+static uint32_t ul_out_pos  = 0;       // записано выходных отсчётов в ram_buf    
+static int16_t  ul_prev     = 0;       // предыдущий входной отсчёт (интерполяция)    
+static bool     ul_trunc    = false;   // ram_buf заполнен — хвост отброшен    
+static uint8_t  ul_tail[8];            // недошедший кусок фрейма между секторами    
+static uint8_t  ul_tail_len = 0;    
   
 // ---------------------------------------------------------------------------  
 // Построение образа  
@@ -155,10 +178,13 @@ void af_fm_sync(void) {
     fm_stale = false;    
 }    
   
-void af_fm_poll(void) {    
-    // Дебаунс: хост пишет файл пачкой секторов — ждём 800 мс тишины,    
-    // потом парсим SET.TXT целиком и пишем банки во flash.    
-    if (fm_dirty && (int32_t)(millis() - fm_dirty_ms) >= 800) {      
+void af_fm_poll(void) {      
+    // Коммит аплоада WAV: 1.5 с тишины после последнего сектора.    
+    if (ul_active && (int32_t)(millis() - ul_last_ms) >= 1500)    
+        ul_commit();    
+    // Дебаунс: хост пишет файл пачкой секторов — ждём 800 мс тишины,      
+    // потом парсим SET.TXT целиком и пишем банки во flash.      
+    if (fm_dirty && (int32_t)(millis() - fm_dirty_ms) >= 800) {        
         fm_dirty = false;      
         const char* txt = (const char*)&fm_disk[AF_FM_SET_LBA][0];        
         bool applied = af_cli_apply_set_txt(txt,        
@@ -220,7 +246,192 @@ static void wav_sector(uint8_t bank, uint32_t off_in_file, uint8_t* buffer) {
         }    
     }    
 }    
-    
+
+// ---------------------------------------------------------------------------    
+// Аплоад WAV: парсер заголовка + стриминг-ресемплер в ram_buf    
+// ---------------------------------------------------------------------------    
+  
+static uint16_t rd16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }    
+static uint32_t rd32(const uint8_t* p) {    
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |    
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);    
+}    
+  
+// Сброс сессии аплоада (без записи слота).    
+static void ul_abort(const char* why) {    
+    if (ul_active) Serial.printf("# fm: REC%u.WAV upload aborted: %s\n",    
+                                 (unsigned)ul_bank, why);    
+    ul_active = false;    
+    ul_tail_len = 0;    
+}    
+  
+// Начало сессии: запись в первый сектор файла RECn.WAV.    
+static bool ul_begin(uint8_t bank, uint32_t lba) {    
+    if (af_rec_is_busy()) {    
+        Serial.println("# fm: upload rejected — rec/play busy");    
+        return false;    
+    }    
+    ul_active   = true;    
+    ul_bank     = bank;    
+    ul_lba_next = lba;    
+    ul_last_ms  = millis();    
+    ul_file_off = 0;    
+    ul_data_end = 0;    
+    ul_rate = 0; ul_channels = 0; ul_bits = 0; ul_balign = 0;    
+    ul_in_pos = 0; ul_out_pos = 0; ul_prev = 0;    
+    ul_trunc = false; ul_tail_len = 0;    
+    return true;    
+}    
+  
+// Разбор WAV-заголовка из первых байт файла (пришли в первом секторе).    
+// Возвращает смещение начала PCM-данных или 0 при ошибке.    
+static uint32_t ul_parse_header(const uint8_t* buf, uint32_t avail) {    
+    if (avail < 44) return 0;                       // нужен минимум RIFF+fmt+data    
+    if (memcmp(buf, "RIFF", 4) != 0 || memcmp(buf + 8, "WAVE", 4) != 0)    
+        return 0;    
+    // Ищем чанки fmt и data (между ними могут быть LIST/INFO и т.п.)    
+    uint32_t pos = 12;    
+    bool have_fmt = false;    
+    while (pos + 8 <= avail && pos + 8 <= 512) {    
+        uint32_t csz = rd32(buf + pos + 4);    
+        if (memcmp(buf + pos, "fmt ", 4) == 0 && csz >= 16) {    
+            uint16_t tag = rd16(buf + pos + 8);    
+            if (tag != 1) return 0;                 // только PCM (не float/adpcm)    
+            ul_channels = rd16(buf + pos + 10);    
+            ul_rate     = rd32(buf + pos + 12);    
+            ul_balign   = rd16(buf + pos + 20);    
+            ul_bits     = rd16(buf + pos + 22);    
+            if (ul_channels < 1 || ul_channels > 2) return 0;    
+            if (ul_bits != 8 && ul_bits != 16 && ul_bits != 24 && ul_bits != 32)    
+                return 0;    
+            if (ul_balign == 0)    
+                ul_balign = (uint16_t)(ul_channels * (ul_bits / 8));    
+            if (ul_rate < 4000 || ul_rate > 192000) return 0;    
+            have_fmt = true;    
+        } else if (memcmp(buf + pos, "data", 4) == 0) {    
+            if (!have_fmt) return 0;    
+            ul_data_end = pos + 8 + csz;            // конец PCM-данных    
+            return pos + 8;                         // смещение первого сэмпла    
+        }    
+        pos += 8 + csz + (csz & 1);                 // чанки выровнены на 2    
+    }    
+    return 0;                                       // data-чанк не найден в 1-м секторе    
+}    
+  
+// Извлечение одного входного отсчёта (mono = усреднение каналов) -> int16.    
+static int16_t ul_sample(const uint8_t* p) {    
+    int32_t sum = 0;    
+    for (uint16_t c = 0; c < ul_channels; c++) {    
+        const uint8_t* s = p + c * (ul_bits / 8);    
+        int32_t v;    
+        switch (ul_bits) {    
+            case 8:  v = ((int32_t)s[0] - 128) << 8; break;    
+            case 16: v = (int16_t)rd16(s); break;    
+            case 24: v = ((int32_t)s[0] | ((int32_t)s[1] << 8) |    
+                          ((int32_t)(int8_t)s[2] << 16)) >> 8; break;    
+            default: v = (int32_t)rd32(s) >> 16; break;   // 32 бит    
+        }    
+        sum += v;    
+    }    
+    int32_t r = sum / ul_channels;    
+    if (r > 32767) r = 32767;    
+    if (r < -32768) r = -32768;    
+    return (int16_t)r;    
+}    
+  
+// Ресемплер: входной отсчёт -> выходные отсчёты в ram_buf (линейная интерполяция).    
+// Шаг: in_pos продвигается на ul_rate за каждый выходной отсчёт 7732 Гц.    
+static void ul_push(int16_t cur) {    
+    int16_t* dst = af_rec_ram_buf();    
+    if (dst == nullptr) { ul_abort("no ram_buf"); return; }    
+    // Выходные отсчёты между предыдущим и текущим входным    
+    while (!ul_trunc) {    
+        // позиция следующего выходного отсчёта во входных единицах (Q32)    
+        // out k соответствует входному времени k * ul_rate / 7732    
+        // храним накопитель: next_in = ul_out_pos * ul_rate (в единицах 1/7732 сэмпла)    
+        uint64_t next_in = (uint64_t)ul_out_pos * ul_rate;    
+        uint64_t cur_in  = (uint64_t)ul_in_pos * AF_FM_REC_RATE;    
+        if (next_in >= cur_in + AF_FM_REC_RATE) break;  // выходной ещё не наступил    
+        // дробная часть между prev и cur    
+        uint32_t fr = (uint32_t)(next_in - cur_in);     // 0..7731    
+        int32_t a = ul_prev, b = cur;    
+        int32_t v = a + ((b - a) * (int32_t)fr) / (int32_t)AF_FM_REC_RATE;    
+        if (v > 32767) v = 32767;    
+        if (v < -32768) v = -32768;    
+        if (ul_out_pos < AF_REC_RAM_SAMP) {    
+            dst[ul_out_pos] = (int16_t)v;    
+            ul_out_pos++;    
+        } else {    
+            ul_trunc = true;                          // слот полон — хвост отбрасываем    
+            break;    
+        }    
+    }    
+    ul_prev = cur;    
+    ul_in_pos++;    
+}    
+  
+// Обработка одного записанного сектора WAV-файла.    
+static void ul_feed(const uint8_t* buf) {    
+    ul_last_ms = millis();    
+    uint32_t pos = 0;    
+  
+    if (ul_file_off == 0) {    
+        uint32_t data_off = ul_parse_header(buf, AF_FM_SECTOR_SIZE);    
+        if (data_off == 0) { ul_abort("bad WAV header"); return; }    
+        Serial.printf("# fm: REC%u.WAV upload: %lu Hz %u ch %u bit\n",    
+                      (unsigned)ul_bank, (unsigned long)ul_rate,    
+                      (unsigned)ul_channels, (unsigned)ul_bits);    
+        pos = data_off;    
+    }    
+  
+    // Склеиваем хвост прошлого сектора с началом текущего    
+    while (pos < AF_FM_SECTOR_SIZE && !ul_trunc) {    
+        uint32_t file_pos = ul_file_off + pos;    
+        if (file_pos >= ul_data_end) break;             // за пределами data-чанка    
+        // Собираем полный фрейм (ul_balign байт)    
+        uint8_t frame[8];                               // max 2ch * 32bit = 8    
+        uint8_t need = (uint8_t)ul_balign;    
+        uint8_t got = 0;    
+        if (ul_tail_len) {    
+            memcpy(frame, ul_tail, ul_tail_len);    
+            got = ul_tail_len;    
+            ul_tail_len = 0;    
+        }    
+        uint32_t room = AF_FM_SECTOR_SIZE - pos;    
+        uint32_t take = (need - got < room) ? (need - got) : room;    
+        // Не выходить за data_end    
+        if (file_pos + take > ul_data_end) take = ul_data_end - file_pos;    
+        memcpy(frame + got, buf + pos, take);    
+        got += (uint8_t)take;    
+        pos += take;    
+        if (got < need) {                               // фрейм разрезан — в хвост    
+            memcpy(ul_tail, frame, got);    
+            ul_tail_len = got;    
+            break;    
+        }    
+        ul_push(ul_sample(frame));    
+    }    
+    ul_file_off += AF_FM_SECTOR_SIZE;    
+}    
+  
+// Коммит: таймаут после последнего сектора -> запись слота во flash.    
+static void ul_commit(void) {    
+    uint8_t bank = ul_bank;    
+    uint32_t n = ul_out_pos;    
+    ul_active = false;    
+    if (n == 0) {    
+        Serial.printf("# fm: REC%u.WAV upload: no samples\n", (unsigned)bank);    
+        return;    
+    }    
+    Serial.printf("# fm: REC%u.WAV -> slot %u, %lu samples%s\n",    
+                  (unsigned)bank, (unsigned)bank, (unsigned long)n,    
+                  ul_trunc ? " (truncated)" : "");    
+    if (af_rec_slot_write(bank, n))    
+        af_fm_request_sync();                           // размер WAV обновился    
+    else    
+        Serial.println("# fm: slot write failed");    
+}    
+
 int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {    
     if (buffer == nullptr || bufsize == 0 || lba >= AF_FM_SECTOR_COUNT)    
         return -1;    
@@ -245,18 +456,40 @@ void af_fm_msc_flush(void) {
     if (fm_dirty) fm_dirty_ms = millis();   // flush = конец пачки записи    
 }    
   
-int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {        
-    if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;        
-    if (bufsize < AF_FM_SECTOR_SIZE) return -1;        
-    if (lba >= AF_FM_WAV_LBA(0)) return -1;        // WAV — read-only        
-    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only        
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);          
-    // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..27).  
-    // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)  
-    // не должны триггерить парсинг и перемонтирование — иначе цикл.  
-    if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {  
-        fm_dirty   = true;      
-        fm_dirty_ms = millis();      // дебаунс -> парсер в af_fm_poll      
-    }  
-    return (int32_t)AF_FM_SECTOR_SIZE;          
-}  
+int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {          
+    if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;          
+    if (bufsize < AF_FM_SECTOR_SIZE) return -1;          
+  
+    // WAV-область: перезапись RECn.WAV = аплоад в слот n.    
+    if (lba >= AF_FM_WAV_LBA(0)) {    
+        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
+            uint32_t start = AF_FM_WAV_LBA(i);    
+            if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {    
+                if (!ul_active) {    
+                    if (!ul_begin(i + 1, lba)) return -1;    
+                } else if (ul_bank != (uint8_t)(i + 1)) {    
+                    return -1;                        // одна сессия за раз    
+                }    
+                if (lba != ul_lba_next) {             // только последовательно    
+                    ul_abort("non-sequential LBA");    
+                    return -1;    
+                }    
+                ul_feed(buffer);    
+                ul_lba_next = lba + 1;    
+                return (int32_t)AF_FM_SECTOR_SIZE;    
+            }    
+        }    
+        return -1;                                    // зазор между файлами    
+    }    
+  
+    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only          
+    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);            
+    // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..27).    
+    // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    
+    // не должны триггерить парсинг и перемонтирование — иначе цикл.    
+    if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {    
+        fm_dirty   = true;        
+        fm_dirty_ms = millis();      // дебаунс -> парсер в af_fm_poll        
+    }    
+    return (int32_t)AF_FM_SECTOR_SIZE;            
+}    
