@@ -11,7 +11,7 @@
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
 //        txpres txpresmax txpresfreq txpresq txshelf txshelffreq txshelfq  
 //        txexc txexcmix txmode txclip txnotch txnotchf txsetdef txprof
-//   SYS: stats dump fmap ftest save load banks pwm voice ramp rec play stop recs help
+//   SYS: stats dump fmap ftest save load banks pwm led voice ramp rec play stop recs help  
 // ============================================================================  
 #include <Arduino.h>
 #include <string.h>
@@ -115,6 +115,7 @@ static void cli_help(void) {
     Serial.println("#   banks             — показать все ячейки");  
     Serial.println("#   banks clr         — стандартные пресеты во все банки + очистка голосовых слотов");      
     Serial.println("#   pwm on|off        — PWM-выход (off = несущая заглушена)");  
+    Serial.println("#   led on|off        — heartbeat-индикация (WS2812B + GP25)");  
     Serial.println("#   voice [N|vol <0..400>] — голосовые сообщения");  
     Serial.println("#   ramp on|off       — пила-счётчик вместо DSP (тест потока)");    
     Serial.println("#   rec               — запись в RAM (~7.8 с, источник = активный тракт)");      
@@ -1170,8 +1171,21 @@ static void cli_exec(char* line) {
         } else {  
             Serial.println("# ERR: pwm on|off");  
         }  
-    }
-
+    }  
+  
+    else if (strcmp(cmd, "led") == 0) {  
+        char* s = strtok(NULL, " \t");  
+        if (s && strcmp(s, "on") == 0) {  
+            af_led_set_enabled(true);  
+            Serial.println("# OK led=on");  
+        } else if (s && strcmp(s, "off") == 0) {  
+            af_led_set_enabled(false);  
+            Serial.println("# OK led=off");  
+        } else {  
+            Serial.printf("# led = %s\n", af_led_enabled() ? "on" : "off");  
+        }  
+    }  
+  
     else if (strcmp(cmd, "voice") == 0) {  
         char* a1 = strtok(NULL, " \t");  
         if (a1 && strcmp(a1, "vol") == 0) {    

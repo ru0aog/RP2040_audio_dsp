@@ -24,9 +24,16 @@
 #define PIN_YD     23   // WS2812B на YD-RP2040  
 #define PIN_PICO   25   // LED_BUILTIN на обычной Pico  
 
-static uint8_t s_bank = 0;   // текущий банк, задаёт af_led_set_bank()  
+static uint8_t s_bank = 0;      // текущий банк, задаёт af_led_set_bank()  
+static bool    s_enabled = true; // led off — heartbeat заглушен  
   
 void af_led_set_bank(uint8_t bank) { s_bank = bank; }  
+  
+void af_led_set_enabled(bool on) {  
+    s_enabled = on;  
+    if (!on) af_led_off();        // погасить сразу, не ждать фазы 500..1000  
+}  
+bool af_led_enabled(void) { return s_enabled; }  
   
 // Базовый цвет банка (R,G,B), доли от максимума — умножаются на яркость.  
 // bank 0 (ручной) — зелёный, как раньше.  
@@ -94,8 +101,8 @@ void af_led_init(void) {
 // ----------------------------------------------------------------------------  
 // Heartbeat: цвет вспышки = цвет банка; NR подмешивает синий, NT — красный.  
 void af_led_poll(void) {  
-    //return;
-
+    if (!s_enabled) return;  
+  
     static uint32_t t0     = 0;  
     static uint8_t  last_g = 0xFF, last_r = 0xFF, last_b = 0xFF;  
   
