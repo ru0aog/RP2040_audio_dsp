@@ -83,9 +83,11 @@ static void snr_fft(int32_t *re, int32_t *im, bool inverse) {
                 int32_t wr = snr_tw_re[tw];    
                 int32_t wi = inverse ? -snr_tw_im[tw] : snr_tw_im[tw];    
                 uint16_t a = i + j, b = a + half;    
-                int32_t br = re[b], bi = im[b];    
-                int32_t tr = (int32_t)(((int64_t)br * wr - (int64_t)bi * wi) >> SNR_Q);      
-                int32_t ti = (int32_t)(((int64_t)br * wi + (int64_t)bi * wr) >> SNR_Q);      
+                // Бины ~2^23: >>8 -> ~2^15, тогда *Q15 = ~2^30 влезает в int32.  
+                // (br>>8)*wr >> 7 == br*wr >> 15 — масштаб сохранён.  
+                int32_t br = re[b] >> 8, bi = im[b] >> 8;  
+                int32_t tr = (br * wr - bi * wi) >> 7;  
+                int32_t ti = (br * wi + bi * wr) >> 7;      
                 re[b] = (re[a] - tr) >> 1;    
                 im[b] = (im[a] - ti) >> 1;    
                 re[a] = (re[a] + tr) >> 1;    
