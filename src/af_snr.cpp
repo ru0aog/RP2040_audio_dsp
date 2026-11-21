@@ -173,11 +173,15 @@ void af_snr_reset(void) {
     snr_in_pos = snr_out_pos = snr_out_avail = 0;  
 }  
   
-int32_t af_snr_push(int32_t x) {  
-    // Выход: читаем из OLA-хвоста; пока не накоплен — нули (latency fill)  
-    int32_t y = 0;  
-    // Вход: пишем в кадр; по заполнении HOP — обработка  
-    snr_in[snr_in_pos++] = (int16_t)x;  
+int32_t af_snr_push(int32_t x) {    
+    // Выход: читаем из OLA-буфера; пока не накоплен — нули (latency fill)    
+    int32_t y = 0;    
+    if (snr_out_avail > 0) {    
+        y = snr_ola[snr_out_pos++];    
+        snr_out_avail--;    
+    }    
+    // Вход: пишем в кадр; по заполнении HOP — обработка    
+    snr_in[snr_in_pos++] = (int16_t)x;    
     if (snr_in_pos >= SNR_N) snr_in_pos = 0;  
     if (snr_in_pos == SNR_HOP || snr_in_pos == 0) {  
         // кадр готов: in[] содержит последние 256 отсчётов  
