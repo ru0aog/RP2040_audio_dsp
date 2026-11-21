@@ -927,8 +927,14 @@ int32_t  af_dsp_rxpresmax(void)   { return rx_presmax_db_x10; }  // дБ x10, н
 uint32_t af_dsp_rxpresf(void)     { return rx_pres_freq_hz; }  
 uint32_t af_dsp_rxpresq(void)     { return rx_pres_q_x100; }
 void     af_dsp_set_nb(bool on) {    
-    if (on && !nb_on) { nb_env = 8192; nb_last = 0; nb_hold_cnt = 0; } // чистый старт    
-    nb_on = on;    
+    // NB ЗАГЛУШЕН: детектор вешал звук и дёргал шумовую полку (b46d15c).    
+    // Команды/поля банка оставлены для совместимости формата (VER 6),    
+    // но включение игнорируется — nb_on всегда false.    
+    // TODO: вернуться к NB — вероятно, нужен детектор на 495 ksps до CIC    
+    // и/или критерий ширины импульса, а не только превышение огибающей.    
+    (void)on;    
+    nb_on = false;    
+    nb_hold_cnt = 0;    
 }    
 bool     af_dsp_nb_on(void) { return nb_on; }  
 void     af_dsp_set_nbthr(int32_t x10) {  
@@ -1234,29 +1240,28 @@ void __not_in_flash_func(af_dsp_poll)(void) {
   
             // Децимация 250k -> 15.625k: CIC/2 -> HB/2 -> HB/2 -> HB/2
             int32_t y;  
-            if (!cic_push(x, &y))        continue;
-            // Noise Blanker: импульсные помехи до HB/FIR (125 ksps).  
-            // |y| > env*thr -> hold последнего чистого отсчёта + AF_NB_HOLD  
-            // на хвост. env — EMA |y| k=1/1024, обновляется значением,    
-            // ограниченным порогом: импульс не задирает собственный порог.    
-            if (nb_on) {  
-                int32_t ay = (y < 0) ? -y : y;  
-                int32_t thr = (nb_env * nb_thr_x10) / 10;  
-                // env обновляется ВСЕГДА, но значением, ограниченным порогом:  
-                // фон подтягивает env к уровню сигнала, а импульс (ay >> thr)  
-                // вносит не больше thr — не задирает собственный порог.  
-                int32_t ev = (ay > thr) ? thr : ay;  
-                nb_env += (ev - nb_env) >> 10;  
-                if (nb_hold_cnt > 0 || ay > thr) {  
-                    if (nb_hold_cnt == 0) nb_hits++;  
-                    nb_hold_cnt = AF_NB_HOLD;  
-                    y = nb_last;  
-                } else {  
-                    nb_last = y;  
-                }  
-                if (nb_hold_cnt > 0) nb_hold_cnt--;  
-            }  
-            if (!hb_push(&hb[0], y, &y)) continue;  
+            if (!cic_push(x, &y))        continue;  
+#if 0   // NB ЗАГЛУШЕН — см. af_dsp_set_nb. Оставлено для будущей доработки.  
+            // Noise Blanker: импульсные помехи до HB/FIR (125 ksps).    
+            // |y| > env*thr -> hold последнего чистого отсчёта + AF_NB_HOLD    
+            // на хвост. env — EMA |y| k=1/1024, обновляется значением,      
+            // ограниченным порогом: импульс не задирает собственный порог.      
+            if (nb_on) {    
+                int32_t ay = (y < 0) ? -y : y;    
+                int32_t thr = (nb_env * nb_thr_x10) / 10;    
+                int32_t ev = (ay > thr) ? thr : ay;    
+                nb_env += (ev - nb_env) >> 10;    
+                if (nb_hold_cnt > 0 || ay > thr) {    
+                    if (nb_hold_cnt == 0) nb_hits++;    
+                    nb_hold_cnt = AF_NB_HOLD;    
+                    y = nb_last;    
+                } else {    
+                    nb_last = y;    
+                }    
+                if (nb_hold_cnt > 0) nb_hold_cnt--;    
+            }    
+#endif    
+            if (!hb_push(&hb[0], y, &y)) continue;    
             if (!hb_push(&hb[1], y, &y)) continue;  
             if (!hb_push(&hb[2], y, &y)) continue;  
             y >>= 3;    // компенсация DC-gain трёх HB (2^3 = 8)
