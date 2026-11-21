@@ -113,7 +113,8 @@ static void snr_frame(void) {
         // <<4: компенсация /256 FFT с запасом; бины после FFT ~8x,
         // int16-состояние с sat16 не переполняется, int32-умножение в бабочке.
         int32_t x = snr_in[i] << 4;
-        snr_re[i] = (int32_t)(((int64_t)x * snr_win[i]) >> SNR_Q);   
+        // x <= 2^15, win <= 2^15: произведение <= 2^30 — влезает в int32
+        snr_re[i] = (int16_t)((x * (int32_t)snr_win[i]) >> SNR_Q);
         snr_im[i] = 0;    
     }    
     snr_fft(snr_re, snr_im, false);  
@@ -121,10 +122,9 @@ static void snr_frame(void) {
     // Per-bin: magnitude -> minima tracker -> gain -> apply  
     for (uint16_t k = 0; k < SNR_BINS; k++) {  
         int32_t re = snr_re[k], im = snr_im[k];      
-        // re,im <= 2^15 -> re²+im² <= 2^31: int64 (редко, 129 раз/кадр),
-        // >>16 -> ~2^15, isqrt -> mag ~2^7..2^8 для x~127..2046
-        uint16_t mag = snr_isqrt((uint32_t)(
-            ((int64_t)re * re + (int64_t)im * im) >> 16));    
+        // re,im <= 2^15: re²+im² <= 2^31 — влезает в uint32
+        uint32_t sq = (uint32_t)(re * re) + (uint32_t)(im * im);
+        uint16_t mag = snr_isqrt(sq >> 16);
         if (k == SNR_DBG_BIN) snr_dbg_mag = mag;   // отладка: mag бина ~1.2 кГц  
       
         uint32_t n = snr_noise[k];
@@ -161,8 +161,9 @@ static void snr_frame(void) {
         }  
         snr_gain[k] = gs;      
   
-        snr_re[k] = (int16_t)snr_sat16((int32_t)(((int64_t)re * gs) >> SNR_Q));
-        snr_im[k] = (int16_t)snr_sat16((int32_t)(((int64_t)im * gs) >> SNR_Q));
+        // re <= 2^15, gs <= 2^15: произведение <= 2^30 — int32
+        snr_re[k] = (int16_t)snr_sat16((re * gs) >> SNR_Q);
+        snr_im[k] = (int16_t)snr_sat16((im * gs) >> SNR_Q);
         if (k > 0 && k < SNR_N / 2) {               // conjugate symmetric  
             snr_re[SNR_N - k] = snr_re[k];  
             snr_im[SNR_N - k] = -snr_im[k];  
@@ -178,14 +179,15 @@ static void snr_frame(void) {
     // x -> <<4 -> FFT/256 -> gain -> IFFT/256 (~= 16*x*win)
     //   -> *win -> >>4 -> OLA*(2/3) ~= x
     for (uint16_t i = 0; i < SNR_HOP; i++) {        
-        int32_t y = (int32_t)(((int64_t)snr_re[i] * snr_win[i]) >> (SNR_Q + 4));
-        y = snr_tail[i] + (int32_t)(((int64_t)y * 21846) >> SNR_Q);          
+        // snr_re <= 2^15, win <= 2^15: произведение <= 2^30 — int32
+        int32_t y = ((int32_t)snr_re[i] * snr_win[i]) >> (SNR_Q + 4);
+        y = snr_tail[i] + ((y * 21846) >> SNR_Q);     
         if (y > 32767) y = 32767; else if (y < -32768) y = -32768;        
         snr_ola[i] = (int16_t)y;        
     }        
     for (uint16_t i = 0; i < SNR_HOP; i++) {        
-        int32_t y = (int32_t)(((int64_t)snr_re[SNR_HOP + i] * snr_win[SNR_HOP + i]) >> (SNR_Q + 4));
-        y = (int32_t)(((int64_t)y * 21846) >> SNR_Q);          
+        int32_t y = ((int32_t)snr_re[SNR_HOP + i] * snr_win[SNR_HOP + i]) >> (SNR_Q + 4);
+        y = (y * 21846) >> SNR_Q;
         if (y > 32767) y = 32767; else if (y < -32768) y = -32768;        
         snr_tail[i] = (int16_t)y;        
     }        
