@@ -16,6 +16,7 @@
 #include <Arduino.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>                     // log10 — inlvl в dBFS 
 #include <stddef.h>                   // offsetof — таблица параметров AF_PARAMS
 #include "hardware/clocks.h"          // clock_get_hz — фактическая clk_sys  
 #include "hardware/structs/ssi.h"     // ssi_hw->baudr — делитель SCK флеша  
@@ -305,18 +306,19 @@ static void cli_dump(void) {
     const uint32_t cap   = af_capture_dropped();  
     const uint32_t isr   = af_cap_isr_count;  
   
-    Serial.printf(  
-        "# L0=%lu.%lu%% L1=%lu.%lu%% blk=%lu max=%luus |"  
-        " cap: isr=%lu d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"  
-        " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"  
-        " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu gap=%luus ff=%lu ws=%lu av=%lu |"  
-        " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",  
-        (unsigned long)(af_core0_load_permille() / 10u),  
-        (unsigned long)(af_core0_load_permille() % 10u),  
-        (unsigned long)(af_dsp_load_permille() / 10u),  
-        (unsigned long)(af_dsp_load_permille() % 10u),  
-        (unsigned long)(pub - p_pub),  
-        (unsigned long)af_dsp_max_block_us(),  
+    Serial.printf(    
+        "# L0=%lu.%lu%% L1=%lu.%lu%% blk=%lu max=%luus inlvl=%ld |"    
+        " cap: isr=%lu d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"    
+        " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"    
+        " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu gap=%luus ff=%lu ws=%lu av=%lu |"    
+        " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",    
+        (unsigned long)(af_core0_load_permille() / 10u),    
+        (unsigned long)(af_core0_load_permille() % 10u),    
+        (unsigned long)(af_dsp_load_permille() / 10u),    
+        (unsigned long)(af_dsp_load_permille() % 10u),    
+        (unsigned long)(pub - p_pub),    
+        (unsigned long)af_dsp_max_block_us(),    
+        (long)af_dsp_rx_in_lvl(),    
         (unsigned long)(isr - p_isr), (unsigned long)(cap - p_cap),  
         (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,  
         (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,  
