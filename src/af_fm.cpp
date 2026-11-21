@@ -137,7 +137,9 @@ static void fm_build_fat(uint16_t set_clusters, const uint16_t* wav_clusters) {
     uint8_t* f = &fm_disk[1][0];    
     memset(f, 0, AF_FM_FAT_SECTORS * AF_FM_SECTOR_SIZE);    
     f[0] = 0xF8; f[1] = 0xFF; f[2] = 0xFF;    
-    if (set_clusters) fat_chain(f, 2, set_clusters);    
+    fat_chain(f, 2, AF_FM_SET_CLUSTERS);   // вся территория SET.TXT занята —  
+                                           // хост не выделит кластеры 3..17  
+                                           // новому файлу (инцидент с REC1)  
     for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {  
         uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + i * AF_FM_WAV_CLUSTERS);  
         fat_chain(f, first, AF_FM_WAV_CLUSTERS);  
