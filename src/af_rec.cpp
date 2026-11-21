@@ -43,7 +43,9 @@ static volatile uint32_t    decim_phase = 0;   // фаза дециматора 
 static volatile uint32_t    interp_phase = 0;  // фаза интерполятора (play)  
 static int16_t              prev_samp = 0;     // предыдущий отсчёт для интерполяции  
 static volatile uint8_t     play_src = 0;      // 0 = ram_buf (×2 interp), 1 = voice_14 (1:1)    
-static volatile uint32_t    play_len = 0;      // длина текущего воспроизведения  
+static volatile uint32_t    play_len = 0;      // длина текущего воспроизведения
+
+static bool fill_done = false;
 
 // --- RAM-буфер записи --------------------------------------------------------    
 // +128 отсчётов (256 Б) — запас под паддинг хвоста до границы страницы  
@@ -237,9 +239,9 @@ static void rec_fill_empty_slots(void) {
     af_fm_request_sync();                               // обновить RECn.WAV  
 }  
 
-void af_rec_init(void) {    
+void af_rec_init(void) {
+    fill_done = false;  
     rec_len = 0;
-    rec_fill_empty_slots();               // пустые слоты -> voice_14  
     slot_off = rec_slot_off(rec_bank());    
     slot_len = rec_slot_len(rec_bank());    
     Serial.printf("# rec: slot bank=%u off=0x%lx len=%lu samp\n",    
@@ -364,7 +366,11 @@ int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {
 }      
   
 // --- Core 0: контроль записи (смена тракта, переполнение буфера) --------------  
-void af_rec_poll(void) {          
+void af_rec_poll(void) {
+    if (!fill_done) {                 // первый poll — Core1 уже работает  
+        fill_done = true;  
+        rec_fill_empty_slots();  
+    }  
     if (state != ST_REC) return;          
     if (pos >= AF_REC_RAM_SAMP) {           // RAM-буфер полон — стоп  
         Serial.println("# rec: ram buf full — stop");    
