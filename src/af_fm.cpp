@@ -34,7 +34,8 @@ extern size_t af_cli_format_banks(char* buf, size_t cap);
 static uint8_t  fm_disk[AF_FM_RAM_SECTORS][AF_FM_SECTOR_SIZE];  // ~14 КБ    
 static uint32_t fm_set_len = 0;        // байт в SET.TXT  
 static bool     fm_dirty   = false;    // ПК писал — ждёт парсера    
-static bool     fm_stale   = true;     // SET.TXT устарел — регенерировать    
+static bool     fm_stale   = true;     // SET.TXT устарел — регенерировать      
+static bool     fm_sizes_changed = false;  // размеры файлов изменились -> re-enumerate  
 static uint32_t fm_dirty_ms = 0;       // millis() последней записи (дебаунс)      
   
 // --- Аплоад WAV: состояние сессии -------------------------------------------    
@@ -199,17 +200,22 @@ void af_fm_sync(void) {
     uint16_t set_clusters = (uint16_t)((fm_set_len + 511) / 512);    
     
     // WAV: размер = 44 + out_samp*2; пустой слот -> 44 Б (только заголовок).    
-    uint16_t wav_clusters[AF_FM_WAV_FILES];    
-    uint32_t wav_sizes[AF_FM_WAV_FILES];    
-    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
-        uint32_t len = af_rec_slot_len(i + 1);    
-        uint32_t out_samp = (len * AF_FM_WAV_RATE) / AF_FM_REC_RATE;    
-        wav_sizes[i] = 44 + out_samp * 2;    
-        wav_clusters[i] = (uint16_t)((wav_sizes[i] + 511) / 512);    
-    }    
-    fm_build_fat(set_clusters, wav_clusters);    
-    fm_build_dir(fm_set_len, set_clusters, wav_sizes);    
-    fm_stale = false;    
+    uint16_t wav_clusters[AF_FM_WAV_FILES];      
+    uint32_t wav_sizes[AF_FM_WAV_FILES];      
+    static uint32_t prev_sizes[AF_FM_WAV_FILES] = {0};   // для детекта изменений  
+    static uint32_t prev_set_len = 0;  
+    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {      
+        uint32_t len = af_rec_slot_len(i + 1);      
+        uint32_t out_samp = (len * AF_FM_WAV_RATE) / AF_FM_REC_RATE;      
+        wav_sizes[i] = 44 + out_samp * 2;      
+        wav_clusters[i] = (uint16_t)((wav_sizes[i] + 511) / 512);      
+        if (wav_sizes[i] != prev_sizes[i]) fm_sizes_changed = true;  
+        prev_sizes[i] = wav_sizes[i];  
+    }      
+    if (fm_set_len != prev_set_len) { fm_sizes_changed = true; prev_set_len = fm_set_len; }  
+    fm_build_fat(set_clusters, wav_clusters);      
+    fm_build_dir(fm_set_len, set_clusters, wav_sizes);      
+    fm_stale = false;      
 }    
 
 static void ul_commit(void);   // определена ниже — коммит аплоада по таймауту  
@@ -229,8 +235,15 @@ void af_fm_poll(void) {
                       applied ? "parsed -> banks written" : "parse failed");        
         fm_stale = true;               // перерендерить из записанных банков         
     }      
-    if (fm_stale) af_fm_sync();        
-}    
+    if (fm_stale) af_fm_sync();          
+    // Пере-энумерация только когда размеры файлов реально изменились  
+    // (заливка пустых слотов, аплоад, запись с платы). Обычный старт —  
+    // диск монтируется один раз, без мигания.  
+    if (fm_sizes_changed) {  
+        fm_sizes_changed = false;  
+        af_usb_reenumerate();  
+    }  
+}      
   
 bool     af_fm_dirty(void)    { return fm_dirty; }  
 uint32_t af_fm_set_size(void) { return fm_set_len; }  
@@ -491,10 +504,9 @@ static void ul_commit(void) {
     Serial.printf("# fm: REC%u.WAV -> slot %u, %lu samples%s\n",    
                   (unsigned)bank, (unsigned)bank, (unsigned long)n,    
                   ul_trunc ? " (truncated)" : "");    
-    if (af_rec_slot_write(bank, n)) {  
-        af_fm_request_sync();                           // размер WAV обновился  
-        af_usb_reenumerate();                           // хост перечитает каталог  
-    } else {  
+    if (af_rec_slot_write(bank, n)) {    
+        af_fm_request_sync();   // sync выставит fm_sizes_changed -> re-enumerate в poll  
+    } else {    
         Serial.println("# fm: slot write failed");  
     }  
 }    
