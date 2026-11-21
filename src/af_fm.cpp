@@ -70,10 +70,11 @@ static void dir_track(const uint8_t* d) {
     static const char wav_names[AF_FM_WAV_FILES][12] = {  
         "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV",  
         "REC5    WAV", "REC6    WAV", "REC7    WAV" };  
-    for (uint8_t e = 0; e < 16; e++) {               // 16 записей по 32 Б  
-        const uint8_t* p = d + e * 32;  
-        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {  
-            if (memcmp(p, wav_names[i], 11) == 0) {  
+    for (uint8_t e = 0; e < 16; e++) {               // 16 записей по 32 Б    
+        const uint8_t* p = d + e * 32;    
+        if (p[0] == 0xE5 || p[0] == 0x00) continue;  // удалённая/пустая запись    
+        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
+            if (memcmp(p, wav_names[i], 11) == 0) {    
                 uint16_t cl = rd16(p + 26);  
                 if (cl != dir_first_cl[i + 1]) {  
                     dir_first_cl[i + 1] = cl;  
@@ -331,7 +332,11 @@ static bool ul_begin(uint8_t bank, uint32_t lba) {
     ul_lba_next = lba;      
     Serial.printf("# fm: upload begin: REC%u.WAV lba=%lu (file start %lu)\n",  
                   (unsigned)bank, (unsigned long)lba,  
-                  (unsigned long)AF_FM_WAV_LBA(bank - 1));  
+                  (unsigned long)AF_FM_WAV_LBA(bank - 1));
+    Serial.printf("# fm: dir_first_cl[] =");  
+    for (uint8_t i = 1; i <= AF_FM_WAV_FILES; i++)  
+        Serial.printf(" %u", (unsigned)dir_first_cl[i]);  
+    Serial.println();  
     ul_last_ms  = millis();    
     ul_file_off = 0;    
     ul_data_end = 0;    
@@ -510,10 +515,11 @@ static void ul_commit(void) {
     Serial.printf("# fm: REC%u.WAV -> slot %u, %lu samples%s\n",    
                   (unsigned)bank, (unsigned)bank, (unsigned long)n,    
                   ul_trunc ? " (truncated)" : "");    
-    if (af_rec_slot_write(bank, n)) {      
-        af_fm_request_sync();    
-        fm_sizes_changed = true;   // аплоад — всегда re-enumerate (содержимое новое)    
-    } else {      
+    if (af_rec_slot_write(bank, n)) {        
+        af_fm_request_sync();      
+        fm_sizes_changed = true;   // аплоад — всегда re-enumerate (содержимое новое)      
+        dir_first_cl[bank] = 0;    // кластер отработан — не оставлять stale    
+    } else {         
         Serial.println("# fm: slot write failed");  
     }  
 }    
@@ -553,16 +559,23 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
         // из dir-записи (dir_track), а не по LBA.  
         uint8_t bank = 0;  
         if (lba >= AF_FM_FREE_LBA) {  
-            uint16_t cl = (uint16_t)(lba - AF_FM_DATA_START + 2);   // LBA -> кластер  
-            for (uint8_t i = 1; i <= AF_FM_WAV_FILES; i++) {  
-                if (dir_first_cl[i] && cl >= dir_first_cl[i]) {  
-                    // кластеры файла идут подряд от первого  
-                    if (cl - dir_first_cl[i] < AF_FM_WAV_CLUSTERS) bank = i;  
-                    break;  
-                }  
-            }  
-            if (bank == 0)  
+            uint16_t cl = (uint16_t)(lba - AF_FM_DATA_START + 2);   // LBA -> кластер    
+            // Ближайший первый кластер <= cl: break по первому dir_first_cl[i]    
+            // с cl >= dir_first_cl[i] обрывал поиск, если запись i была stale    
+            // (кластер из прошлой сессии) — отсюда "no dir match" при cl=1610.    
+            uint16_t best_cl = 0;    
+            for (uint8_t i = 1; i <= AF_FM_WAV_FILES; i++) {    
+                if (dir_first_cl[i] && dir_first_cl[i] <= cl &&    
+                    dir_first_cl[i] > best_cl) {    
+                    best_cl = dir_first_cl[i];    
+                    bank = i;    
+                }    
+            }    
+            if (bank == 0) {  
+                Serial.printf("# fm: pool write lba=%lu cl=%u — no dir match\n",  
+                              (unsigned long)lba, (unsigned)cl);  
                 return (int32_t)AF_FM_SECTOR_SIZE;    // пул без имени — проглотить  
+            }  
         } else {  
             for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {        
                 uint32_t start = AF_FM_WAV_LBA(i);        
@@ -571,15 +584,20 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
                     break;  
                 }  
             }  
-            if (bank == 0)  
+            if (bank == 0) {  
+                Serial.printf("# fm: gap write lba=%lu — swallowed\n",  
+                              (unsigned long)lba);  
                 return (int32_t)AF_FM_SECTOR_SIZE;    // зазор — проглотить  
+            }  
         }  
         if (!ul_active) {        
             if (!ul_begin(bank, lba))    
                 return (int32_t)AF_FM_SECTOR_SIZE;   // rec/play busy — проглотить    
-        } else if (ul_bank != bank) {        
-            return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить    
-        }        
+        } else if (ul_bank != bank) {  
+            Serial.printf("# fm: write to REC%u while REC%u active — swallowed\n",  
+                          (unsigned)bank, (unsigned)ul_bank);  
+            return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить  
+        }  
         if (lba != ul_lba_next) {             // только последовательно        
             Serial.printf("# fm: REC%u.WAV non-seq LBA %lu (expect %lu)\n",    
                           (unsigned)ul_bank, (unsigned long)lba,    
@@ -592,7 +610,11 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
         return (int32_t)AF_FM_SECTOR_SIZE;        
     }        
     
-    if (lba >= AF_FM_RAM_SECTORS) return -1;       // зазоры — read-only            
+    if (lba >= AF_FM_RAM_SECTORS) {  
+        Serial.printf("# fm: write rejected lba=%lu (>= RAM_SECTORS %lu)\n",  
+                      (unsigned long)lba, (unsigned long)AF_FM_RAM_SECTORS);  
+        return -1;                                  // зазоры — read-only  
+    }  
     memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);              
     // Перехват root dir: хост создал/обновил RECn.WAV — запомнить кластер.  
     if (lba == AF_FM_DIR_LBA) dir_track(fm_disk[lba]);  
