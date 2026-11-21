@@ -609,6 +609,7 @@ static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера,
 static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)    
 static volatile uint32_t gain_q15  = 32768;   // ручное усиление, Q15 (32768 = ×1.0)  
 static volatile bool     bypass_on = false;   // обход всего тракта  
+static volatile bool     dsp_reset_req = false; // запрос сброса состояния (после save)  
   
 // Runtime-параметры АРУ/лимитера SSB-ветки (дефайны = значения по умолчанию).  
 // CW-режим использует CW_AGC_* — команды его не трогают.  
@@ -1009,6 +1010,9 @@ int32_t af_dsp_nrdepth(void)  { return nr_depth_q15; }
 int32_t af_dsp_nrmakeup(void) { return nr_makeup_q15; }  
   
 void af_dsp_set_bypass(bool on) { bypass_on = on; }  
+// Запрос сброса состояния тракта — выполняется на Core 1 в af_dsp_poll.  
+// Вызывать после af_capture_resume() в af_store_save.  
+void af_dsp_request_reset(void) { dsp_reset_req = true; __dmb(); }  
 void af_dsp_set_ramp(bool on) { ramp_on = on; ramp_val = 0; }  
 bool af_dsp_ramp_on(void)     { return ramp_on; }  
 bool     af_dsp_agc_on(void)     { return agc_on; }  
@@ -1091,16 +1095,55 @@ static inline void __not_in_flash_func(core1_update_load)(uint32_t now_us) {
 // ---------------------------------------------------------------------------  
 // Главный поллинг (Core 1): блоки ADC -> весь тракт -> выходные очереди  
 // ---------------------------------------------------------------------------  
-void __not_in_flash_func(af_dsp_poll)(void) {      
-    // DC-смещение ADC: EMA k=1/256 (порт dc_i/dc_q из rx_dsp.cpp).      
-    static int32_t dc_est = 0;      
-      
-    // Бюджет дрейна: не больше 2 блоков за вызов (~5 мс). Иначе при    
-    // накопленном бэклоге Core 1 уходит в длинный цикл, out_usb/out_pwm    
-    // не обслуживаются читателями вовремя — вставки/провалы на выходе.    
-    uint8_t budget = 2;  
-      
-    af_store_core1_park_poll();   // если Core 0 просит парковку — встаём в RAM-spin      
+void __not_in_flash_func(af_dsp_poll)(void) {        
+    // DC-смещение ADC: EMA k=1/256 (порт dc_i/dc_q из rx_dsp.cpp).        
+    static int32_t dc_est = 0;        
+        
+    // Бюджет дрейна: не больше 2 блоков за вызов (~5 мс). Иначе при      
+    // накопленном бэклоге Core 1 уходит в длинный цикл, out_usb/out_pwm      
+    // не обслуживаются читателями вовремя — вставки/провалы на выходе.      
+    uint8_t budget = 2;    
+        
+    af_store_core1_park_poll();   // если Core 0 просит парковку — встаём в RAM-spin        
+  
+    // Сброс состояния тракта по запросу Core 0 (после af_store_save):  
+    // пауза capture + парковка на flash-erase оставляла протухшие отсчёты  
+    // в линиях задержки и сбитые EMA — на выходе гребёнка до ребута.  
+    if (dsp_reset_req) {  
+        dsp_reset_req = false;  
+        dc_est = 0;  
+        memset(cic_int, 0, sizeof(cic_int));  
+        memset(cic_comb, 0, sizeof(cic_comb));  
+        cic_cnt = 0;  
+        for (int s = 0; s < AF_HB_STAGES; s++) {  
+            memset(hb[s].d, 0, sizeof(hb[s].d));  
+            hb[s].w = 0; hb[s].phase = 0;  
+        }  
+        memset(af_fir_buf, 0, sizeof(af_fir_buf));  
+        af_fir_idx = 0;  
+        memset(notch_buf, 0, sizeof(notch_buf));  
+        memset(notch_w,   0, sizeof(notch_w));  
+        memset(notch_v,   0, sizeof(notch_v));  
+        notch_idx = notch_vidx = 0;  
+        notch_energy = notch_pow = 0;  
+        memset(nr_buf, 0, sizeof(nr_buf));  
+        memset(nr_w,   0, sizeof(nr_w));  
+        nr_idx = 0; nr_pow = 0;  
+        for (int s = 0; s < AF_CW_SECTIONS; s++)  
+            cw_sec[s].x1 = cw_sec[s].x2 = cw_sec[s].y1 = cw_sec[s].y2 = 0;  
+        for (int i = 0; i < 5; i++)  
+            rx_notch[i].x1 = rx_notch[i].x2 = rx_notch[i].y1 = rx_notch[i].y2 = 0;  
+        rxp_hp_x1 = rxp_hp_x2 = rxp_hp_y1 = rxp_hp_y2 = 0;  
+        rxp_pk_x1 = rxp_pk_x2 = rxp_pk_y1 = rxp_pk_y2 = 0;  
+        rxp_env_q16 = rxp_nf_q16 = (int64_t)256 << 16;  
+        rxp_k_q15 = rxp_k_tgt_q15 = 0;  
+        agc_avg_q16  = (int64_t)4096 << 16;  
+        lim_peak_q16 = (int64_t)2048 << 16;  
+        rx_in_lvl_q16 = (int64_t)256 << 16;  
+        rx_in_peak = 0;  
+        out_fill_pos = 0;  
+        __dmb();  
+    }    
       
     const volatile uint16_t* blk;      
     while (budget-- > 0 && (blk = af_capture_get_block()) != NULL) {  

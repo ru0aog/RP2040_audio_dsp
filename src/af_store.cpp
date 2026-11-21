@@ -307,9 +307,11 @@ bool af_store_save(uint8_t idx) {
                                         // DMA IRQ прыгнет в ISR на протухшем
                                         // XIP-кэше -> вис
     restore_interrupts(ints);
-    af_capture_resume();                // рестарт цепочки A->B->A
-    af_usb_set_muted(false);            // USB -> звук
-    af_set_clk();                       // возврат на 320 МГц — обязательно,  
+    af_capture_resume();                // рестарт цепочки A->B->A  
+    af_dsp_reset_state();               // сброс dc_est/FIR/NT/NR/АРУ на Core 1 —  
+                                        // иначе протухшие буферы дают гребёнку  
+    af_usb_set_muted(false);            // USB -> звук  
+    af_set_clk();                       // возврат на 320 МГц — обязательно,    
                                         // иначе следующий save входит в окно
                                         // на 125 МГц в нештатном состоянии
     if (pwm_was) af_pwm_set_enabled(true);      // вернуть выход (мягкий рестарт  
@@ -420,9 +422,10 @@ void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {
     do_flash_write(NULL);               // RAM: erase+program, XIP off          
     flash_flush_cache();                // ДО restore_interrupts — см. save      
     restore_interrupts(ints);          
-    af_capture_resume();                // рестарт цепочки A->B->A      
-    af_usb_set_muted(false);            // USB -> звук    
-    af_set_clk();        
+    af_capture_resume();                // рестарт цепочки A->B->A  
+    af_dsp_reset_state();               // сброс состояния тракта — как в save  
+    af_usb_set_muted(false);            // USB -> звук      
+    af_set_clk();          
     if (pwm_was) af_pwm_set_enabled(true);      
     af_store_core1_unpark();        
   
@@ -628,8 +631,9 @@ static bool af_store_test_iter(uint8_t mode, uint32_t iter) {
                                       // DMA IRQ прыгнет в ISR на протухшем        
                                       // XIP-кэше -> вис        
     restore_interrupts(ints);        
-    af_capture_resume();              // рестарт цепочки A->B->A        
-    af_usb_set_muted(false);          // USB -> звук (fade-in в poll)  
+    af_capture_resume();              // рестарт цепочки A->B->A  
+    af_dsp_reset_state();             // сброс состояния тракта — как в save  
+    af_usb_set_muted(false);          // USB -> звук (fade-in в poll)    
     if (pwm_was) af_pwm_set_enabled(true);      
   
     if (mode == 2 || mode == 3) {  
