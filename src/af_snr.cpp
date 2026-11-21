@@ -118,9 +118,8 @@ static void snr_frame(void) {
     for (uint16_t i = 0; i < SNR_N; i++) {    
         // <<4: компенсация /256 FFT с запасом; бины после FFT ~8x,
         // int16-состояние с sat16 не переполняется, int32-умножение в бабочке.
-        int32_t x = snr_in[i] << 4;
-        // x <= 2^15, win <= 2^15: произведение <= 2^30 — влезает в int32
-        snr_re[i] = (int16_t)((x * (int32_t)snr_win[i]) >> SNR_Q);
+        snr_re[i] = (int16_t)(((snr_in[i] >> 1) * (int32_t)snr_win[i]) >> (SNR_Q - 5));  
+        // (x>>1)·win <= 2^14·2^15 = 2^29; >>(15-5) сохраняет масштаб <<4  
         snr_im[i] = 0;    
     }    
     snr_fft(snr_re, snr_im, false);  
