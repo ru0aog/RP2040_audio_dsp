@@ -1028,11 +1028,12 @@ void af_dsp_set_nrdepth(int32_t v) {
     nr_depth_q15 = v;  
     af_snr_set_depth(v > 32768 ? 32768 : v);   // spec: beta Q15  
 }    
-void af_dsp_set_nrmakeup(int32_t v) {  
-    if (v < 0)      v = 0;  
-    if (v > 131072) v = 131072;   // до ×4  
-    nr_makeup_q15 = v;  
-}  
+void af_dsp_set_nrmakeup(int32_t v) {    
+    if (v < 0)      v = 0;    
+    if (v > 131072) v = 131072;   // до ×4    
+    nr_makeup_q15 = v;    
+    af_snr_set_makeup(v);         // spec: выходной gain Q15    
+}    
 int32_t af_dsp_ntmu(void)     { return notch_mu; }  
 int32_t af_dsp_nrmu(void)     { return nr_mu; }  
 int32_t af_dsp_nrdepth(void)  { return nr_depth_q15; }  
@@ -1171,10 +1172,11 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rxp_k_q15 = rxp_k_tgt_q15 = 0;  
         agc_avg_q16  = (int64_t)4096 << 16;  
         lim_peak_q16 = (int64_t)2048 << 16;  
-        rx_in_lvl_q16 = (int64_t)256 << 16;  
-        rx_in_peak = 0;  
-        out_fill_pos = 0;  
-        __dmb();  
+        rx_in_lvl_q16 = (int64_t)256 << 16;    
+        rx_in_peak = 0;    
+        out_fill_pos = 0;    
+        af_snr_reset();          // кадры/OLA/шумовая оценка спектрального NR    
+        __dmb();    
     }    
       
     const volatile uint16_t* blk;      
