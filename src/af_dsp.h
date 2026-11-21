@@ -135,6 +135,9 @@ void    af_dsp_set_nrmu(int32_t v);      // шаг LMS NR, 0..32768
 int32_t af_dsp_nrmu(void);  
 void    af_dsp_set_nrdepth(int32_t v);   // глубина подавления Q15, 0..65536  
 int32_t af_dsp_nrdepth(void);  
-void    af_dsp_set_nrmakeup(int32_t v);  // makeup-gain Q15, 0..131072  
-int32_t af_dsp_nrmakeup(void);  
+void    af_dsp_set_nrmakeup(int32_t v);  // makeup-gain Q15, 0..131072    
+int32_t af_dsp_nrmakeup(void);    
+  
+void    af_dsp_set_nrmode(uint8_t m);  // 0=LMS, 1=spectral    
+uint8_t af_dsp_nrmode(void);    
 
