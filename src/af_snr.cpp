@@ -65,7 +65,8 @@ static uint16_t  snr_sm_i     = 0;      // универсальный индек
 static uint16_t  snr_sm_len   = 0;      // текущий len FFT-стадии    
 static uint16_t  snr_sm_base  = 0;      // текущий i (база блока) внутри стадии    
 static uint16_t  snr_sm_j     = 0;      // текущий j внутри блока    
-static bool      snr_sm_inv   = false;  // направление FFT    
+static bool      snr_sm_inv   = false;  // направление FFT      
+static bool      snr_sm_br    = false;  // фаза bit-reverse (иначе j=0 неотличим от маркера)  
 static uint32_t  snr_overrun  = 0;      // диагностика: кадр не успел за hop    
 
 // ---- Отладка: бин SNR_DBG_BIN (~1.2 кГц, внутри полосы) ----    
@@ -89,35 +90,33 @@ static uint16_t snr_isqrt(uint32_t v) {
 // Пошаговый движок: snr_fft_begin() + snr_fft_step() — одна бабочка за вызов.    
 // Состояние (len/base/j) — в snr_sm_*, чтобы стадия прерывалась по кванту.    
   
-static void snr_fft_begin(bool inverse) {    
-    snr_sm_inv = inverse;    
-    snr_sm_i   = 0;                     // фаза 0: bit-reverse    
-    snr_sm_len = 2;    
-    snr_sm_base = 0;    
-    snr_sm_j    = 0;    
-}    
+static void snr_fft_begin(bool inverse) {      
+    snr_sm_inv = inverse;      
+    snr_sm_br  = true;                  // фаза 0: bit-reverse      
+    snr_sm_i   = 0;      
+    snr_sm_len = 2;      
+    snr_sm_base = 0;      
+    snr_sm_j    = 0;      
+}      
   
 // Возвращает true, когда FFT закончен.    
 static bool snr_fft_step(void) {    
     if (snr_sm_len == 0) return true;   // защита    
   
-    // Фаза bit-reverse: snr_sm_i < SNR_N и snr_sm_len == 2 && base==0 && j==0    
-    // — различаем по snr_sm_base == 0xFFFF-маркеру не нужен:    
-    // используем snr_sm_j == 0xFFFF как признак "в стадиях".    
-    if (snr_sm_j != 0xFFFF) {           // bit-reverse ещё идёт    
-        uint16_t i = snr_sm_i;    
-        uint16_t j = snr_rev[i];    
-        if (j > i) {    
-            int32_t t;    
-            t = snr_re[i]; snr_re[i] = snr_re[j]; snr_re[j] = t;    
-            t = snr_im[i]; snr_im[i] = snr_im[j]; snr_im[j] = t;    
-        }    
-        if (++snr_sm_i >= SNR_N) {    
-            snr_sm_j = 0xFFFF;          // переход к стадиям    
-            snr_sm_len = 2; snr_sm_base = 0; snr_sm_i = 0;    
-        }    
-        return false;    
-    }    
+    if (snr_sm_br) {                    // фаза bit-reverse      
+        uint16_t i = snr_sm_i;      
+        uint16_t j = snr_rev[i];      
+        if (j > i) {      
+            int32_t t;      
+            t = snr_re[i]; snr_re[i] = snr_re[j]; snr_re[j] = t;      
+            t = snr_im[i]; snr_im[i] = snr_im[j]; snr_im[j] = t;      
+        }      
+        if (++snr_sm_i >= SNR_N) {      
+            snr_sm_br  = false;         // переход к стадиям бабочек      
+            snr_sm_len = 2; snr_sm_base = 0; snr_sm_j = 0;      
+        }      
+        return false;      
+    }      
   
     // Стадии бабочек    
     for (;;) {    
@@ -284,8 +283,9 @@ void af_snr_reset(void) {
         snr_gain[k]  = 32768;  
     }  
     snr_in_pos = snr_out_pos = snr_out_avail = 0;    
-    snr_sm = SNR_SM_IDLE;    
-    snr_sm_i = snr_sm_len = snr_sm_base = snr_sm_j = 0;    
+    snr_sm = SNR_SM_IDLE;      
+    snr_sm_i = snr_sm_len = snr_sm_base = snr_sm_j = 0;      
+    snr_sm_br = false;      
     snr_overrun = 0;    
     snr_warmup = 8;                     // ~66 мс прозрачного вывода на сбор шума    
 }  
