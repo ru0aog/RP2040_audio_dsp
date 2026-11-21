@@ -10,3 +10,8 @@ void    af_snr_reset(void);
 void    af_snr_set_depth(int32_t q15); // over-subtraction beta, 0..32768  
 void    af_snr_set_smooth(int32_t v);  // скорость сглаживания gain (сдвиг 1..6)  
 void    af_snr_set_makeup(int32_t q15);// выходной makeup, 0..131072  
+
+// Отладка: mag/шум/gain бина ~1.2 кГц (для stats)  
+uint32_t af_snr_dbg_mag(void);  
+uint32_t af_snr_dbg_noise(void);  
+int32_t  af_snr_dbg_gain(void);  

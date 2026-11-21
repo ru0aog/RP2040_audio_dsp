@@ -36,7 +36,8 @@
 #include "af_gpio_ctl.h"  // af_gpio_bank_code — текущий банк с пинов
 #include "af_rec.h"       // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
 #include "af_fm.h"        // af_fm_request_sync — перерендер SET.TXT 
-  
+#include "af_snr.h"
+
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
 
@@ -168,11 +169,15 @@ static void cli_stats(void) {
                   (long)(af_dsp_agcmax() * 100.0f + 0.5f),      
                   (long)(af_dsp_agcmin() * 100.0f + 0.5f),      
                   (long)af_dsp_limceil());      
-    Serial.printf("#   nrdepth = %ld   nrmakeup=%ld   ntmu=%ld nrmu=%ld\n",  
-                  (long)af_dsp_nrdepth(),  
-                  (long)af_dsp_nrmakeup(),  
-                  (long)af_dsp_ntmu(),  
-                  (long)af_dsp_nrmu());  
+    Serial.printf("#   nrdepth = %ld   nrmakeup=%ld   ntmu=%ld nrmu=%ld\n",    
+                  (long)af_dsp_nrdepth(),    
+                  (long)af_dsp_nrmakeup(),    
+                  (long)af_dsp_ntmu(),    
+                  (long)af_dsp_nrmu());    
+    Serial.printf("#   snr     : mag=%lu n=%lu g=%ld (bin20 ~1.2kHz)\n",  
+                  (unsigned long)af_snr_dbg_mag(),  
+                  (unsigned long)af_snr_dbg_noise(),  
+                  (long)af_snr_dbg_gain());  
     Serial.printf("#   rxpres  = %s pmax=%ld f=%lu q=%lu   env=%ld nf=%ld k=%ld\n",  
                   af_dsp_rxpres_on() ? "on" : "off",  
                   (long)af_dsp_rxpresmax(),  

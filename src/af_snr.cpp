@@ -46,7 +46,11 @@ static uint8_t snr_warmup = 0;          // кадры прогрева: gain=1, 
 static int32_t snr_makeup = 32768;      // Q15 makeup (из nrmakeup), ×1 по умолчанию  
   
 #define SNR_GMIN  3277                  // gain floor 0.1 Q15 — против musical noise  
-  
+
+// ---- Отладка: бин SNR_DBG_BIN (~1.2 кГц, внутри полосы) ----    
+#define SNR_DBG_BIN 20    
+static uint16_t snr_dbg_mag = 0; 
+
 // ---- isqrt uint32 ----  
 // ---- isqrt uint32: классический битовый, b — степень 4 ----    
 static uint16_t snr_isqrt(uint32_t v) {    
@@ -107,10 +111,11 @@ static void snr_frame(void) {
         int32_t re = snr_re[k], im = snr_im[k];      
         // re,im ~2^23 -> квадраты ~2^46: int64 + >>16 -> ~2^30 в uint32,      
         // isqrt -> mag ~2^15 (uint16)      
-        uint16_t mag = snr_isqrt((uint32_t)(      
-            ((int64_t)re * re + (int64_t)im * im) >> 16));      
-    
-        uint32_t n = snr_noise[k];    
+        uint16_t mag = snr_isqrt((uint32_t)(        
+            ((int64_t)re * re + (int64_t)im * im) >> 16));        
+        if (k == SNR_DBG_BIN) snr_dbg_mag = mag;   // отладка: mag бина ~1.2 кГц  
+      
+        uint32_t n = snr_noise[k];      
         if (mag < n) n = mag;                       // быстро вниз    
         else         n += (mag - n) >> 6;           // медленно вверх ~1с    
         snr_noise[k] = n;    
@@ -224,3 +229,8 @@ int32_t af_snr_push(int32_t x) {
 void af_snr_set_depth(int32_t q15)  { snr_depth  = q15; }  
 void af_snr_set_smooth(int32_t v)   { snr_smsh   = (v < 1) ? 1 : (v > 6 ? 6 : v); }  
 void af_snr_set_makeup(int32_t q15) { snr_makeup = q15; }  
+
+uint32_t af_snr_dbg_mag(void)   { return snr_dbg_mag; }  
+uint32_t af_snr_dbg_noise(void) { return snr_noise[SNR_DBG_BIN]; }  
+int32_t  af_snr_dbg_gain(void)  { return snr_gain[SNR_DBG_BIN]; }  
+
