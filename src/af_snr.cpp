@@ -129,9 +129,12 @@ static void snr_frame(void) {
     // эрмитовыми (gain=1), пост-FIR отрежет их.
     for (uint16_t k = SNR_BIN_LO; k <= SNR_BIN_HI; k++) {
         int32_t re = snr_re[k], im = snr_im[k];      
-        // re,im <= 2^15: re²+im² <= 2^31 — влезает в uint32
-        uint32_t sq = (uint32_t)(re * re) + (uint32_t)(im * im);
-        uint16_t mag = snr_isqrt(sq >> 16);
+        // re,im <= 2^15: re²+im² <= 2^31 — влезает в uint32.  
+        // >>4 (не >>16): бины ~x/2, sq <= 2^29 -> >>4 -> <=2^25,  
+        // isqrt -> ~2^12.5; mag ~x/8 — разрешение достаточно для гейта.  
+        // При >>16 mag сжимался до ~x/512 — отсюда mag=0..5 в stats.  
+        uint32_t sq = (uint32_t)(re * re) + (uint32_t)(im * im);  
+        uint16_t mag = snr_isqrt(sq >> 4);  
         if (k == SNR_DBG_BIN) snr_dbg_mag = mag;   // отладка: mag бина ~1.2 кГц  
       
         uint32_t n = snr_noise[k];
@@ -142,9 +145,9 @@ static void snr_frame(void) {
             n = mag;                                // быстро вниз
         } else {
             // медленно вверх, но не меньше шага 1 (иначе застревает на 0)
-            uint32_t inc = (mag - n) >> 6;
-            if (inc == 0) inc = 1;
-            n += inc;
+            uint32_t inc = (mag - n) >> 9;   // ~4 с на догон — тон не съедается  
+            if (inc == 0) inc = 1;  
+            n += inc; 
         }
         snr_noise[k] = n;
 
