@@ -157,31 +157,34 @@ void cwtx_poll(void) {
     }  
   
     // следующий символ  
-    if (cwtx_tpos < cwtx_tlen) {    
-        uint8_t c = (uint8_t)cwtx_text[cwtx_tpos++];    
-        if (c == 0xD0 || c == 0xD1) {                    // кириллица UTF-8    
-            uint8_t c2 = (uint8_t)cwtx_text[cwtx_tpos++];    
-            if (c == 0xD0 && c2 >= 0xB0 && c2 <= 0xBF) c2 -= 0x20;  // а..п -> А..П    
-            else if (c == 0xD1 && c2 >= 0x80 && c2 <= 0x8F) { c = 0xD0; c2 += 0x20; } // р..я    
-            uint16_t u = ((uint16_t)c2 << 8) | c;        // формат таблицы    
-            if (u == 0x81D0 || u == 0x91D0) u = 0x95D0;  // Ё/ё -> Е    
-            c = 0;    
-            for (uint8_t i = 0; i < CWTX_RUS_LEN; i++)    
-                if (CWTX_RUS[i].u == u) { c = (uint8_t)CWTX_RUS[i].ch; break; }    
-            if (c == 0) { cwtx_gap = 3; return; }        // неизвестная — пауза    
+    if (cwtx_tpos < cwtx_tlen) {      
+        uint8_t c = (uint8_t)cwtx_text[cwtx_tpos++];      
+        if (c == 0xD0 || c == 0xD1) {                    // кириллица UTF-8      
+            uint8_t c2 = (uint8_t)cwtx_text[cwtx_tpos++];      
+            af_oled_putc((char)c);                       // эхо: исходные байты UTF-8 —    
+            af_oled_putc((char)c2);                      // на экране русская буква, как в RTTY    
+            if (c == 0xD0 && c2 >= 0xB0 && c2 <= 0xBF) c2 -= 0x20;  // а..п -> А..П      
+            else if (c == 0xD1 && c2 >= 0x80 && c2 <= 0x8F) { c = 0xD0; c2 += 0x20; } // р..я      
+            uint16_t u = ((uint16_t)c2 << 8) | c;        // формат таблицы      
+            if (u == 0x81D0 || u == 0x91D0) u = 0x95D0;  // Ё/ё -> Е      
+            c = 0;      
+            for (uint8_t i = 0; i < CWTX_RUS_LEN; i++)      
+                if (CWTX_RUS[i].u == u) { c = (uint8_t)CWTX_RUS[i].ch; break; }      
+            if (c == 0) { cwtx_gap = 3; return; }        // неизвестная — пауза      
+        } else {    
+            af_oled_putc((char)c);                       // эхо: латиница/цифры как есть    
         }    
-        if (c >= 'a' && c <= 'z') c -= 32;    
-        const cwtx_sym_t* s = NULL;    
-        for (uint8_t i = 0; i < CWTX_TAB_LEN; i++)  
-            if (CWTX_TAB[i].ch == c) { s = &CWTX_TAB[i]; break; }  
-        if (s == NULL) { cwtx_gap = 3; return; }      // неизвестный — как буква-пауза    
-        if (s->len == 0) { cwtx_gap = 7; af_oled_putc(' '); return; }  // пробел — межслово    
-        cwtx_bits = s->bits;    
-        cwtx_blen = s->len;    
-        cwtx_bpos = 0;    
-        af_oled_putc(c);                              // символ на экран — синхронно с началом звучания    
-        return;                                       // элементы подаст след. вызов    
-    }  
+        if (c >= 'a' && c <= 'z') c -= 32;      
+        const cwtx_sym_t* s = NULL;      
+        for (uint8_t i = 0; i < CWTX_TAB_LEN; i++)    
+            if (CWTX_TAB[i].ch == c) { s = &CWTX_TAB[i]; break; }    
+        if (s == NULL) { cwtx_gap = 3; return; }      // неизвестный — как буква-пауза      
+        if (s->len == 0) { cwtx_gap = 7; return; }    // пробел — межслово (эхо ' ' уже напечатано выше)    
+        cwtx_bits = s->bits;      
+        cwtx_blen = s->len;      
+        cwtx_bpos = 0;      
+        return;                                       // элементы подаст след. вызов      
+    }    
   
     // очередь пуста — хвост ~7 точек тишины, потом конец передачи.    
     // Отдельный флаг: cwtx_gap нельзя использовать как метку —    
