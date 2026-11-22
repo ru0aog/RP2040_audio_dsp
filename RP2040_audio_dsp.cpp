@@ -212,6 +212,11 @@ void loop() {
     af_pwm_poll();      
     af_pwm_poll();      
     cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial    
+    // CW-посылка отыграна — вернуться в RX (ADC обратно на GP26, PWM на GP0)  
+    if (af_dsp_cwtx_started() && !af_dsp_cwtx_busy()) {  
+        af_dsp_cwtx_clear_started();  
+        af_dsp_set_tx(false);  
+    }  
     af_usb_poll();      // и ещё раз в конце — сглаживает джиттер итерации     
 
     watchdog_update();  
