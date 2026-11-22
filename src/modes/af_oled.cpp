@@ -4,6 +4,7 @@
 #include "../af_dsp.h"  
 #include "rtty_rx.h"   // rttydec_f_mark/f_space — центр RTTY в статусе  
 #include "rtty_tx.h"   // rttytx_center_hz — центр RTTY TX в статусе  
+#include "cw_tx.h"     // cwtx_tone_hz — тон CW TX в статусе  
   
 // ---------------------------------------------------------------------------  
 // Шрифт 5x7, ASCII 0x20..0x7F (классический SSD1306 font, column-major)  
