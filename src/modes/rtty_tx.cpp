@@ -121,11 +121,16 @@ void rttytx_poll(void) {
         // эхо на OLED: печатаем исходный символ, когда его коды начали звучать.  
         // Сдвиги эхо не дают — печать по исходному тексту, по одному символу  
         // на каждый НЕ-сдвиговый код.  
-        if (cur_code != RTTYTX_LTRS && cur_code != RTTYTX_FIGS &&  
-            cur_code != RTTYTX_RUS && tx_epos < tx_elen) {  
-            char c = tx_echo[tx_epos++];  
-            af_oled_putc(c);  
-        }  
+        if (cur_code != RTTYTX_LTRS && cur_code != RTTYTX_FIGS &&    
+            cur_code != RTTYTX_RUS && tx_epos < tx_elen) {    
+            char c = tx_echo[tx_epos++];    
+            af_oled_putc(c);    
+            // UTF-8 кириллица — пара байт: допечатать второй сразу,    
+            // иначе эхо отстанет и хвост строки потеряется    
+            if ((uint8_t)c == 0xD0 || (uint8_t)c == 0xD1) {    
+                if (tx_epos < tx_elen) af_oled_putc(tx_echo[tx_epos++]);    
+            }    
+        }    
         return;  
     }  
   
@@ -145,17 +150,21 @@ void rttytx_poll(void) {
 static uint8_t encode_char(uint8_t c, uint8_t c2, int &reg, uint8_t &shift) {  
     shift = 0xFF;   // 0xFF = сдвиг не нужен  
   
-    // Кириллица UTF-8: c=0xD0/0xD1, c2=второй байт  
-    if (c == 0xD0 || c == 0xD1) {  
-        uint16_t u = ((uint16_t)c << 8) | c2;  
-        if (u == 0x81D0 || u == 0x91D0) u = 0x95D0;   // Ё/ё -> Е  
-        for (uint8_t i = 0; i < 32; i++)  
-            if (baudot_rus[i] == u) {  
-                if (reg != 2) { shift = RTTYTX_RUS; reg = 2; }  
-                return i;  
-            }  
-        return 0xFF;  
-    }  
+    // Кириллица UTF-8: c=0xD0/0xD1, c2=второй байт    
+    if (c == 0xD0 || c == 0xD1) {    
+        uint16_t u = ((uint16_t)c << 8) | c2;    
+        // строчные -> заглавные: а..п (0xB0..0xBF) -> А..П (0x90..0x9F),    
+        // р..я (0xD1 0x80..0x8F) -> Р..Я (0xD0 0xA0..0xAF)    
+        if (c == 0xD0 && c2 >= 0xB0 && c2 <= 0xBF) u = 0xD000 | (c2 - 0x20);    
+        else if (c == 0xD1 && c2 >= 0x80 && c2 <= 0x8F) u = 0xD000 | (c2 + 0x20);    
+        if (u == 0x81D0 || u == 0x91D0) u = 0x95D0;   // Ё/ё -> Е    
+        for (uint8_t i = 0; i < 32; i++)    
+            if (baudot_rus[i] == u) {    
+                if (reg != 2) { shift = RTTYTX_RUS; reg = 2; }    
+                return i;    
+            }    
+        return 0xFF;    
+    }    
   
     // ASCII -> верхний регистр  
     if (c >= 'a' && c <= 'z') c -= 32;  
