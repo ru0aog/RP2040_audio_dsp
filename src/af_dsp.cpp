@@ -26,10 +26,11 @@
 #include "af_pwm.h"         // af_pwm_set_tx_pin — выход GP0(RX)/GP1(TX) 
 #include "af_rec.h"         // запись/воспроизведение цифрового магнитофона
 #include "af_snr.h"
+#include "modes/af_oled.h"  // af_oled_status/clear — статусная строка и очистка экрана
 #include "modes/cw_rx.h"    // CW-декодер: cwdec_push (Core 1) / cwdec_poll (Core 0)  
 #include "modes/cw_tx.h"    // CW-передатчик: cwtx_sample (Core 1) / cwtx_* (Core 0)
 #include "modes/rtty_rx.h"  // RTTY-декодер: rttydec_push (Core 1) / rttydec_poll (Core 0)
-#include "modes/af_oled.h"  // af_oled_status/clear — статусная строка и очистка экрана
+#include "modes/rtty_tx.h"  // RTTY-передатчик: rttytx_sample (Core 1) / rttytx_* (Core 0)  
 
 static uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
 static volatile bool snr_reset_req = false;  // запрос сброса spec-NR (Core 0 -> Core 1)  
@@ -785,9 +786,10 @@ static volatile float   agc_max_gain = AGC_MAX_GAIN;   // потолок уси�
 static volatile float   agc_min_gain = AGC_MIN_GAIN;   // нижний предел  
 static volatile int32_t lim_ceil     = LIMIT_CEIL;     // потолок лимитера  
 
-static volatile bool tx_on = false;   // false=RX, true=TX (PTT GP8 / "tx on")    
-static volatile bool cwtx_started = false; // TX поднят командой `cw tx` —  
-                                           // авто-возврат в RX по концу посылки  
+static volatile bool tx_on = false;   // false=RX, true=TX (PTT GP8 / "tx on")      
+static volatile bool cwtx_started = false;   // TX поднят командой `cw tx` —    
+                                             // авто-возврат в RX по концу посылки    
+static volatile bool rttytx_started = false; // то же для `rtty tx`    
   
 static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {  
     // --- Контур A: медленное среднее |x| ---  
@@ -1338,9 +1340,22 @@ bool af_dsp_cwtx_start(const char* text) {
     af_dsp_set_tx(true);      
     return true;  
 }      
-bool af_dsp_cwtx_started(void) { return cwtx_started; }    
-void af_dsp_cwtx_clear_started(void) { cwtx_started = false; }    
-bool af_dsp_cwtx_busy(void) { return cwtx_busy(); }    
+bool af_dsp_cwtx_started(void) { return cwtx_started; }      
+void af_dsp_cwtx_clear_started(void) { cwtx_started = false; }      
+bool af_dsp_cwtx_busy(void) { return cwtx_busy(); }      
+  
+// --- RTTY-передатчик (Core 0) ---    
+// Постановка текста + подъём TX; возврат в RX — в loop() по !rttytx_busy().    
+bool af_dsp_rttytx_start(const char* text) {    
+    if (cwtx_busy()) return false;         // взаимоисключение с CW-посылкой    
+    if (!rttytx_send(text)) return false;  // очередь занята — TX не поднимаем    
+    rttytx_started = true;    
+    af_dsp_set_tx(true);    
+    return true;    
+}    
+bool af_dsp_rttytx_started(void) { return rttytx_started; }    
+void af_dsp_rttytx_clear_started(void) { rttytx_started = false; }    
+bool af_dsp_rttytx_busy(void) { return rttytx_busy(); }    
   
 // ---------------------------------------------------------------------------  
 // Инициализация (Core 0, до af_capture_start)  
@@ -1370,7 +1385,8 @@ void af_dsp_init(void) {
     rx_exc_design();          // ФВЧ-биквады эксайтера  
     af_snr_init();            // таблицы окна/twiddles/bit-reverse спектрального NR    
     af_tx_init();         // TX: FIR-компрессор-клиппер        
-    cwtx_init((float)cw_f0);  // NCO + LUT синуса CW-передатчика (Core 0, float)  
+    cwtx_init((float)cw_f0);  // NCO + LUT синуса CW-передатчика (Core 0, float)    
+    rttytx_init();            // NCO + LUT синуса RTTY-передатчика (mark=1085, space=915)    
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
     memset(&out_usb, 0, sizeof(out_usb));    
@@ -1525,16 +1541,20 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 int32_t tx_in = (af_rec_active == 2) ? af_rec_src(y) : y;      
                 if (af_rec_active == 1) af_rec_push(sat16(tx_in));  // запись: микрофон ДО TX-обработки      
                 int16_t t;  
-                if (cwtx_busy()) {  
-                    // CW-посылка: тон с колокольной огибающей В ОБХОД  
-                    // af_tx_process — компрессор/клиппер/гейт речевого  
-                    // тракта съели бы фронты и добавили гармоники.  
-                    // af_tx_process не вызывается — его FIR/EMA простаивают,  
-                    // при возврате к речи продолжат без щелчка.  
-                    t = cwtx_sample();  
-                } else {  
-                    t = af_tx_process(tx_in);            // play: запись вместо микрофона      
-                }  
+                if (cwtx_busy()) {    
+                    // CW-посылка: тон с колокольной огибающей В ОБХОД    
+                    // af_tx_process — компрессор/клиппер/гейт речевого    
+                    // тракта съели бы фронты и добавили гармоники.    
+                    // af_tx_process не вызывается — его FIR/EMA простаивают,    
+                    // при возврате к речи продолжат без щелчка.    
+                    t = cwtx_sample();    
+                } else if (rttytx_busy()) {    
+                    // RTTY-посылка: FSK mark/space, непрерывная фаза —    
+                    // тоже в обход af_tx_process (клиппер исказил бы тоны).    
+                    t = rttytx_sample();    
+                } else {    
+                    t = af_tx_process(tx_in);            // play: запись вместо микрофона        
+                }    
                 out_emit(t);      
                 continue;        
             }        

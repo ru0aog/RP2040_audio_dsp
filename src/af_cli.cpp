@@ -40,10 +40,11 @@
 #include "af_rec.h"       // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
 #include "af_fm.h"        // af_fm_request_sync — перерендер SET.TXT 
 #include "af_snr.h"  
-#include "modes/cw_rx.h"   // cwdec_set_wpm — стартовая скорость декодера  
-#include "modes/cw_tx.h"   // cwtx_set_wpm/cwtx_abort
 #include "modes/af_oled.h"   // эхо cw tx на экран
+#include "modes/cw_rx.h"     // cwdec_set_wpm — стартовая скорость декодера  
+#include "modes/cw_tx.h"     // cwtx_set_wpm/cwtx_abort
 #include "modes/rtty_rx.h"   // rttydec_set_* — RTTY-декодер
+#include "modes/rtty_tx.h"   // rttytx_abort — RTTY-передатчик 
 
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -87,7 +88,9 @@ static void cli_help(void) {
     Serial.println("#   rtty scan on|off  — сканер тонов как fallback без RSID (дефолт on)");  
     Serial.println("#   rtty ctr <hz>     — ручной центр mark/space (отключает rsid/scan)");  
     Serial.println("#   rtty rev on|off   — инверсия полярности mark/space");  
-    Serial.println("#   rtty sql <0..1>   — сквелч декодера (0 = off, 0.15 = дефолт)");  
+    Serial.println("#   rtty sql <0..1>   — сквелч декодера (0 = off, 0.15 = дефолт)");    
+    Serial.println("#   rtty tx <текст>   — передать посылку RTTY 45.45/170 (центр 1000 Гц, авто-возврат в RX)");    
+    Serial.println("#   rtty abort        — оборвать посылку RTTY");    
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
     Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
     Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
@@ -1254,6 +1257,33 @@ static void cli_exec(char* line) {
             Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>|dec on|off|wpm <5..60>|sql <0..1>");      
         }      
     }  
+
+    else if (strcmp(cmd, "rtty") == 0) {    
+        // on|off|scan|rsid|rev|ctr|sql|dbg — метки AF_PARAMS, сюда не доходят.    
+        // Здесь только подкоманды с аргументом-строкой: tx, abort.    
+        char* sub = strtok(NULL, " \t");    
+        if (sub == NULL) { Serial.println("# ERR: rtty tx <текст>|abort"); return; }    
+    
+        if (strcmp(sub, "tx") == 0) {    
+            char* v = strtok(NULL, "");          // весь остаток строки — текст посылки    
+            if (v == NULL) { Serial.println("# ERR: rtty tx <текст>"); return; }    
+            while (*v == ' ' || *v == '\t') ++v;    
+            if (*v == '\0') { Serial.println("# ERR: rtty tx <текст>"); return; }    
+            if (af_dsp_rttytx_start(v)) {    
+                af_oled_putc('>');      // маркер начала передачи на экране    
+                Serial.printf("# OK rtty tx: %s\n", v);    
+            } else {    
+                Serial.println("# ERR rtty tx: busy или пустая посылка");    
+            }    
+        }    
+        else if (strcmp(sub, "abort") == 0) {    
+            rttytx_abort();    
+            Serial.println("# OK rtty tx abort");    
+        }    
+        else {    
+            Serial.println("# ERR: rtty tx <текст>|abort (on|off|scan|rsid|rev|ctr|sql|dbg — метки)");    
+        }    
+    }    
 
     else if (strcmp(cmd, "save") == 0) {  
         char* v = strtok(NULL, " \t");  

@@ -165,3 +165,9 @@ bool af_dsp_cwtx_start(const char* text);   // текст в очередь + TX
 bool af_dsp_cwtx_started(void);             // TX поднят командой cw tx    
 void af_dsp_cwtx_clear_started(void);       // сброс флага после возврата в RX    
 bool af_dsp_cwtx_busy(void);                // посылка ещё играет    
+
+// --- RTTY-передатчик ---  
+bool af_dsp_rttytx_start(const char* text);    
+bool af_dsp_rttytx_started(void);    
+void af_dsp_rttytx_clear_started(void);    
+bool af_dsp_rttytx_busy(void);    

@@ -26,10 +26,11 @@
 #include "src/af_voice.h"         // подмес голосовых клипов в выход
 #include "src/af_rec.h"           // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
 #include "src/af_fm.h"            // файловый менеджер: FAT12-диск 16 КБ, SET.TXT
+#include "src/modes/af_oled.h"    // OLED 128x32 SSD1306, GP14 SDA / GP15 SCL
 #include "src/modes/cw_rx.h"      // cwdec_set_wpm — стартовая скорость декодера
 #include "src/modes/cw_tx.h"
-#include "src/modes/af_oled.h"    // OLED 128x32 SSD1306, GP14 SDA / GP15 SCL
 #include "src/modes/rtty_rx.h"    // rttydec_poll — RTTY-декодер на Core 0
+#include "src/modes/rtty_tx.h"    // rttytx_poll — RTTY-передатчик на Core 0
 
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    
@@ -225,13 +226,19 @@ void loop() {
     af_pwm_poll();      
     cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial
     rttydec_poll();     // RTTY: дренаж очереди + RSID/сканер/декодер
-    cwtx_poll();        // CW-передатчик: подача элементов/пауз в cwtx_el_rem      
-    af_oled_poll();     // OLED: отложенная перерисовка (пачками, не на каждый символ)  
-    // CW-посылка отыграна — вернуться в RX (ADC обратно на GP26, PWM на GP0)    
-    if (af_dsp_cwtx_started() && !af_dsp_cwtx_busy()) {    
-        af_dsp_cwtx_clear_started();  
-        af_dsp_set_tx(false);  
-    }  
+    cwtx_poll();        // CW-передатчик: подача элементов/пауз в cwtx_el_rem        
+    rttytx_poll();      // RTTY-передатчик: подача битов в rttytx_bit_rem    
+    af_oled_poll();     // OLED: отложенная перерисовка (пачками, не на каждый символ)    
+    // CW-посылка отыграна — вернуться в RX (ADC обратно на GP26, PWM на GP0)      
+    if (af_dsp_cwtx_started() && !af_dsp_cwtx_busy()) {      
+        af_dsp_cwtx_clear_started();    
+        af_dsp_set_tx(false);    
+    }    
+    // RTTY-посылка отыграна — то же самое    
+    if (af_dsp_rttytx_started() && !af_dsp_rttytx_busy()) {      
+        af_dsp_rttytx_clear_started();    
+        af_dsp_set_tx(false);    
+    }    
     af_usb_poll();      // и ещё раз в конце — сглаживает джиттер итерации     
 
     watchdog_update();  
