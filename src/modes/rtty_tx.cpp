@@ -200,9 +200,11 @@ static uint8_t encode_char(uint8_t c, uint8_t c2, int &reg, uint8_t &shift) {
 // ---------------------------------------------------------------------------  
 // Core 0: API  
 // ---------------------------------------------------------------------------  
-void rttytx_init(void) {  
-    for (uint32_t i = 0; i < RTTYTX_LUT_LEN; i++)  
-        tx_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / RTTYTX_LUT_LEN) * 32767.0f);  
+#define RTTYTX_AMP  14000   // ~0.43 FS — запас под FIR (norm=2/sum) и клиппер  
+  
+void rttytx_init(void) {    
+    for (uint32_t i = 0; i < RTTYTX_LUT_LEN; i++)    
+        tx_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / RTTYTX_LUT_LEN) * (float)RTTYTX_AMP);    
     nco_step_mark  = (uint32_t)(((uint64_t)RTTYTX_MARK_HZ  << 32) / AF_FS_OUT_HZ);  
     nco_step_space = (uint32_t)(((uint64_t)RTTYTX_SPACE_HZ << 32) / AF_FS_OUT_HZ);  
     nco_step  = nco_step_mark;  
