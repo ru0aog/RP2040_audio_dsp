@@ -412,6 +412,110 @@ static void __not_in_flash_func(rx_pres_block_update)(void) {
 }  
 
 // ---------------------------------------------------------------------------  
+// RX low-shelf («бас») — статический RBJ low-shelf биквад, +0..+6 дБ  
+// ниже rx_shelf_freq_hz. Стоит в конце тракта (после пост-FIR и presence):  
+// подъём НЧ не попадает в контур АРУ и не съедается лимитером.  
+// При rx_shelf_db_x10 == 0 — байпас без нагрузки.  
+// ---------------------------------------------------------------------------  
+static volatile int32_t  rx_shelf_db_x10  = AF_RX_SHELF_DB_X10_DEFAULT;  
+static volatile uint32_t rx_shelf_freq_hz = AF_RX_SHELF_FREQ_HZ;  
+static volatile uint32_t rx_shelf_q_x100  = AF_RX_SHELF_Q_X100;  
+  
+static int32_t rxs_b0 = 32768, rxs_b1 = 0, rxs_b2 = 0,  
+               rxs_a1 = 0,     rxs_a2 = 0;   // старт = байпас  
+static int32_t rxs_x1 = 0, rxs_x2 = 0, rxs_y1 = 0, rxs_y2 = 0;  
+  
+// Проектирование RBJ low-shelf. Core 0, float допустим.  
+static void rx_shelf_design(void) {  
+    const float A     = powf(10.0f, (float)rx_shelf_db_x10 / 400.0f); // dB/40  
+    const float w     = 2.0f * PI * (float)rx_shelf_freq_hz / (float)AF_FS_OUT_HZ;  
+    const float Q     = (float)rx_shelf_q_x100 / 100.0f;  
+    const float alpha = sinf(w) / (2.0f * Q);  
+    const float cw_   = cosf(w);  
+    const float sq    = 2.0f * sqrtf(A) * alpha;  
+    const float a0    = (A + 1.0f) + (A - 1.0f) * cw_ + sq;  
+    rxs_b0 = (int32_t)lrintf(A * ((A + 1.0f) - (A - 1.0f) * cw_ + sq) / a0 * 32768.0f);  
+    rxs_b1 = (int32_t)lrintf(2.0f * A * ((A - 1.0f) - (A + 1.0f) * cw_) / a0 * 32768.0f);  
+    rxs_b2 = (int32_t)lrintf(A * ((A + 1.0f) - (A - 1.0f) * cw_ - sq) / a0 * 32768.0f);  
+    rxs_a1 = (int32_t)lrintf(-2.0f * ((A - 1.0f) + (A + 1.0f) * cw_) / a0 * 32768.0f);  
+    rxs_a2 = (int32_t)lrintf(((A + 1.0f) + (A - 1.0f) * cw_ - sq) / a0 * 32768.0f);  
+    __dmb();  
+}  
+  
+static inline int32_t __not_in_flash_func(rx_shelf_push)(int32_t x) {  
+    int64_t acc = (int64_t)rxs_b0 * x + (int64_t)rxs_b1 * rxs_x1  
+                + (int64_t)rxs_b2 * rxs_x2  
+                - (int64_t)rxs_a1 * rxs_y1  
+                - (int64_t)rxs_a2 * rxs_y2;  
+    int32_t y = (int32_t)(acc >> 15);  
+    rxs_x2 = rxs_x1; rxs_x1 = x;  
+    rxs_y2 = rxs_y1; rxs_y1 = y;  
+    return y;  
+}  
+  
+// ---------------------------------------------------------------------------  
+// RX harmonic exciter — полином Чебышёва T2(x) = 2x² − 1.  
+// Pre-HP ~1.5 кГц выделяет полосу речи; T2 даёт чистую 2-ю гармонику  
+// (3–6 кГц) + DC; post-HP ~2.5 кГц отбирает гармонику и отрезает DC  
+// и исходную полосу. Подмес rx_exc_mix_q15 (дефолт ~10%).  
+// Чётная нелинейность: нет нечётных гармоник и интермода внутри полосы;  
+// на тихом сигнале/шуме подмес ∝ x² сам затухает.  
+// ---------------------------------------------------------------------------  
+static volatile bool    rx_exc_on      = (AF_RX_EXC_ON_DEFAULT != 0);  
+static volatile int32_t rx_exc_mix_q15 = AF_RX_EXC_MIX_Q15_DEFAULT;  
+  
+// Два ФВЧ-биквада (RBJ high-pass, Q=0.707), коэффициенты — один раз в init.  
+static int32_t rxe_hp1_b0, rxe_hp1_b1, rxe_hp1_b2, rxe_hp1_a1, rxe_hp1_a2;  
+static int32_t rxe_hp2_b0, rxe_hp2_b1, rxe_hp2_b2, rxe_hp2_a1, rxe_hp2_a2;  
+static int32_t rxe_hp1_x1 = 0, rxe_hp1_x2 = 0, rxe_hp1_y1 = 0, rxe_hp1_y2 = 0;  
+static int32_t rxe_hp2_x1 = 0, rxe_hp2_x2 = 0, rxe_hp2_y1 = 0, rxe_hp2_y2 = 0;  
+  
+static void rx_exc_hp_design(int32_t* b0, int32_t* b1, int32_t* b2,  
+                             int32_t* a1, int32_t* a2, float hz) {  
+    const float w = 2.0f * PI * hz / (float)AF_FS_OUT_HZ;  
+    const float alpha = sinf(w) / (2.0f * 0.7071f);  
+    const float a0 = 1.0f + alpha;  
+    *b0 = (int32_t)lrintf((1.0f + cosf(w)) * 0.5f / a0 * 32768.0f);  
+    *b1 = (int32_t)lrintf(-(1.0f + cosf(w)) / a0 * 32768.0f);  
+    *b2 = *b0;  
+    *a1 = (int32_t)lrintf(-2.0f * cosf(w) / a0 * 32768.0f);  
+    *a2 = (int32_t)lrintf((1.0f - alpha) / a0 * 32768.0f);  
+}  
+  
+static void rx_exc_design(void) {  
+    rx_exc_hp_design(&rxe_hp1_b0, &rxe_hp1_b1, &rxe_hp1_b2,  
+                     &rxe_hp1_a1, &rxe_hp1_a2, (float)AF_RX_EXC_PRE_HZ);  
+    rx_exc_hp_design(&rxe_hp2_b0, &rxe_hp2_b1, &rxe_hp2_b2,  
+                     &rxe_hp2_a1, &rxe_hp2_a2, (float)AF_RX_EXC_POST_HZ);  
+    __dmb();  
+}  
+  
+static inline int32_t __not_in_flash_func(rx_exc_push)(int32_t x) {  
+    // pre-HP: выделяем полосу >AF_RX_EXC_PRE_HZ  
+    int64_t acc = (int64_t)rxe_hp1_b0 * x + (int64_t)rxe_hp1_b1 * rxe_hp1_x1  
+                + (int64_t)rxe_hp1_b2 * rxe_hp1_x2  
+                - (int64_t)rxe_hp1_a1 * rxe_hp1_y1  
+                - (int64_t)rxe_hp1_a2 * rxe_hp1_y2;  
+    int32_t hp1 = (int32_t)(acc >> 15);  
+    rxe_hp1_x2 = rxe_hp1_x1; rxe_hp1_x1 = x;  
+    rxe_hp1_y2 = rxe_hp1_y1; rxe_hp1_y1 = hp1;  
+  
+    // T2(x) = 2x² − 1, Q15: t2 = 2*(hp1²>>15) − 32768  
+    int32_t t2 = ((hp1 * hp1) >> 15) * 2 - 32768;  
+  
+    // post-HP: отбираем 2-ю гармонику, отрезаем DC и исходную полосу  
+    acc = (int64_t)rxe_hp2_b0 * t2 + (int64_t)rxe_hp2_b1 * rxe_hp2_x1  
+        + (int64_t)rxe_hp2_b2 * rxe_hp2_x2  
+        - (int64_t)rxe_hp2_a1 * rxe_hp2_y1  
+        - (int64_t)rxe_hp2_a2 * rxe_hp2_y2;  
+    int32_t hp2 = (int32_t)(acc >> 15);  
+    rxe_hp2_x2 = rxe_hp2_x1; rxe_hp2_x1 = t2;  
+    rxe_hp2_y2 = rxe_hp2_y1; rxe_hp2_y1 = hp2;  
+  
+    return x + (int32_t)(((int64_t)hp2 * rx_exc_mix_q15) >> 15);  
+}  
+  
+// ---------------------------------------------------------------------------  
 // Телеграфный фильтр: AF_CW_SECTIONS каскадных биквадов BPF (RBJ, Q15).  
 // Коэффициенты пересчитываются на Core 0 при смене f0/BW.  
 // Каскад из N одинаковых секций сужает полосу: BW_sec = BW / sqrt(2^(1/N)-1).  
@@ -925,8 +1029,46 @@ int32_t  af_dsp_rxpres_env(void)  { return (int32_t)(rxp_env_q16 >> 16); }
 int32_t  af_dsp_rxpres_nf(void)   { return (int32_t)(rxp_nf_q16 >> 16); }  
 int32_t  af_dsp_rxpresmax(void)   { return rx_presmax_db_x10; }  // дБ x10, не Q15  
 uint32_t af_dsp_rxpresf(void)     { return rx_pres_freq_hz; }  
-uint32_t af_dsp_rxpresq(void)     { return rx_pres_q_x100; }
-void     af_dsp_set_nb(bool on) {    
+uint32_t af_dsp_rxpresq(void)     { return rx_pres_q_x100; }  
+  
+void af_dsp_set_rxshelf(int32_t db_x10) {  
+    if (db_x10 < 0)  db_x10 = 0;  
+    if (db_x10 > 60) db_x10 = 60;         // потолок +6 дБ  
+    rx_shelf_db_x10 = db_x10;  
+    rx_shelf_design();  
+}  
+void af_dsp_set_rxshelff(uint32_t hz) {  
+    if (hz < 200) hz = 200;  
+    if (hz > 800) hz = 800;  
+    rx_shelf_freq_hz = hz;  
+    rx_shelf_design();  
+}  
+void af_dsp_set_rxshelfq(uint32_t q_x100) {  
+    if (q_x100 < 30)  q_x100 = 30;  
+    if (q_x100 > 200) q_x100 = 200;  
+    rx_shelf_q_x100 = q_x100;  
+    rx_shelf_design();  
+}  
+int32_t  af_dsp_rxshelf(void)  { return rx_shelf_db_x10; }  
+uint32_t af_dsp_rxshelff(void) { return rx_shelf_freq_hz; }  
+uint32_t af_dsp_rxshelfq(void) { return rx_shelf_q_x100; }  
+  
+void af_dsp_set_rxexc(bool on) {  
+    if (on && !rx_exc_on) {              // чистый старт — без щелчка  
+        rxe_hp1_x1 = rxe_hp1_x2 = rxe_hp1_y1 = rxe_hp1_y2 = 0;  
+        rxe_hp2_x1 = rxe_hp2_x2 = rxe_hp2_y1 = rxe_hp2_y2 = 0;  
+    }  
+    rx_exc_on = on;  
+}  
+bool    af_dsp_rxexc_on(void) { return rx_exc_on; }  
+void    af_dsp_set_rxexcmix(int32_t q15) {  
+    if (q15 < 0)     q15 = 0;  
+    if (q15 > 16384) q15 = 16384;         // потолок 50%  
+    rx_exc_mix_q15 = q15;  
+}  
+int32_t af_dsp_rxexcmix(void) { return rx_exc_mix_q15; }  
+  
+void     af_dsp_set_nb(bool on) {      
     // NB ЗАГЛУШЕН: детектор вешал звук и дёргал шумовую полку (b46d15c).    
     // Команды/поля банка оставлены для совместимости формата (VER 6),    
     // но включение игнорируется — nb_on всегда false.    
@@ -1130,9 +1272,11 @@ void af_dsp_init(void) {
     af_fir_init();  
     cw_design();          // начальные коэффициенты CW-секций  
     rx_notch_design();    // коэффициенты фиксированных нотчей RX
-    rx_pres_hp_design();      // HP-детектор presence  
-    rx_pres_pk_design(32768); // peaking = байпас при старте    
-    af_snr_init();            // таблицы окна/twiddles/bit-reverse спектрального NR  
+    rx_pres_hp_design();      // HP-детектор presence    
+    rx_pres_pk_design(32768); // peaking = байпас при старте      
+    rx_shelf_design();        // коэффициенты RX low-shelf  
+    rx_exc_design();          // ФВЧ-биквады эксайтера  
+    af_snr_init();            // таблицы окна/twiddles/bit-reverse спектрального NR    
     af_tx_init();         // TX: FIR-компрессор-клиппер      
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
@@ -1206,9 +1350,12 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             rx_notch[i].x1 = rx_notch[i].x2 = rx_notch[i].y1 = rx_notch[i].y2 = 0;  
         rxp_hp_x1 = rxp_hp_x2 = rxp_hp_y1 = rxp_hp_y2 = 0;  
         rxp_pk_x1 = rxp_pk_x2 = rxp_pk_y1 = rxp_pk_y2 = 0;  
-        rxp_env_q16 = rxp_nf_q16 = (int64_t)256 << 16;  
-        rxp_k_q15 = rxp_k_tgt_q15 = 0;
-        nb_env = 8192;  nb_last = 0;  nb_hold_cnt = 0;    
+        rxp_env_q16 = rxp_nf_q16 = (int64_t)256 << 16;    
+        rxp_k_q15 = rxp_k_tgt_q15 = 0;  
+        rxs_x1 = rxs_x2 = rxs_y1 = rxs_y2 = 0;  
+        rxe_hp1_x1 = rxe_hp1_x2 = rxe_hp1_y1 = rxe_hp1_y2 = 0;  
+        rxe_hp2_x1 = rxe_hp2_x2 = rxe_hp2_y1 = rxe_hp2_y2 = 0;  
+        nb_env = 8192;  nb_last = 0;  nb_hold_cnt = 0;        
         agc_avg_q16  = (int64_t)4096 << 16;  
         lim_peak_q16 = (int64_t)2048 << 16;  
         rx_in_lvl_q16 = (int64_t)256 << 16;    
@@ -1312,9 +1459,11 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // постфильтр этот звон отрезает. Нотчи 1/2 кГц внутри полосы работают.  
             if (rx_notch_on) s = (int16_t)rx_notch_push(s);  
             s = sat16(af_fir_push2(s));   // пост-FIR: срез внеполосного мусора после АРУ/NR  
-            if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —  
-                                                           // подъём до +6 дБ может превысить int16  
-            if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса    
+            if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —    
+                                                           // подъём до +6 дБ может превысить int16    
+            if (rx_shelf_db_x10) s = sat16(rx_shelf_push(s)); // low-shelf: «бас» в конце тракта  
+            if (rx_exc_on)       s = sat16(rx_exc_push(s));   // эксайтер: последним перед выходом  
+            if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса      
             s = af_voice_mix(s);                       // голосовые сообщения          
             if (af_rec_active == 2) s = af_rec_mix(s); // подмес воспроизведения слота
             

@@ -3,10 +3,11 @@
 // af_cli.cpp — Serial CLI (Core 0)  
 //  
 // Команды (по одной на строку, завершение \n). Полный список — help.  
-//   RX:  band nt nr rxnotch cw agc gain bypass    
-//        agcref agcmax agcmin limceil nrdepth nrmakeup ntmu nrmu    
-//        "rx pres" "rx presmax" "rx pres f" "rx pres q" (метки AF_PARAMS)  
-//        "nb" "nb thr" (метки AF_PARAMS)    
+//   RX:  band nt nr rxnotch cw agc gain bypass      
+//        agcref agcmax agcmin limceil nrdepth nrmakeup ntmu nrmu      
+//        "rx pres" "rx presmax" "rx pres f" "rx pres q" (метки AF_PARAMS)    
+//        "rx shelf" "rx shelf f" "rx shelf q" "rx exc" "rx excmix" (AF_PARAMS)  
+//        "nb" "nb thr" (метки AF_PARAMS)      
 //   TX:  tx txband txap txagc txagcmax txgate txgatehold txgatehyst txgfloor  
 //        tx2band txsplit txlr2 txcomp txcompthr txcompthrlo txcompthrhi  
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
@@ -59,8 +60,13 @@ static void cli_help(void) {
     Serial.println("#   rx pres on|off    — dynamic presence EQ RX (подъём ВЧ по SNR)");  
     Serial.println("#   rx presmax <дБx10> — потолок подъёма (15=+1.5дБ, 60=+6дБ)");  
     Serial.println("#   rx pres f <1000..4000> — центр presence-пика, Гц");  
-    Serial.println("#   rx pres q <30..300> — добротность x100 (100 = 1.00)");
-    Serial.println("#   nb on|off         — noise blanker: подавитель импульсных помех RX");  
+    Serial.println("#   rx pres q <30..300> — добротность x100 (100 = 1.00)");  
+    Serial.println("#   rx shelf <дБx10>  — low-shelf «бас» в конце тракта (0=off, 30=+3дБ)");  
+    Serial.println("#   rx shelf f <200..800> — частота полки, Гц");  
+    Serial.println("#   rx shelf q <30..200> — добротность x100 (70 = 0.70)");  
+    Serial.println("#   rx exc on|off     — гармонический эксайтер (Чебышёв T2, +3..6 кГц)");  
+    Serial.println("#   rx excmix <0..16384> — подмес эксайтера Q15 (3277 = ~10%)");  
+    Serial.println("#   nb on|off         — noise blanker: подавитель импульсных помех RX");    
     Serial.println("#   nb thr <15..100>  — порог NB x10 над огибающей (30 = x3.0)");  
     Serial.println("#   cw on|off         — телеграфный фильтр");    
     Serial.println("#   cw freq <hz>      — центральная частота CW (300..3000)");    
@@ -189,10 +195,16 @@ static void cli_stats(void) {
                   (long)af_dsp_rxpres_env(),    
                   (long)af_dsp_rxpres_nf(),    
                   (long)af_dsp_rxpres_k());    
-    Serial.printf("#   nb      = %s thr=%ld   hits=%lu\n",    
-                  af_dsp_nb_on() ? "on" : "off",    
-                  (long)af_dsp_nbthr(),    
-                  (unsigned long)af_dsp_nb_hits());    
+    Serial.printf("#   rxshelf = %ld f=%lu q=%lu   rxexc=%s emix=%ld\n",  
+                  (long)af_dsp_rxshelf(),  
+                  (unsigned long)af_dsp_rxshelff(),  
+                  (unsigned long)af_dsp_rxshelfq(),  
+                  af_dsp_rxexc_on() ? "on" : "off",  
+                  (long)af_dsp_rxexcmix());  
+    Serial.printf("#   nb      = %s thr=%ld   hits=%lu\n",      
+                  af_dsp_nb_on() ? "on" : "off",      
+                  (long)af_dsp_nbthr(),      
+                  (unsigned long)af_dsp_nb_hits());      
     {   // S-meter: уровень и пик после FIR в линейных единицах и dBFS  
         int32_t lvl = af_dsp_rx_in_lvl();  
         int32_t pk  = af_dsp_rx_in_peak();   // чтение сбрасывает пик  
@@ -705,8 +717,13 @@ static const af_param_t AF_PARAMS[] = {
     { "rx pres",     PT_ONOFF, offsetof(af_bank_t, rx_pres_on),     P_SET(af_dsp_set_rxpres) },    
     { "rx presmax",  PT_U16,   offsetof(af_bank_t, rx_presmax),     P_SET(af_dsp_set_rxpresmax) },    
     { "rx pres f",   PT_U16,   offsetof(af_bank_t, rx_pres_freq),   P_SET(af_dsp_set_rxpresf) },    
-    { "rx pres q",   PT_U16,   offsetof(af_bank_t, rx_pres_q),      P_SET(af_dsp_set_rxpresq) },    
-    { "nb",          PT_ONOFF, offsetof(af_bank_t, nb_on),          P_SET(af_dsp_set_nb) },    
+    { "rx pres q",   PT_U16,   offsetof(af_bank_t, rx_pres_q),      P_SET(af_dsp_set_rxpresq) },      
+    { "rx shelf",    PT_U16,   offsetof(af_bank_t, rx_shelf_db),    P_SET(af_dsp_set_rxshelf) },  
+    { "rx shelf f",  PT_U16,   offsetof(af_bank_t, rx_shelf_freq),  P_SET(af_dsp_set_rxshelff) },  
+    { "rx shelf q",  PT_U16,   offsetof(af_bank_t, rx_shelf_q),     P_SET(af_dsp_set_rxshelfq) },  
+    { "rx exc",      PT_ONOFF, offsetof(af_bank_t, rx_exc_on),      P_SET(af_dsp_set_rxexc) },  
+    { "rx excmix",   PT_U16,   offsetof(af_bank_t, rx_exc_mix),     P_SET(af_dsp_set_rxexcmix) },  
+    { "nb",          PT_ONOFF, offsetof(af_bank_t, nb_on),          P_SET(af_dsp_set_nb) },      
     { "nb thr",      PT_U16,   offsetof(af_bank_t, nb_thr_x10),     P_SET(af_dsp_set_nbthr) },    
     { "--- TX ---",  PT_SEP,   0, NULL },    
     // --- TX ---  

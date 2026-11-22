@@ -141,3 +141,13 @@ int32_t af_dsp_nrmakeup(void);
 void    af_dsp_set_nrmode(uint8_t m);  // 0=LMS, 1=spectral    
 uint8_t af_dsp_nrmode(void);    
 
+void     af_dsp_set_rxshelf(int32_t db_x10);  
+void     af_dsp_set_rxshelff(uint32_t hz);  
+void     af_dsp_set_rxshelfq(uint32_t q_x100);  
+int32_t  af_dsp_rxshelf(void);  
+uint32_t af_dsp_rxshelff(void);  
+uint32_t af_dsp_rxshelfq(void);  
+void     af_dsp_set_rxexc(bool on);  
+bool     af_dsp_rxexc_on(void);  
+void     af_dsp_set_rxexcmix(int32_t q15);  
+int32_t  af_dsp_rxexcmix(void);  

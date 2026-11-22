@@ -36,9 +36,14 @@ struct af_bank_t {
     uint16_t rx_presmax;    // потолок подъёма, дБ x10 (15 = +1.5 дБ)  
     uint16_t rx_pres_freq;  // центр пика, Гц (1000..4000)  
     uint16_t rx_pres_q;     // добротность x100 (100 = 1.00)  
-    uint8_t  nb_on;         // noise blanker RX (0/1)  
-    uint16_t nb_thr_x10;    // порог NB x10 (30 = x3.0)  
-    // --- TX ---  
+    uint8_t  nb_on;         // noise blanker RX (0/1)    
+    uint16_t nb_thr_x10;    // порог NB x10 (30 = x3.0)    
+    uint16_t rx_shelf_db;   // RX low-shelf «бас», дБ x10 (0 = off, 30 = +3 дБ)    
+    uint16_t rx_shelf_freq; // частота полки, Гц (200..800)    
+    uint16_t rx_shelf_q;    // добротность x100 (70 = 0.70)    
+    uint8_t  rx_exc_on;     // RX гармонический эксайтер T2 (0/1)    
+    uint16_t rx_exc_mix;    // подмес эксайтера, Q15 (3277 = ~10%)    
+    // --- TX ---    
     uint16_t tx_lo_hz;      // речевая полоса TX    
     uint16_t tx_hi_hz;    
     uint16_t tx_ratio_x10;  // компрессия x10 (40 = 4:1)    

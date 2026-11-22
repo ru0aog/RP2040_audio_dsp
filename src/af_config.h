@@ -97,6 +97,17 @@
 #define AF_RX_PRES_MAX_Q15      (int32_t)(0.1885f * 32768.0f)  // +1.5 дБ дефолт  
 #define AF_RX_PRES_ON_DEFAULT   0  
 
+// --- RX low-shelf («бас» в конце тракта) ---  
+#define AF_RX_SHELF_DB_X10_DEFAULT   30     // +3.0 дБ  
+#define AF_RX_SHELF_FREQ_HZ         450     // частота среза шелфа  
+#define AF_RX_SHELF_Q_X100           70     // Q = 0.70  
+  
+// --- RX harmonic exciter (Чебышёв T2) ---  
+#define AF_RX_EXC_ON_DEFAULT          0     // выключен по умолчанию  
+#define AF_RX_EXC_MIX_Q15_DEFAULT  3277     // подмес ~10%  
+#define AF_RX_EXC_PRE_HZ           1500     // pre-HP: полоса для нелинейности  
+#define AF_RX_EXC_POST_HZ          2500     // post-HP: отбор 2-й гармоники  
+
 // ---------------------------------------------------------------------------    
 // TX-тракт (SSB): речевая полоса, компрессор, клиппер    
 // ---------------------------------------------------------------------------    
