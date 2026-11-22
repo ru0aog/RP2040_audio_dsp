@@ -502,8 +502,9 @@ static inline int32_t __not_in_flash_func(rx_exc_push)(int32_t x) {
     rxe_hp1_x2 = rxe_hp1_x1; rxe_hp1_x1 = x;  
     rxe_hp1_y2 = rxe_hp1_y1; rxe_hp1_y1 = hp1;  
   
-    // T2(x) = 2x² − 1, Q15: t2 = 2*(hp1²>>15) − 32768  
-    int32_t t2 = ((hp1 * hp1) >> 15) * 2 - 32768;  
+    // x·|x| — чётная нелинейность, та же 2-я гармоника, но без DC:  
+    // на тишине t2 = 0, нет транзиента включения и выбросов post-HP.  
+    int32_t t2 = (hp1 * ((hp1 < 0) ? -hp1 : hp1)) >> 15;  
   
     // post-HP: отбираем 2-ю гармонику, отрезаем DC и исходную полосу  
     acc = (int64_t)rxe_hp2_b0 * t2 + (int64_t)rxe_hp2_b1 * rxe_hp2_x1  
@@ -846,10 +847,23 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
 // ---------------------------------------------------------------------------  
 static volatile uint32_t clip_count = 0;  
   
-static inline int16_t __not_in_flash_func(sat16)(int32_t x) {  
-    if (x >  32767) { ++clip_count; return  32767; }  
-    if (x < -32768) { ++clip_count; return -32768; }  
-    return (int16_t)x;  
+static inline int16_t __not_in_flash_func(sat16)(int32_t x) {    
+    if (x >  32767) { ++clip_count; return  32767; }    
+    if (x < -32768) { ++clip_count; return -32768; }    
+    return (int16_t)x;    
+}    
+  
+// Мягкий клиппер хвоста RX: кубический soft-clip (как tx_soft_clip).  
+// |x| <= 32768: y = x − x³/(3·32768²) — плавное насыщение, без жёсткого  
+// среза. |x| > 32768: асимптота ±(2/3·32768) = ±21845 — гарантированно  
+// не клиппит, но и не даёт выйти за ~−3.5 dBFS. Применяется ОДИН раз  
+// после shelf+exciter: эти каскады стоят за лимитером и могут поднять  
+// пики выше int16 — мягкое насыщение вместо щелчков sat16.  
+static inline int16_t __not_in_flash_func(rx_soft_clip)(int32_t x) {  
+    if (x >  32768) return  21845;  
+    if (x < -32768) return -21845;  
+    int32_t x2 = (x * x) >> 15;              // x² Q15  
+    return (int16_t)(x - ((x2 * x) >> 15) / 3);  // x − x³/3 (Q15)  
 }  
   
 // ---------------------------------------------------------------------------  
@@ -864,9 +878,9 @@ typedef struct {
     volatile uint8_t  head;                       // слот публикации      
     volatile uint8_t  tail;                       // слот чтения      
     volatile uint8_t  fill_buf;                   // буфер, который сейчас заполняется      
-    volatile uint32_t dropped;      
-    volatile uint32_t underruns;                  // читатель спросил при пустой очереди      
-    volatile uint32_t published;                  // блоков опубликовано      
+    volatile uint32_t dropped;        
+    volatile uint32_t empty_reads;                // опросы при пустой очереди (косметика, не пропуски)  
+    volatile uint32_t published;                  // блоков опубликовано        
     volatile uint8_t  fill_max;                   // high-water занятых буферов      
 } out_queue_t;      
   
@@ -928,7 +942,11 @@ static inline void __not_in_flash_func(out_emit)(int16_t s) {
   
 // Читательская сторона (Core 0).  
 static const volatile int16_t* out_get(out_queue_t* q) {      
-    if (q->tail == q->head) { ++q->underruns; return NULL; }      
+    // Пустая очередь — НЕ underrun: consumer (af_pwm_poll/af_usb_poll)  
+    // опрашивает из loop() на сотнях кГц, производитель даёт ~242 блока/с —  
+    // пустой ответ штатен в 99.9% вызовов. Реальный пропуск звука считает  
+    // DMA-сторона: af_pwm_underruns() / af_usb underruns.  
+    if (q->tail == q->head) { ++q->empty_reads; return NULL; }  
     __dmb();    
     return q->buf[q->order[q->tail]];   // буфер по порядку публикации    
 }      
@@ -1478,9 +1496,16 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             s = sat16(af_fir_push2(s));   // пост-FIR: срез внеполосного мусора после АРУ/NR  
             if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —    
                                                            // подъём до +6 дБ может превысить int16    
-            if (rx_shelf_db_x10) s = sat16(rx_shelf_push(s)); // low-shelf: «бас» в конце тракта  
-            if (rx_exc_on && !cw_on) s = sat16(rx_exc_push(s)); // эксайтер: только речь,  
-                                                                // в CW гармоника тона не нужна  
+            // Хвост RX: shelf + exciter стоят ПОСЛЕ лимитера — их подъём  
+            // не контролируется контуром B. Вместо жёсткого sat16 на каждом  
+            // каскаде — один мягкий клиппер в конце: пики плавно прижимаются  
+            // к ~−3.5 dBFS, clip_count не растёт, щелчков нет.  
+            if (rx_shelf_db_x10 || (rx_exc_on && !cw_on)) {  
+                int32_t s32 = s;  
+                if (rx_shelf_db_x10)       s32 = rx_shelf_push(s32); // low-shelf: «бас»  
+                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);   // эксайтер: только речь  
+                s = rx_soft_clip(s32);  
+            }  
             if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса      
             s = af_voice_mix(s);                       // голосовые сообщения          
             if (af_rec_active == 2) s = af_rec_mix(s); // подмес воспроизведения слота
@@ -1519,8 +1544,11 @@ uint32_t af_dsp_clip_count(void)    { return clip_count; }
 // Раздельная диагностика очередей: кто теряет и кто голодает.    
 uint32_t af_dsp_out_dropped_usb(void)    { return out_usb.dropped; }    
 uint32_t af_dsp_out_dropped_pwm(void)    { return out_pwm.dropped; }    
-uint32_t af_dsp_out_underruns_usb(void)  { return out_usb.underruns; }    
-uint32_t af_dsp_out_underruns_pwm(void)  { return out_pwm.underruns; }    
+// empty_reads — пустые опросы очереди (consumer быстрее производителя,  
+// штатная ситуация). НЕ путать с реальными underrun DMA — те считают  
+// af_pwm_underruns()/af_usb_* на стороне потребителя.  
+uint32_t af_dsp_out_empty_reads_usb(void) { return out_usb.empty_reads; }      
+uint32_t af_dsp_out_empty_reads_pwm(void) { return out_pwm.empty_reads; }        
 uint32_t af_dsp_out_published_usb(void)  { return out_usb.published; }    
 uint32_t af_dsp_out_published_pwm(void)  { return out_pwm.published; }    
 uint8_t  af_dsp_out_fill_max_usb(void)   { return out_usb.fill_max; }    

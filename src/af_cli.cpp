@@ -303,13 +303,20 @@ static void cli_stats(void) {
                   (unsigned long)af_drop_scratch,      
                   (unsigned long)af_drop_busy,      
                   (unsigned long)af_capture_dropped());      
-    Serial.printf("#   out     : dropped=%lu clip=%lu   usb: ur=%lu fill_max=%u   pwm: ur=%lu fill_max=%u\n",      
+    Serial.printf("#   out     : dropped=%lu clip=%lu   usb: er=%lu fill_max=%u   pwm: er=%lu fill_max=%u\n",      
                   (unsigned long)af_dsp_out_dropped(),      
                   (unsigned long)af_dsp_clip_count(),      
-                  (unsigned long)af_dsp_out_underruns_usb(),      
+                  (unsigned long)af_dsp_out_empty_reads_usb(),      
                   (unsigned)af_dsp_out_fill_max_usb(),      
-                  (unsigned long)af_dsp_out_underruns_pwm(),      
+                  (unsigned long)af_dsp_out_empty_reads_pwm(),      
                   (unsigned)af_dsp_out_fill_max_pwm());      
+    // Настоящее здоровье PWM: underruns — IRQ без готового блока (слышимые    
+    // пропуски), restarts — перезапуски DMA, duty — пик заполнения среза.    
+    // empty_reads выше — косметический счётчик пустых опросов, не пропуски.    
+    Serial.printf("#   pwm dma : ur=%lu restarts=%lu duty_max=%lu\n",    
+                  (unsigned long)af_pwm_underruns(),    
+                  (unsigned long)af_pwm_restarts(),    
+                  (unsigned long)af_pwm_duty_fill_max());    
     Serial.printf("#   fs      : out=%lu adc=%lu div=%lu\n",          
                   (unsigned long)AF_FS_OUT_HZ,          
                   (unsigned long)AF_FS_ADC_HZ,          
@@ -342,8 +349,8 @@ static void cli_dump(void) {
     const uint32_t pub   = af_dsp_out_published_usb();  
     const uint32_t dU    = af_dsp_out_dropped_usb();  
     const uint32_t dP    = af_dsp_out_dropped_pwm();  
-    const uint32_t urU   = af_dsp_out_underruns_usb();  
-    const uint32_t urP   = af_dsp_out_underruns_pwm();  
+    const uint32_t urU   = af_dsp_out_empty_reads_usb();  // пустые опросы, не пропуски  
+    const uint32_t urP   = af_dsp_out_empty_reads_pwm();  
     const uint32_t uur   = af_usb_underruns();  
     const uint32_t pur   = af_pwm_underruns();  
     const uint32_t cap   = af_capture_dropped();  
@@ -352,7 +359,7 @@ static void cli_dump(void) {
     Serial.printf(  
         "# L0=%lu.%lu%% L1=%lu.%lu%% blk=%lu max=%luus inlvl=%ld inpk=%ld |"  
         " cap: isr=%lu d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"    
-        " out: dU=%lu dP=%lu urU=%lu urP=%lu fU=%u fP=%u |"    
+        " out: dU=%lu dP=%lu erU=%lu erP=%lu fU=%u fP=%u |"      
         " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu gap=%luus ff=%lu ws=%lu av=%lu |"    
         " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",    
         (unsigned long)(af_core0_load_permille() / 10u),    
@@ -399,8 +406,8 @@ static void cli_dump(void) {
         const uint32_t d_cap  = cap - p_cap;      // потери на захвате за период    
         const uint32_t d_dU   = dU - p_dU;        // дропы USB-очереди    
         const uint32_t d_dP   = dP - p_dP;        // дропы PWM-очереди    
-        const uint32_t d_urU  = urU - p_urU;      // underruns USB (публикация)    
-        const uint32_t d_urP  = urP - p_urP;      // underruns PWM (публикация)    
+        const uint32_t d_urU  = urU - p_urU;      // пустые опросы USB-очереди  
+        const uint32_t d_urP  = urP - p_urP;      // пустые опросы PWM-очереди  
         const uint32_t max_us = af_dsp_max_block_us();    
         const uint32_t l1     = af_dsp_load_permille();    
         bool ok = true;    
@@ -431,8 +438,8 @@ static void cli_dump(void) {
             Serial.printf("# WARN out: дропы блоков usb=%lu pwm=%lu\n",    
                           (unsigned long)d_dU, (unsigned long)d_dP);    
         }    
-        // urU — паддинг кадров при пустой out_usb: хост (ОС) читает эндпоинт    
-        // всегда, дефицит источника ~1% — штатно и неслышно (af_usb.cpp).    
+        // erU — пустые опросы out_usb из af_usb_poll: хост читает эндпоинт  
+        // всегда, poll быстрее производителя — штатно и неслышно.  
         // WARN только при реальных потерях: дропы публикации (d_dU выше)    
         // или перезаправки очереди (reprimes — дно + уход на заправку).    
         // USB-здоровье оцениваем только когда хост реально читает поток.  
@@ -456,9 +463,9 @@ static void cli_dump(void) {
         } else {  
             Serial.println("# INFO usb: хост не читает поток (av=2048, rs=-48000mHz)");  
         }  
-        // urP — «запрос при пустой очереди»: PWM-ISR опрашивает очередь      
-        // чаще, чем Core 1 публикует блоки, счётчик растёт всегда.      
-        // Реальный критерий голодания — af_pwm_underruns (пропуск выхода).      
+        // erP — пустые опросы out_pwm из af_pwm_poll: consumer быстрее  
+        // производителя, счётчик растёт всегда — это НЕ пропуски звука.  
+        // Реальный критерий голодания — af_pwm_underruns (IRQ без блока).  
         const uint32_t pwm_ur_now = af_pwm_underruns();      
         static uint32_t p_pwm_ur2 = 0;      
         if (af_pwm_is_enabled() && (pwm_ur_now - p_pwm_ur2) != 0) {      

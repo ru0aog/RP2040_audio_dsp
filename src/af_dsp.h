@@ -101,8 +101,8 @@ void     af_dsp_set_bypass(bool on);
 bool     af_dsp_bypass_on(void);
 uint32_t af_dsp_out_dropped_usb(void);    
 uint32_t af_dsp_out_dropped_pwm(void);    
-uint32_t af_dsp_out_underruns_usb(void);    
-uint32_t af_dsp_out_underruns_pwm(void);    
+uint32_t af_dsp_out_empty_reads_usb(void);   // пустые опросы, не пропуски  
+uint32_t af_dsp_out_empty_reads_pwm(void);  
 uint32_t af_dsp_out_published_usb(void);    
 uint32_t af_dsp_out_published_pwm(void);    
 uint8_t  af_dsp_out_fill_max_usb(void);    
