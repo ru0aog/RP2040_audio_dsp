@@ -538,7 +538,9 @@ static volatile bool     cw_on = false;
 static volatile uint32_t cw_f0 = AF_CW_F0_DEFAULT;    
 static volatile uint32_t cw_bw = AF_CW_BW_DEFAULT;    
 static volatile bool     cwdec_on = true;   // декодер морзянки активен при cw on
-static volatile bool rtty_on = false; 
+static volatile bool rtty_on = false;   
+static uint32_t rtty_saved_cw_f0 = 0;   // восстановить при rtty off  
+static uint32_t rtty_saved_cw_bw = 0;  
   
 static volatile uint32_t cw_noise = 0;     // подмес шума выключен: на чистом    
                                            // тоне размывал спектр и мешал декодеру  
@@ -1153,16 +1155,31 @@ bool af_dsp_set_nr(bool on) {
     return true;  
 }
 
-void af_dsp_set_rtty(bool on) {    
-    if (on && cw_on) af_dsp_set_cw(false);   // взаимоисключение    
-    if (on && !rtty_on) {    
-        rttydec_init();    
-        af_oled_clear();          // не тащить хвост CW-текста в строки 1-3    
-    }    
-    if (!on && rtty_on) rttydec_stop();    
-    rtty_on = on;    
-    af_oled_status();             // строка 0: "ПРМ RTTY <центр>Hz"    
-}    
+void af_dsp_set_rtty(bool on) {      
+    if (on && cw_on) af_dsp_set_cw(false);   // взаимоисключение      
+    if (on && !rtty_on) {      
+        rttydec_init();      
+        af_oled_clear();          // не тащить хвост CW-текста в строки 1-3      
+        // CW-биквады как roofing-фильтр RTTY: самая широкая полоса,      
+        // центр — середина сканера; при локе rtty_tune подтянет f0.      
+        // cw_on НЕ трогаем: FIR/cwdec/AGC-ветки остаются как были.      
+        rtty_saved_cw_f0 = cw_f0;      
+        rtty_saved_cw_bw = cw_bw;      
+        cw_f0 = 750;                  // середина сканера 300..1200      
+        cw_bw = AF_CW_BW_MAX;         // 500 Гц — самая широкая      
+        cw_design();      
+        for (int s = 0; s < AF_CW_SECTIONS; s++)      
+            cw_sec[s].x1 = cw_sec[s].x2 = cw_sec[s].y1 = cw_sec[s].y2 = 0;      
+    }      
+    if (!on && rtty_on) {      
+        rttydec_stop();      
+        cw_f0 = rtty_saved_cw_f0;     // вернуть CW-фильтр как был      
+        cw_bw = rtty_saved_cw_bw;      
+        cw_design();      
+    }      
+    rtty_on = on;      
+    af_oled_status();             // строка 0: "ПРМ RTTY <центр>Hz"      
+}      
 bool af_dsp_rtty_on(void) { return rtty_on; } 
 
 void af_dsp_set_cw(bool on) {  
@@ -1544,9 +1561,14 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 y = cw_push(sat16(y + noise));  
                 if (cwdec_on) cwdec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));  
             }  
-            // Отвод для RTTY-декодера: после полосового FIR, до NT/NR/АРУ.  
-            // TX и bypass выше уходят по continue — гейтить только rtty_on.  
-            if (rtty_on) rttydec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));  
+            // Отвод для RTTY-декодера: после полосового FIR, до NT/NR/АРУ.    
+            // TX и bypass выше уходят по continue — гейтить только rtty_on.    
+            // Сигнал сначала через CW-биквады (широкий BPF, f0 следует за    
+            // захваченной парой) — сканер и декодер видят фильтрованный сигнал.    
+            if (rtty_on) {    
+                y = cw_push(y);    
+                rttydec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));    
+            }    
             if (notch_on) y = notch_lms_push(y);  
             if (nr_on)    y = (nr_mode == 1) ? af_snr_push(y) : nr_lms_push(y); 
             int16_t s = agc_limit(y);  

@@ -5,12 +5,15 @@
 // AFC: dphi между boxcar-суммами на стробах битов, кламп +-22.7 Гц, k=0.25.  
 // Захват: RSID (rsid_rx.cpp) или сканер Гёрцеля (пара пиков со сдвигом 170).  
 // Обвязка rttydec_*: Core 1 push -> SPSC -> Core 0 poll (как cwdec_*).  
-#include "rtty_rx.h"  
-// #include "rsid_rx.h"     // RSID временно отключён — экономия ~50 КБ RAM 
-#include "af_oled.h"        // af_oled_putc — эхо декодированного текста на экран
-#include "../af_config.h"  
+
 #include <math.h>  
-#include <string.h>  
+#include <string.h>
+
+#include "rtty_rx.h"    
+// #include "rsid_rx.h"     // RSID временно отключён — экономия ~50 КБ RAM   
+#include "af_oled.h"        // af_oled_putc — эхо декодированного текста на экран  
+#include "../af_config.h"    
+#include "../af_dsp.h"      // af_dsp_set_cw_freq — подстройка roofing-фильтра  
   
 #define RTTY_FS        ((float)AF_FS_OUT_HZ)   // 15464  
 #define RTTY_SYMLEN    ((int)(RTTY_FS / RTTY_BAUD + 0.5f))   // ~340  
@@ -277,9 +280,10 @@ static void rtty_tune(float center_hz) {
     rrx.rxstate = 0; rrx.counter = 0; rrx.bitcntr = 0; rrx.rxdata = 0;  
     rrx.figs = 0;  
     rrx.h_m_valid = false; rrx.freqerr = 0.0f; rrx.sym_since_char = 0;  
-    rrx.dc_i = rrx.dc_q = 0.0f;  
-    track_lost_ms = millis();  
-}  
+    rrx.dc_i = rrx.dc_q = 0.0f;    
+    track_lost_ms = millis();    
+    af_dsp_set_cw_freq((uint32_t)(center_hz + 0.5f));  // roofing-фильтр на пару    
+}    
   
 // ---------------------------------------------------------------------------  
 // Сканер Гёрцеля: банк тонов 300..3000 Гц, ищем пару пиков со сдвигом 170 Гц.  
