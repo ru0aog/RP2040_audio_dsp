@@ -23,3 +23,4 @@ void af_oled_putc(char c);        // символ от CW-декодера -> с
 void af_oled_status(void);        // пересобрать строку 0 (RX/TX/band/f0)  
 void af_oled_clear(void);         // очистка экрана и буфера  
 bool af_oled_present(void);       // модуль ответил на адрес  
+void af_oled_text(const char* s);   // строка в скролл-буфер  

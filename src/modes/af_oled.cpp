@@ -257,7 +257,7 @@ void af_oled_status(void) {                 // строка 0: режим + по
     if (af_dsp_cwtx_busy()) {  
         snprintf(s, AF_OLED_COLS + 1, "TX CW %luHz",  
                  (unsigned long)af_dsp_cw_freq());  
-    } else if (af_dsp_cw()) {  
+    } else if (af_dsp_cw_on()) { 
         snprintf(s, AF_OLED_COLS + 1, "RX CW %luHz",  
                  (unsigned long)af_dsp_cw_freq());  
     } else {  
@@ -282,3 +282,8 @@ void af_oled_poll(void) {
 }  
   
 bool af_oled_present(void) { return oled_ok; }  
+
+// src/modes/af_oled.cpp  
+void af_oled_text(const char* s) {    
+    while (*s) af_oled_putc(*s++);    
+}  
