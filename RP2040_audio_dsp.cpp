@@ -28,6 +28,7 @@
 #include "src/af_fm.h"            // файловый менеджер: FAT12-диск 16 КБ, SET.TXT
 #include "src/modes/cw_rx.h"      // cwdec_set_wpm — стартовая скорость декодера
 #include "src/modes/cw_tx.h"
+#include "src/modes/af_oled.h"      // OLED 128x32 SSD1306, GP14 SDA / GP15 SCL
 
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    
@@ -185,8 +186,11 @@ void setup() {
                   (unsigned long)(clock_get_hz(clk_sys) / ssi_hw->baudr / 1000),    
                   (unsigned)ssi_hw->baudr);    
   
-    af_cli_init();  
-    af_rec_init();  
+    af_cli_init();    
+    af_oled_init();               // OLED: если модуль не ответил — все вызовы no-op  
+    af_oled_text("RP2040 DSP");   // тестовый вывод: строка скролла  
+    af_oled_status();             // строка 0: RX/TX, band, cw f0  
+    af_rec_init();    
     af_led_set(0, 0, 10);  
     af_capture_start();  
     af_pwm_init();
@@ -212,8 +216,9 @@ void loop() {
     af_pwm_poll();      // ×3: заполняем duty-кольцо быстрее, чем один проход loop      
     af_pwm_poll();      
     af_pwm_poll();      
-    cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial      
-    cwtx_poll();        // CW-передатчик: подача элементов/пауз в cwtx_el_rem    
+    cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial        
+    cwtx_poll();        // CW-передатчик: подача элементов/пауз в cwtx_el_rem      
+    af_oled_poll();     // OLED: отложенная перерисовка (пачками, не на каждый символ)  
     // CW-посылка отыграна — вернуться в RX (ADC обратно на GP26, PWM на GP0)    
     if (af_dsp_cwtx_started() && !af_dsp_cwtx_busy()) {    
         af_dsp_cwtx_clear_started();  
