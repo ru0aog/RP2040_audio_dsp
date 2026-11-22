@@ -2,6 +2,7 @@
 #include "af_oled.h"  
 #include "../af_config.h"  
 #include "../af_dsp.h"  
+#include "rtty_rx.h"   // rttydec_f_mark/f_space — центр RTTY в статусе  
   
 // ---------------------------------------------------------------------------  
 // Шрифт 5x7, ASCII 0x20..0x7F (классический SSD1306 font, column-major)  
@@ -346,10 +347,13 @@ void af_oled_status(void) {                 // строка 0: режим + по
     if (af_dsp_cwtx_busy()) {    
         snprintf(tmp, sizeof(tmp), "ПРД CW %luHz",    
                  (unsigned long)af_dsp_cw_freq());    
-    } else if (af_dsp_cw_on()) {    
-        snprintf(tmp, sizeof(tmp), "ПРМ CW %luHz",    
-                 (unsigned long)af_dsp_cw_freq());    
-    } else {    
+    } else if (af_dsp_cw_on()) {      
+        snprintf(tmp, sizeof(tmp), "ПРМ CW %luHz",      
+                 (unsigned long)af_dsp_cw_freq());      
+    } else if (af_dsp_rtty_on()) {      
+        snprintf(tmp, sizeof(tmp), "ПРМ RTTY %.0fHz",      
+                 (double)((rttydec_f_mark() + rttydec_f_space()) * 0.5f));      
+    } else {      
         snprintf(tmp, sizeof(tmp), "ПРМ %lu-%lu",    
                  (unsigned long)af_dsp_band_lo_hz(),    
                  (unsigned long)af_dsp_band_hi_hz());    

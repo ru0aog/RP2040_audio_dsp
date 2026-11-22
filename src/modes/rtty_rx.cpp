@@ -7,6 +7,7 @@
 // Обвязка rttydec_*: Core 1 push -> SPSC -> Core 0 poll (как cwdec_*).  
 #include "rtty_rx.h"  
 // #include "rsid_rx.h"     // RSID временно отключён — экономия ~50 КБ RAM 
+#include "af_oled.h"        // af_oled_putc — эхо декодированного текста на экран
 #include "../af_config.h"  
 #include <math.h>  
 #include <string.h>  
@@ -86,12 +87,15 @@ static void rtty_emit(uint8_t c) {
     if (c == MTK2_LAT) { rrx.figs = 0; return; }  
     if (c == MTK2_RUS) { rrx.figs = 2; return; }   // blank -> RUS-регистр МТК-2  
     if (!sq_open) return;  
-    if (rrx.figs == 2) {  
-        const char *s = baudot_rus[c];  
-        if (s[0]) Serial.print(s);  
-    } else {  
-        char ch = rrx.figs ? baudot_figs[c] : baudot_ltrs[c];  
-        if (ch) Serial.write(ch);  
+    if (rrx.figs == 2) {    
+        const char *s = baudot_rus[c];    
+        if (s[0]) {    
+            Serial.print(s);    
+            for (const char *p = s; *p; p++) af_oled_putc(*p);  // UTF-8 -> OLED    
+        }    
+    } else {    
+        char ch = rrx.figs ? baudot_figs[c] : baudot_ltrs[c];    
+        if (ch) { Serial.write(ch); af_oled_putc(ch); }    
     }  
 }  
   
@@ -322,15 +326,38 @@ static void scan_sample(float x) {
     avg /= SCAN_NTONES;  
     if (avg < 1.0f) avg = 1.0f;  
   
-    // Пара (t, t+2): оба пика > 6x среднего — кандидат space/mark  
-    int best = -1; float best_p = 0.0f;  
-    for (int t = 0; t + SCAN_SHIFT_T < SCAN_NTONES; t++) {  
-        float pp = fminf(p[t], p[t + SCAN_SHIFT_T]);  
-        if (p[t] > avg * 6.0f && p[t + SCAN_SHIFT_T] > avg * 6.0f && pp > best_p) {  
-            best_p = pp; best = t;  
-        }  
-    }  
-    if (best >= 0 && best == scan_hit_tone) {  
+    // Пара (t, t+2): оба пика > 6x среднего — кандидат space/mark    
+    int best = -1; float best_p = 0.0f;    
+    for (int t = 0; t + SCAN_SHIFT_T < SCAN_NTONES; t++) {    
+        float pp = fminf(p[t], p[t + SCAN_SHIFT_T]);    
+        if (p[t] > avg * 6.0f && p[t + SCAN_SHIFT_T] > avg * 6.0f && pp > best_p) {    
+            best_p = pp; best = t;    
+        }    
+    }    
+  
+    // --- ДИАГНОСТИКА: лучшая пара и топ-3 пика раз в секунду ---    
+    {    
+        static uint32_t dbg_ms = 0;    
+        if (millis() - dbg_ms > 1000) {    
+            dbg_ms = millis();    
+            // топ-3 тона по мощности    
+            int i1 = 0, i2 = 0, i3 = 0;    
+            for (int t = 0; t < SCAN_NTONES; t++) {    
+                if (p[t] > p[i1])      { i3 = i2; i2 = i1; i1 = t; }    
+                else if (p[t] > p[i2]) { i3 = i2; i2 = t; }    
+                else if (p[t] > p[i3]) { i3 = t; }    
+            }    
+            Serial.printf("# scan: avg=%.0f thr=%.0f | top: %.0fHz=%.0f %.0fHz=%.0f %.0fHz=%.0f | best=%s hit=%d/%d\n",    
+                (double)avg, (double)(avg * 6.0f),    
+                (double)(SCAN_F0 + i1 * SCAN_STEP), (double)p[i1],    
+                (double)(SCAN_F0 + i2 * SCAN_STEP), (double)p[i2],    
+                (double)(SCAN_F0 + i3 * SCAN_STEP), (double)p[i3],    
+                best >= 0 ? "pair" : "-",    
+                scan_hit_n, SCAN_NEED);    
+        }    
+    }    
+  
+    if (best >= 0 && best == scan_hit_tone) {    
         if (++scan_hit_n >= SCAN_NEED) {  
             // Захват: центр = середина пары  
             float f_lo = SCAN_F0 + best * SCAN_STEP;  
@@ -344,7 +371,8 @@ static void scan_sample(float x) {
         }  
     } else {  
         scan_hit_tone = best; scan_hit_n = (best >= 0) ? 1 : 0;  
-    }  
+    }
+
 }  
   
 // ---------------------------------------------------------------------------  
@@ -401,6 +429,21 @@ void rttydec_poll(void) {               // Core 0, из loop()
         }    
         rtty_rx_sample((float)x, 0.0f);            // моно: xq=0    
     }    
+  
+    // --- ДИАГНОСТИКА TRACK: огибающие/шум/сквелч раз в 2 с ---    
+    if (state == RTTY_ST_TRACK) {    
+        static uint32_t dbg_trk_ms = 0;    
+        if (millis() - dbg_trk_ms > 2000) {    
+            dbg_trk_ms = millis();    
+            float env = fmaxf(rrx.mark_env, rrx.space_env);    
+            float snr = (rrx.noise_floor > 1e-6f) ? env / rrx.noise_floor : 0.0f;    
+            Serial.printf("# trk: m=%.0f s=%.0f nf=%.0f snr=%.1f sq=%s v3=%.0f ferr=%.1f\n",    
+                (double)rrx.mark_env, (double)rrx.space_env,    
+                (double)rrx.noise_floor, (double)snr,    
+                sq_open ? "open" : "shut",    
+                (double)rrx.v3, (double)rrx.freqerr);    
+        }    
+    }    
 }    
   
 void rttydec_stop(void) {    
@@ -417,7 +460,7 @@ void rttydec_set_sql(float lvl) {
     sq_level = lvl;  
     if (lvl == 0.0f) sq_open = true;  
 } 
- 
+
 void rttydec_set_center(float hz) {    
     if (hz <= 0.0f) {                    // 0 = авто-режим: назад в сканер    
         scan_init();    

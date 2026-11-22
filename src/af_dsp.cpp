@@ -29,6 +29,7 @@
 #include "modes/cw_rx.h"    // CW-декодер: cwdec_push (Core 1) / cwdec_poll (Core 0)  
 #include "modes/cw_tx.h"    // CW-передатчик: cwtx_sample (Core 1) / cwtx_* (Core 0)
 #include "modes/rtty_rx.h"  // RTTY-декодер: rttydec_push (Core 1) / rttydec_poll (Core 0)
+#include "modes/af_oled.h"  // af_oled_status/clear — статусная строка и очистка экрана
 
 static uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
 static volatile bool snr_reset_req = false;  // запрос сброса spec-NR (Core 0 -> Core 1)  
@@ -1152,12 +1153,16 @@ bool af_dsp_set_nr(bool on) {
     return true;  
 }
 
-void af_dsp_set_rtty(bool on) {  
-    if (on && cw_on) af_dsp_set_cw(false);   // взаимоисключение  
-    if (on && !rtty_on) rttydec_init();  
-    if (!on && rtty_on) rttydec_stop();  
-    rtty_on = on;  
-}  
+void af_dsp_set_rtty(bool on) {    
+    if (on && cw_on) af_dsp_set_cw(false);   // взаимоисключение    
+    if (on && !rtty_on) {    
+        rttydec_init();    
+        af_oled_clear();          // не тащить хвост CW-текста в строки 1-3    
+    }    
+    if (!on && rtty_on) rttydec_stop();    
+    rtty_on = on;    
+    af_oled_status();             // строка 0: "ПРМ RTTY <центр>Hz"    
+}    
 bool af_dsp_rtty_on(void) { return rtty_on; } 
 
 void af_dsp_set_cw(bool on) {  
