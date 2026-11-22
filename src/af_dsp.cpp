@@ -1385,9 +1385,9 @@ void af_dsp_init(void) {
     rx_shelf_design();        // коэффициенты RX low-shelf  
     rx_exc_design();          // ФВЧ-биквады эксайтера  
     af_snr_init();            // таблицы окна/twiddles/bit-reverse спектрального NR    
-    af_tx_init();         // TX: FIR-компрессор-клиппер        
-    cwtx_init((float)cw_f0);  // NCO + LUT синуса CW-передатчика (Core 0, float)    
-    rttytx_init();            // NCO + LUT синуса RTTY-передатчика (mark=1085, space=915)    
+    af_tx_init();         // TX: FIR-компрессор-клиппер          
+    cwtx_init((float)cw_f0);  // NCO + LUT синуса CW-передатчика (Core 0, float)      
+    rttytx_init();            // NCO + LUT синуса RTTY-передатчика (mark=1085, space=915)      
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
     memset(&out_usb, 0, sizeof(out_usb));    
@@ -1549,11 +1549,13 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                     // af_tx_process не вызывается — его FIR/EMA простаивают,    
                     // при возврате к речи продолжат без щелчка.    
                     t = cwtx_sample();    
-                } else if (rttytx_busy()) {    
-                    // RTTY-посылка: FSK mark/space, непрерывная фаза —    
-                    // тоже в обход af_tx_process (клиппер исказил бы тоны).    
-                    t = rttytx_sample();    
-                } else {    
+                } else if (rttytx_busy()) {      
+                    // RTTY-посылка: FSK mark/space, непрерывная фаза —      
+                    // тоже в обход af_tx_process (клиппер исказил бы тоны).      
+                    // Полосовой FIR 200..1800 срезает шумовой пол и      
+                    // гармоники LUT вне полосы — спектр на USB чистый.      
+                    t = sat16(af_tx_rtty_fir_push(rttytx_sample()));      
+                } else {      
                     t = af_tx_process(tx_in);            // play: запись вместо микрофона        
                 }    
                 out_emit(t);      

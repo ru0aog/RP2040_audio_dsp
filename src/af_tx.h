@@ -129,3 +129,5 @@ uint32_t af_tx_shelfq(void);
 void     af_tx_set_notchf(uint32_t f1, uint32_t f2);    
 uint32_t af_tx_notch1(void);    
 uint32_t af_tx_notch2(void);    
+
+int16_t af_tx_rtty_fir_push(int32_t x);   // полосовой 200..1800 для RTTY TX
