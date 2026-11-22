@@ -68,10 +68,10 @@ static tx_fir_t tx_pre, tx_post;
 // --- RTTY TX: отдельный полосовой FIR 200..1800 Гц (как RX-band при rtty on) ---  
 // Свой экземпляр: речевой tx_pre трогать нельзя — он настроен под txband.  
 #define TX_RTTY_FIR_N    127     // скаты ~±100 Гц, подавление ~-90 дБ 
-#define TX_RTTY_LO_HZ    500u    // нижний срез фильтра
-#define TX_RTTY_HI_HZ    1500u   // верхний срез фильтра
-static int16_t tx_rtty_taps[TX_RTTY_FIR_N];  
-static tx_fir_t tx_rtty_fir;  
+#define TX_RTTY_LO_HZ    700u    // нижний срез фильтра
+#define TX_RTTY_HI_HZ    1400u   // верхний срез фильтра
+static int16_t tx_rtty_taps[TX_RTTY_FIR_N];    
+static tx_fir_t tx_rtty_fir1, tx_rtty_fir2;   // каскад: два одинаковых FIR подряд    
       
 static void tx_fir_design(void) {        
     tx_fir_design_n(tx_fir_taps,  TX_FIR_N);       // пред-фильтр, 127      
@@ -676,12 +676,13 @@ static inline int32_t __not_in_flash_func(tx_dc_block)(int32_t x) {
 
 // RTTY TX: прогон отсчёта rttytx_sample() через полосовой 200..1800.  
 // Вызывается из af_dsp_poll вместо прямого rttytx_sample().  
-int16_t __not_in_flash_func(af_tx_rtty_fir_push)(int32_t x) {  
-    int32_t y = tx_fir_push(&tx_rtty_fir, x);  
-    if (y >  32767) y =  32767;  
-    if (y < -32768) y = -32768;  
-    return (int16_t)y;  
-}  
+int16_t __not_in_flash_func(af_tx_rtty_fir_push)(int32_t x) {    
+    int32_t y = tx_fir_push(&tx_rtty_fir1, x);    
+    y = tx_fir_push(&tx_rtty_fir2, y);        // каскад: скаты и подавление удваиваются    
+    if (y >  32767) y =  32767;    
+    if (y < -32768) y = -32768;    
+    return (int16_t)y;    
+}    
   
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {        
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
@@ -798,10 +799,13 @@ void af_tx_init(void) {
     memset(&tx_post, 0, sizeof(tx_post));      
     tx_pre.taps  = tx_fir_taps;  tx_pre.n  = TX_FIR_N;          
     tx_post.taps = tx_post_taps; tx_post.n = TX_POST_FIR_N;           
-    tx_rtty_fir_design();  
-    memset(&tx_rtty_fir, 0, sizeof(tx_rtty_fir));  
-    tx_rtty_fir.taps = tx_rtty_taps;  
-    tx_rtty_fir.n    = TX_RTTY_FIR_N;  
+    tx_rtty_fir_design();    
+    memset(&tx_rtty_fir1, 0, sizeof(tx_rtty_fir1));    
+    memset(&tx_rtty_fir2, 0, sizeof(tx_rtty_fir2));    
+    tx_rtty_fir1.taps = tx_rtty_taps;    
+    tx_rtty_fir1.n    = TX_RTTY_FIR_N;    
+    tx_rtty_fir2.taps = tx_rtty_taps;    
+    tx_rtty_fir2.n    = TX_RTTY_FIR_N;    
     tx_env_q16    = (int64_t)256 << 16;  
     tx_env_lo_q16 = (int64_t)256 << 16;  
     tx_env_hi_q16 = (int64_t)256 << 16;  
