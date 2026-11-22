@@ -15,7 +15,8 @@
 //           выходной отсчёт в TX-ветке af_dsp.  
 // ============================================================================  
 #include "cw_tx.h"  
-#include "../af_config.h"     // AF_FS_OUT_HZ  
+#include "../af_config.h"     // AF_FS_OUT_HZ
+#include "af_oled.h"          // эхо передаваемого текста на OLED
   
 // ---------------------------------------------------------------------------  
 // Таблица Морзе: битовое поле элементов, MSB-first, 1=тире 0=точка.  
@@ -143,12 +144,13 @@ void cwtx_poll(void) {
         const cwtx_sym_t* s = NULL;  
         for (uint8_t i = 0; i < CWTX_TAB_LEN; i++)  
             if (CWTX_TAB[i].ch == c) { s = &CWTX_TAB[i]; break; }  
-        if (s == NULL) { cwtx_gap = 3; return; }      // неизвестный — как буква-пауза  
-        if (s->len == 0) { cwtx_gap = 7; return; }    // пробел — межслово  
-        cwtx_bits = s->bits;  
-        cwtx_blen = s->len;  
-        cwtx_bpos = 0;  
-        return;                                       // элементы подаст след. вызов  
+        if (s == NULL) { cwtx_gap = 3; return; }      // неизвестный — как буква-пауза    
+        if (s->len == 0) { cwtx_gap = 7; af_oled_putc(' '); return; }  // пробел — межслово    
+        cwtx_bits = s->bits;    
+        cwtx_blen = s->len;    
+        cwtx_bpos = 0;    
+        af_oled_putc(c);                              // символ на экран — синхронно с началом звучания    
+        return;                                       // элементы подаст след. вызов    
     }  
   
     // очередь пуста — хвост ~7 точек тишины, потом конец передачи.    

@@ -272,14 +272,16 @@ void af_oled_status(void) {                 // строка 0: режим + по
     oled_dirty = true;  
 }  
   
-void af_oled_poll(void) {  
-    if (!oled_ok || !oled_dirty) return;  
-    uint32_t now = millis();  
-    if ((uint32_t)(now - oled_last_ms) < 250u) return;  // ~4 обновления/сек  
-    oled_last_ms = now;  
-    oled_dirty = false;  
-    oled_render();  
-}  
+void af_oled_poll(void) {    
+    if (!oled_ok) return;    
+    uint32_t now = millis();    
+    if ((uint32_t)(now - oled_last_ms) < 250u) return;  // ~4 обновления/сек    
+    oled_last_ms = now;    
+    af_oled_status();                     // строка 0 — всегда актуальная    
+    if (!oled_dirty) return;              // (status сам ставит dirty)    
+    oled_dirty = false;    
+    oled_render();    
+}    
   
 bool af_oled_present(void) { return oled_ok; }  
 

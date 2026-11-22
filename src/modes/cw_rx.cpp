@@ -12,9 +12,11 @@
 // Обвязка cwdec_*: декодер на float, поэтому живёт на Core 0.  
 // Core 1 кладёт отсчёты в SPSC-очередь (cwdec_push), Core 0 дренирует  
 // её в cwdec_poll() из loop(). Переполнение -> cwdec_dropped_cnt.  
-#include "cw_rx.h"  
 #include <math.h>  
-#include <string.h>  
+#include <string.h>
+
+#include "cw_rx.h"  
+#include "af_oled.h"   // вывод декодированного текста на OLED 
   
 // ---- параметры фронта ----  
 #define CW_RX_FS_HZ      15625.0f   // фиксированный Fs тракта  
@@ -92,7 +94,7 @@ static char morse_decode(uint8_t c) {
 static void emit_char(void) {      
     if (code > 1) {      
         char ch = morse_decode(code);      
-        if (ch && sq_open) { Serial.write(ch); word_started = true; }      
+        if (ch && sq_open) { Serial.write(ch); af_oled_putc(ch); word_started = true; }        
         else if (!sq_open) word_started = false;  // не копить «слово» на шуме    
     }      
     code = 1;      
@@ -249,11 +251,12 @@ static void process_window(float value) {
         // Пробел: только после напечатанной буквы и паузы ~7 точек    
         // (стандартный word gap). 4*dot давал лишние пробелы внутри    
         // слов при неровной манипуляции и на шумовых срабатываниях.    
-        if (!space_sent && word_started && gap > two_dots * 4.5f) {    
-            Serial.write(' ');    
-            space_sent = true;    
-            word_started = false;    
-        }    
+        if (!space_sent && word_started && gap > two_dots * 4.5f) {      
+            Serial.write(' ');      
+            af_oled_putc(' ');      
+            space_sent = true;      
+            word_started = false;      
+        }      
     }  
 }  
   
@@ -287,7 +290,7 @@ void cw_rx_stop(void) {
     if (!cw_active) return;  
     if (rx_state != RS_IDLE && code > 1) {  
         emit_char();                        // добить последнюю букву  
-        if (!space_sent && word_started) Serial.write(' '); // закрыть слово    
+        if (!space_sent && word_started) { Serial.write(' '); af_oled_putc(' '); } // закрыть слово      
     }  
     cw_active = false;  
     cw_reset_timing((float)cw_wpm);    

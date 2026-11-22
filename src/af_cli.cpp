@@ -42,7 +42,7 @@
 #include "af_snr.h"  
 #include "modes/cw_rx.h"   // cwdec_set_wpm — стартовая скорость декодера  
 #include "modes/cw_tx.h"   // cwtx_set_wpm/cwtx_abort
-
+#include "modes/af_oled.h"   // эхо cw tx на экран  
 
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -1188,6 +1188,7 @@ static void cli_exec(char* line) {
             while (*v == ' ' || *v == '\t') ++v; // пропустить ведущие пробелы  
             if (*v == '\0') { Serial.println("# ERR: cw tx <текст>"); return; }  
             if (af_dsp_cwtx_start(v)) {  
+                af_oled_putc('>');      // маркер начала передачи на экране  
                 Serial.printf("# OK cw tx: %s\n", v);  
             } else {  
                 Serial.println("# ERR cw tx: busy или пустая посылка");  
