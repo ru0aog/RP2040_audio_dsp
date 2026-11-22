@@ -6,7 +6,7 @@
 // Захват: RSID (rsid_rx.cpp) или сканер Гёрцеля (пара пиков со сдвигом 170).  
 // Обвязка rttydec_*: Core 1 push -> SPSC -> Core 0 poll (как cwdec_*).  
 #include "rtty_rx.h"  
-#include "rsid_rx.h"  
+// #include "rsid_rx.h"     // RSID временно отключён — экономия ~50 КБ RAM 
 #include "../af_config.h"  
 #include <math.h>  
 #include <string.h>  
@@ -363,18 +363,13 @@ void rttydec_init(void) {
     rrx.symbollen = RTTY_SYMLEN;  
     rrx.nbits = 5;  
     sq_open = (sq_level == 0.0f);  
-    scan_init();  
-    if (rsid_en) {  
-        rsid_rx_init();  
-        state = RTTY_ST_RSID;  
-    } else {  
-        state = scan_en ? RTTY_ST_SCAN : RTTY_ST_TRACK;  
-        if (state == RTTY_ST_TRACK) rtty_tune(RTTY_DEF_CENTER);  
-    }  
-    rtty_active = true;  
-    Serial.printf("# rtty on: %s\n",  
-                  state == RTTY_ST_RSID ? "rsid" :  
-                  state == RTTY_ST_SCAN ? "scan" : "track");  
+    scan_init();    
+    // RSID отключён: старт сразу со сканера (или TRACK при ручном центре).    
+    state = scan_en ? RTTY_ST_SCAN : RTTY_ST_TRACK;    
+    if (state == RTTY_ST_TRACK) rtty_tune(RTTY_DEF_CENTER);    
+    rtty_active = true;    
+    Serial.printf("# rtty on: %s\n",    
+                  state == RTTY_ST_SCAN ? "scan" : "track");    
 }  
   
 void rttydec_push(int16_t x) {          // Core 1, горячий путь  
@@ -386,55 +381,32 @@ void rttydec_push(int16_t x) {          // Core 1, горячий путь
     rtty_q_head = n;  
 }  
   
-void rttydec_poll(void) {               // Core 0, из loop()  
-    if (!rtty_active) return;  
+void rttydec_poll(void) {               // Core 0, из loop()    
+    if (!rtty_active) return;    
+    
+    // Потеря сигнала в TRACK: 5 с без валидных символов -> перезахват    
+    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 5000) {    
+        state = RTTY_ST_SCAN;    
+        scan_init();    
+        Serial.println("# rtty: lost -> scan");    
+    }    
+    
+    while (rtty_q_tail != rtty_q_head) {    
+        int16_t x = rtty_q[rtty_q_tail];    
+        rtty_q_tail = (uint16_t)((rtty_q_tail + 1) & (RTTYDEC_Q_LEN - 1));    
+    
+        if (state == RTTY_ST_SCAN) {    
+            if (++scan_decim >= 4) { scan_decim = 0; scan_sample((float)x); }    
+            continue;                              // в SCAN не декодируем    
+        }    
+        rtty_rx_sample((float)x, 0.0f);            // моно: xq=0    
+    }    
+}    
   
-    // RSID-результат (детект внутри rsid_rx_poll)  
-    float rsid_f;  
-    if (state == RTTY_ST_RSID && rsid_get_rtty_center(&rsid_f)) {  
-        rtty_tune(rsid_f);  
-        state = RTTY_ST_TRACK;  
-        Serial.printf("# rtty rsid lock: center=%.1f\n", (double)rsid_f);  
-    }  
-    // RSID не пришёл за ~4 с -> fallback на сканер  
-    static uint32_t rsid_wait_ms = 0;  
-    if (state == RTTY_ST_RSID) {  
-        if (rsid_wait_ms == 0) rsid_wait_ms = millis();  
-        if (scan_en && millis() - rsid_wait_ms > 4000) {  
-            state = RTTY_ST_SCAN;  
-            Serial.println("# rtty: rsid timeout -> scan");  
-        }  
-    } else rsid_wait_ms = 0;  
-  
-    // Потеря сигнала в TRACK: 5 с без валидных символов -> перезахват  
-    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 5000) {  
-        state = rsid_en ? RTTY_ST_SCAN : RTTY_ST_SCAN;  // сканер быстрее  
-        scan_init();  
-        Serial.println("# rtty: lost -> scan");  
-    }  
-  
-    while (rtty_q_tail != rtty_q_head) {  
-        int16_t x = rtty_q[rtty_q_tail];  
-        rtty_q_tail = (uint16_t)((rtty_q_tail + 1) & (RTTYDEC_Q_LEN - 1));  
-  
-        // RSID слушает всегда в состоянии RSID (ресемплер внутри)  
-        if (state == RTTY_ST_RSID) rsid_rx_push15464(x);  
-  
-        if (state == RTTY_ST_SCAN) {  
-            if (++scan_decim >= 4) { scan_decim = 0; scan_sample((float)x); }  
-            continue;                              // в SCAN не декодируем  
-        }  
-        rtty_rx_sample((float)x, 0.0f);            // моно: xq=0  
-    }  
-  
-    if (state == RTTY_ST_RSID) rsid_rx_poll();     // квант FFT/поиска  
-}  
-  
-void rttydec_stop(void) {  
-    rtty_q_head = rtty_q_tail = 0;  
-    rtty_active = false;  
-    rsid_rx_stop();  
-}  
+void rttydec_stop(void) {    
+    rtty_q_head = rtty_q_tail = 0;    
+    rtty_active = false;    
+}    
   
 // ---- настройки ----  
 void rttydec_set_scan(bool on)  { scan_en = on; }  
@@ -444,13 +416,19 @@ void rttydec_set_sql(float lvl) {
     if (lvl < 0.0f || lvl > 0.9f) return;  
     sq_level = lvl;  
     if (lvl == 0.0f) sq_open = true;  
-}  
-void rttydec_set_center(float hz) {  
-    if (hz < 200.0f) hz = 200.0f;  
-    if (hz > 3000.0f) hz = 3000.0f;  
-    rtty_tune(hz);  
-    state = RTTY_ST_TRACK;  
-}  
+} 
+ 
+void rttydec_set_center(float hz) {    
+    if (hz <= 0.0f) {                    // 0 = авто-режим: назад в сканер    
+        scan_init();    
+        state = RTTY_ST_SCAN;    
+        return;    
+    }    
+    if (hz < 200.0f) hz = 200.0f;    
+    if (hz > 3000.0f) hz = 3000.0f;    
+    rtty_tune(hz);    
+    state = RTTY_ST_TRACK;    
+}    
   
 // ---- статус ----  
 rttydec_state_t rttydec_state(void)  { return state; }  
