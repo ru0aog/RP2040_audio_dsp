@@ -350,10 +350,10 @@ void af_oled_status(void) {                 // строка 0: режим + по
     } else if (af_dsp_cw_on()) {      
         snprintf(tmp, sizeof(tmp), "ПРМ CW %luHz",      
                  (unsigned long)af_dsp_cw_freq());      
-    } else if (af_dsp_rtty_on()) {      
-        snprintf(tmp, sizeof(tmp), "ПРМ RTTY %.0fHz",      
-                 (double)((rttydec_f_mark() + rttydec_f_space()) * 0.5f));      
-    } else {      
+    } else if (af_dsp_rtty_on()) {        
+        snprintf(tmp, sizeof(tmp), "ПРМ RTTY %dHz",        
+                 (int)((rttydec_f_mark() + rttydec_f_space()) * 0.5f));        
+    } else {         
         snprintf(tmp, sizeof(tmp), "ПРМ %lu-%lu",    
                  (unsigned long)af_dsp_band_lo_hz(),    
                  (unsigned long)af_dsp_band_hi_hz());    

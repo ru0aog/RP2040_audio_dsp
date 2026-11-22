@@ -190,14 +190,16 @@ static void cli_stats(void) {
                   (unsigned long)af_dsp_cwdec_dropped());        
     {   // RTTY-декодер: состояние захвата, тона, AFC-ошибка, потери очереди  
         static const char* rtty_st[] = { "rsid", "scan", "track" };  
-        Serial.printf("#   rtty    = %s st=%s mark=%.0f space=%.0f ferr=%.1f rev=%s sql=%.2f drop=%lu\n",  
-                      af_dsp_rtty_on() ? "on" : "off",  
-                      rtty_st[rttydec_state()],  
-                      (double)rttydec_f_mark(), (double)rttydec_f_space(),  
-                      (double)rttydec_freqerr(),  
-                      rttydec_rev() ? "on" : "off",  
-                      (double)rttydec_sql(),  
-                      (unsigned long)rttydec_dropped());  
+            int ferr10 = (int)(rttydec_freqerr() * 10.0f);  
+            int sql100 = (int)(rttydec_sql() * 100.0f);  
+            Serial.printf("#   rtty    = %s st=%s mark=%d space=%d ferr=%d.%d rev=%s sql=%d.%02d drop=%lu\n",  
+                          af_dsp_rtty_on() ? "on" : "off",  
+                          rtty_st[rttydec_state()],  
+                          (int)rttydec_f_mark(), (int)rttydec_f_space(),  
+                          ferr10 / 10, abs(ferr10) % 10,  
+                          rttydec_rev() ? "on" : "off",  
+                          sql100 / 100, abs(sql100) % 100,  
+                          (unsigned long)rttydec_dropped());  
     }  
     Serial.printf("#   agc     = %s   gain=%lu.%02lu\n",      
                   af_dsp_agc_on() ? "on" : "off",      

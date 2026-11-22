@@ -347,13 +347,12 @@ static void scan_sample(float x) {
                 else if (p[t] > p[i2]) { i3 = i2; i2 = t; }    
                 else if (p[t] > p[i3]) { i3 = t; }    
             }    
-            Serial.printf("# scan: avg=%.0f thr=%.0f | top: %.0fHz=%.0f %.0fHz=%.0f %.0fHz=%.0f | best=%s hit=%d/%d\n",    
-                (double)avg, (double)(avg * 6.0f),    
-                (double)(SCAN_F0 + i1 * SCAN_STEP), (double)p[i1],    
-                (double)(SCAN_F0 + i2 * SCAN_STEP), (double)p[i2],    
-                (double)(SCAN_F0 + i3 * SCAN_STEP), (double)p[i3],    
-                best >= 0 ? "pair" : "-",    
-                scan_hit_n, SCAN_NEED);    
+            Serial.printf("# scan: avg=%d thr=%d | top: %dHz=%d %dHz=%d %dHz=%d | best=%s hit=%d/%d\n",  
+                (int)avg, (int)(avg * 6.0f),  
+                (int)(SCAN_F0 + i1 * SCAN_STEP), (int)p[i1],  
+                (int)(SCAN_F0 + i2 * SCAN_STEP), (int)p[i2],  
+                (int)(SCAN_F0 + i3 * SCAN_STEP), (int)p[i3],  
+                best >= 0 ? "pair" : "-", scan_hit_n, SCAN_NEED);  
         }    
     }    
   
@@ -437,11 +436,14 @@ void rttydec_poll(void) {               // Core 0, из loop()
             dbg_trk_ms = millis();    
             float env = fmaxf(rrx.mark_env, rrx.space_env);    
             float snr = (rrx.noise_floor > 1e-6f) ? env / rrx.noise_floor : 0.0f;    
-            Serial.printf("# trk: m=%.0f s=%.0f nf=%.0f snr=%.1f sq=%s v3=%.0f ferr=%.1f\n",    
-                (double)rrx.mark_env, (double)rrx.space_env,    
-                (double)rrx.noise_floor, (double)snr,    
-                sq_open ? "open" : "shut",    
-                (double)rrx.v3, (double)rrx.freqerr);    
+            // ferr и snr — в десятых долях целым: 12.3 -> "123"  
+            Serial.printf("# trk: m=%d s=%d nf=%d snr=%d.%d sq=%s v3=%d ferr=%d.%d\n",  
+                (int)rrx.mark_env, (int)rrx.space_env,  
+                (int)rrx.noise_floor,  
+                (int)snr, abs((int)(snr * 10.0f)) % 10,  
+                sq_open ? "open" : "shut",  
+                (int)rrx.v3,  
+                (int)rrx.freqerr, abs((int)(rrx.freqerr * 10.0f)) % 10);  
         }    
     }    
 }    
