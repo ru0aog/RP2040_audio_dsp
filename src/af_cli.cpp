@@ -41,6 +41,7 @@
 #include "af_fm.h"        // af_fm_request_sync — перерендер SET.TXT 
 #include "af_snr.h"  
 #include "modes/cw_rx.h"   // cwdec_set_wpm — стартовая скорость декодера  
+#include "modes/cw_tx.h"
 
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -1176,7 +1177,30 @@ static void cli_exec(char* line) {
             if (v == NULL) { Serial.println("# ERR: cw dec on|off"); return; }    
             af_dsp_set_cwdec(strcmp(v, "on") == 0);    
             Serial.printf("# OK cw dec=%s\n", af_dsp_cwdec_on() ? "on" : "off");    
-        }    
+        } 
+        else if (strcmp(sub, "tx") == 0) {        
+            char* v = strtok(NULL, "");          // весь остаток строки — текст посылки  
+            if (v == NULL || *v == '\0') { Serial.println("# ERR: cw tx <текст>"); return; }  
+            while (*v == ' ' || *v == '\t') ++v; // пропустить ведущие пробелы  
+            if (*v == '\0') { Serial.println("# ERR: cw tx <текст>"); return; }  
+            if (af_dsp_cwtx_start(v)) {  
+                Serial.printf("# OK cw tx: %s\n", v);  
+            } else {  
+                Serial.println("# ERR cw tx: busy или пустая посылка");  
+            }  
+        }  
+        else if (strcmp(sub, "txwpm") == 0) {        
+            char* v = strtok(NULL, " \t");        
+            if (v == NULL) { Serial.println("# ERR: cw txwpm <5..60>"); return; }        
+            int w = (int)strtoul(v, NULL, 10);        
+            if (w < 5) w = 5; if (w > 60) w = 60;        
+            cwtx_set_wpm((uint8_t)w);        
+            Serial.printf("# OK cw txwpm=%d\n", w);        
+        }  
+        else if (strcmp(sub, "abort") == 0) {  
+            cwtx_abort();  
+            Serial.println("# OK cw tx abort");  
+        }  
         else if (strcmp(sub, "wpm") == 0) {      
             char* v = strtok(NULL, " \t");      
             if (v == NULL) { Serial.println("# ERR: cw wpm <5..60>"); return; }      
