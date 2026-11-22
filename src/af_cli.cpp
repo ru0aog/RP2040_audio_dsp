@@ -201,6 +201,15 @@ static void cli_stats(void) {
                   (unsigned long)af_dsp_rxshelfq(),  
                   af_dsp_rxexc_on() ? "on" : "off",  
                   (long)af_dsp_rxexcmix());  
+    {   // Эксайтер: уровень гармоник и реальный вклад в выходной сигнал  
+        int32_t hl = af_dsp_rxexc_harm();  
+        int32_t hp = af_dsp_rxexc_hpeak();   // чтение сбрасывает пик  
+        int32_t mx = af_dsp_rxexcmix();  
+        Serial.printf("#   rxexc   : harm=%ld hpk=%ld   out_lvl=%ld (%.1f dBFS)\n",  
+                      (long)hl, (long)hp,  
+                      (long)((hl * mx) >> 15),  
+                      20.0 * log10(((hl * mx) >> 15) / 32768.0 + 1e-6));  
+    }  
     Serial.printf("#   nb      = %s thr=%ld   hits=%lu\n",      
                   af_dsp_nb_on() ? "on" : "off",      
                   (long)af_dsp_nbthr(),      

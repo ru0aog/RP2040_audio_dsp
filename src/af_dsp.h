@@ -151,3 +151,5 @@ void     af_dsp_set_rxexc(bool on);
 bool     af_dsp_rxexc_on(void);  
 void     af_dsp_set_rxexcmix(int32_t q15);  
 int32_t  af_dsp_rxexcmix(void);  
+int32_t  af_dsp_rxexc_harm(void);   // EMA уровня гармоник эксайтера  
+int32_t  af_dsp_rxexc_hpeak(void);  // пик, чтение сбрасывает  

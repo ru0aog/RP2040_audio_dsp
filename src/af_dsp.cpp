@@ -463,6 +463,8 @@ static inline int32_t __not_in_flash_func(rx_shelf_push)(int32_t x) {
 // ---------------------------------------------------------------------------  
 static volatile bool    rx_exc_on      = (AF_RX_EXC_ON_DEFAULT != 0);  
 static volatile int32_t rx_exc_mix_q15 = AF_RX_EXC_MIX_Q15_DEFAULT;  
+static int32_t          rxe_harm_lvl   = 0;   // EMA |hp2| — уровень гармоник до подмеса  
+static int32_t          rxe_harm_peak  = 0;   // пик |hp2|; чтение сбрасывает (как rx_in_peak)  
   
 // Два ФВЧ-биквада (RBJ high-pass, Q=0.707), коэффициенты — один раз в init.  
 static int32_t rxe_hp1_b0, rxe_hp1_b1, rxe_hp1_b2, rxe_hp1_a1, rxe_hp1_a2;  
@@ -511,6 +513,12 @@ static inline int32_t __not_in_flash_func(rx_exc_push)(int32_t x) {
     int32_t hp2 = (int32_t)(acc >> 15);  
     rxe_hp2_x2 = rxe_hp2_x1; rxe_hp2_x1 = t2;  
     rxe_hp2_y2 = rxe_hp2_y1; rxe_hp2_y1 = hp2;  
+  
+    // Диагностика: EMA |hp2| k=1/64 (~4 мс) + пик — уровень гармоник  
+    // до подмеса. Реальный вклад в выход = lvl * rx_exc_mix_q15 >> 15.  
+    int32_t ah = (hp2 < 0) ? -hp2 : hp2;  
+    rxe_harm_lvl += (ah - rxe_harm_lvl) >> 6;  
+    if (ah > rxe_harm_peak) rxe_harm_peak = ah;  
   
     return x + (int32_t)(((int64_t)hp2 * rx_exc_mix_q15) >> 15);  
 }  
@@ -1057,6 +1065,7 @@ void af_dsp_set_rxexc(bool on) {
     if (on && !rx_exc_on) {              // чистый старт — без щелчка  
         rxe_hp1_x1 = rxe_hp1_x2 = rxe_hp1_y1 = rxe_hp1_y2 = 0;  
         rxe_hp2_x1 = rxe_hp2_x2 = rxe_hp2_y1 = rxe_hp2_y2 = 0;  
+        rxe_harm_lvl = 0;  rxe_harm_peak = 0;  
     }  
     rx_exc_on = on;  
 }  
@@ -1067,7 +1076,14 @@ void    af_dsp_set_rxexcmix(int32_t q15) {
     rx_exc_mix_q15 = q15;  
 }  
 int32_t af_dsp_rxexcmix(void) { return rx_exc_mix_q15; }  
-  
+int32_t af_dsp_rxexc_harm(void) { return rxe_harm_lvl; }  
+int32_t af_dsp_rxexc_hpeak(void) {  
+    int32_t v = rxe_harm_peak;  
+    rxe_harm_peak = 0;              // чтение сбрасывает — как rx_in_peak  
+    return v;  
+}  
+
+
 void     af_dsp_set_nb(bool on) {      
     // NB ЗАГЛУШЕН: детектор вешал звук и дёргал шумовую полку (b46d15c).    
     // Команды/поля банка оставлены для совместимости формата (VER 6),    
