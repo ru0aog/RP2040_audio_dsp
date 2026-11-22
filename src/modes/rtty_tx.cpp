@@ -61,10 +61,13 @@ static char     tx_echo[RTTYTX_TEXT_LEN];
 static volatile uint8_t  tx_elen;  
 static volatile uint8_t  tx_epos;  
   
-// Бит-автомат (Core 0 пишет, Core 1 читает)  
-static volatile bool     tx_bit;               // текущий бит: 1=mark 0=space  
-static volatile uint32_t tx_bit_rem;           // отсчётов до конца бита  
-static volatile bool     tx_active;            // идёт передача  
+// Бит-автомат: Core 0 кладёт бит в pending-слот, Core 1 подхватывает    
+// на границе бита — поток непрерывный, без дыр между битами.    
+static volatile bool     tx_pend_bit;          // ожидающий бит: 1=mark 0=space    
+static volatile uint32_t tx_pend_len;          // его длительность в отсчётах    
+static volatile bool     tx_pend_valid;        // слот занят    
+static volatile uint32_t tx_bit_rem;           // отсчётов до конца текущего бита    
+static volatile bool     tx_active;            // идёт передача    
   
 static uint8_t  cur_code;                      // код в посылке  
 static uint8_t  bit_idx;                       // 0=start 1..5=data 6=stop  
@@ -73,33 +76,39 @@ static bool     tail_mark;                     // хвост mark перед к�
 // ---------------------------------------------------------------------------  
 // Core 1: следующий отсчёт. CPFSK — фаза непрерывна, меняется только шаг.  
 // ---------------------------------------------------------------------------  
-int16_t rttytx_sample(void) {  
-    if (!tx_active) return 0;  
-    if (tx_bit_rem == 0) {  
-        // Core 0 ещё не подал следующий бит — держим mark (idle)  
-        nco_phase += nco_step_mark;  
-        return tx_lut[(nco_phase >> 24) & (RTTYTX_LUT_LEN - 1)];  
-    }  
-    tx_bit_rem--;  
-    nco_phase += nco_step;  
-    return tx_lut[(nco_phase >> 24) & (RTTYTX_LUT_LEN - 1)];  
-}  
+int16_t rttytx_sample(void) {    
+    if (!tx_active) return 0;    
+    if (tx_bit_rem == 0) {    
+        if (tx_pend_valid) {                   // граница бита — подхватить слот    
+            tx_bit_rem   = tx_pend_len;    
+            nco_step     = tx_pend_bit ? nco_step_mark : nco_step_space;    
+            tx_pend_valid = false;    
+        } else {    
+            // Core 0 ещё не подал бит — mark (idle), фаза крутится    
+            nco_phase += nco_step_mark;    
+            return tx_lut[(nco_phase >> 24) & (RTTYTX_LUT_LEN - 1)];    
+        }    
+    }    
+    tx_bit_rem--;    
+    nco_phase += nco_step;    
+    return tx_lut[(nco_phase >> 24) & (RTTYTX_LUT_LEN - 1)];    
+}    
   
 // ---------------------------------------------------------------------------  
 // Core 0: подача одного бита в tx_bit/tx_bit_rem  
 // ---------------------------------------------------------------------------  
-static void feed_bit(bool mark, uint32_t len) {  
-    tx_bit = mark;  
-    nco_step = mark ? nco_step_mark : nco_step_space;  
-    tx_bit_rem = len;  
-}  
+static void feed_bit(bool mark, uint32_t len) {    
+    tx_pend_bit   = mark;    
+    tx_pend_len   = len;    
+    tx_pend_valid = true;                      // Core 1 заберёт на границе бита    
+}    
   
 // ---------------------------------------------------------------------------  
 // Core 0: бит-автомат. Вызывать из loop() каждую итерацию.  
 // ---------------------------------------------------------------------------  
-void rttytx_poll(void) {  
-    if (!tx_active) return;  
-    if (tx_bit_rem != 0) return;               // Core 1 доигрывает бит  
+void rttytx_poll(void) {    
+    if (!tx_active) return;    
+    if (tx_pend_valid) return;                 // слот занят — запас ~1 бит    
   
     // биты текущей посылки: 0=start 1..5=data 6=stop  
     if (bit_idx <= 6) {  
@@ -134,13 +143,13 @@ void rttytx_poll(void) {
         return;  
     }  
   
-    // очередь пуста — хвост mark ~100 мс, потом конец передачи  
-    if (!tail_mark) {  
-        tail_mark = true;  
-        feed_bit(true, (AF_FS_OUT_HZ * 100u) / 1000u);  
-    } else {  
-        tx_active = false;  
-    }  
+    // очередь пуста — хвост mark ~100 мс, потом конец передачи    
+    if (!tail_mark) {    
+        tail_mark = true;    
+        feed_bit(true, (AF_FS_OUT_HZ * 100u) / 1000u);    
+    } else if (tx_bit_rem == 0 && !tx_pend_valid) {    
+        tx_active = false;               // хвост доигран Core 1 — гасим    
+    }    
 }  
   
 // ---------------------------------------------------------------------------  
@@ -237,9 +246,10 @@ bool rttytx_send(const char* text) {
   
     tx_clen = n; tx_cpos = 0;  
     tx_elen = e; tx_epos = 0;  
-    bit_idx = 7;                        // "посылка доиграна" -> сразу новый код  
-    tx_bit_rem = 0;  
-    tail_mark = false;  
+    bit_idx = 7;                        // "посылка доиграна" -> сразу новый код    
+    tx_bit_rem = 0;    
+    tx_pend_valid = false;    
+    tail_mark = false;    
     af_oled_putc('>');                  // префикс TX на экране, как у CW  
     tx_active = true;  
     return true;  
@@ -248,8 +258,9 @@ bool rttytx_send(const char* text) {
 bool rttytx_busy(void) { return tx_active; }  
   
 void rttytx_abort(void) {  
-    tx_active = false;  
-    tx_bit_rem = 0;  
+    tx_active = false;    
+    tx_bit_rem = 0;    
+    tx_pend_valid = false;    
     tx_clen = tx_cpos = 0;  
     tx_elen = tx_epos = 0;  
     tail_mark = false;  
