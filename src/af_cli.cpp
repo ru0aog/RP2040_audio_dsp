@@ -1172,23 +1172,26 @@ static void cli_exec(char* line) {
             af_dsp_set_cwdec(strcmp(v, "on") == 0);    
             Serial.printf("# OK cw dec=%s\n", af_dsp_cwdec_on() ? "on" : "off");    
         }    
-        else if (strcmp(sub, "wpm") == 0) {    
-            char* v = strtok(NULL, " \t");    
-            if (v == NULL) { Serial.println("# ERR: cw wpm <5..60>"); return; }    
-            int w = (int)strtoul(v, NULL, 10);    
-            if (w < 5) w = 5; if (w > 60) w = 60;    
-            cwdec_set_wpm((uint8_t)w);    
-            Serial.printf("# OK cw wpm=%d\n", w);    
-        }
-        } else if (strcmp(sub, "sql") == 0) {    
-            float v = atof(arg);    
-            cwdec_set_sql(v);    
-            Serial.printf("# OK cw sql=%.2f\n", v);    
-        }
-        else {    
-            Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>|dec on|off|wpm <5..60>");    
-        }    
-    }
+        else if (strcmp(sub, "wpm") == 0) {      
+            char* v = strtok(NULL, " \t");      
+            if (v == NULL) { Serial.println("# ERR: cw wpm <5..60>"); return; }      
+            int w = (int)strtoul(v, NULL, 10);      
+            if (w < 5) w = 5; if (w > 60) w = 60;      
+            cwdec_set_wpm((uint8_t)w);      
+            Serial.printf("# OK cw wpm=%d\n", w);      
+        }  
+        else if (strcmp(sub, "sql") == 0) {      
+            char* v = strtok(NULL, " \t");      
+            if (v == NULL) { Serial.println("# ERR: cw sql <0..1>"); return; }      
+            float f = strtof(v, NULL);      
+            if (f < 0.0f) f = 0.0f; if (f > 1.0f) f = 1.0f;      
+            cwdec_set_sql(f);      
+            Serial.printf("# OK cw sql=%d.%02d\n", (int)f, (int)(f * 100.0f + 0.5f) % 100);      
+        }  
+        else {      
+            Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>|dec on|off|wpm <5..60>|sql <0..1>");      
+        }      
+    }  
 
     else if (strcmp(cmd, "save") == 0) {  
         char* v = strtok(NULL, " \t");  

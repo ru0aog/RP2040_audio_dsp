@@ -536,7 +536,8 @@ static volatile uint32_t cw_f0 = AF_CW_F0_DEFAULT;
 static volatile uint32_t cw_bw = AF_CW_BW_DEFAULT;    
 static volatile bool     cwdec_on = true;   // декодер морзянки активен при cw on    
   
-static volatile uint32_t cw_noise = 400;   // уровень добавки шума (±)  
+static volatile uint32_t cw_noise = 0;     // подмес шума выключен: на чистом    
+                                           // тоне размывал спектр и мешал декодеру  
   
 // --- Постоянная добавка шума на вход CW-фильтра ---------------------------  
 // LFSR-шум малого уровня суммируется с сигналом: фильтр всегда возбуждён  
