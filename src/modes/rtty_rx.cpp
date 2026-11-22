@@ -58,16 +58,16 @@ typedef struct {
 } rtty_t;  
   
 static rtty_t rrx;  
-static bool   rtty_active = false;  
-static bool   rtty_rev    = false;  
-static float  sq_level    = 0.15f;   // сквелч по SNR огибающих, 0=off  
-static bool   sq_open     = true;  
+static volatile bool   rtty_active = false;    
+static volatile bool   rtty_rev    = false;    
+static volatile float  sq_level    = 0.15f;  // сквелч по SNR огибающих, 0=off    
+static volatile bool   sq_open     = true;    
   
-static rttydec_state_t state = RTTY_ST_SCAN;  
+static volatile rttydec_state_t state = RTTY_ST_SCAN;  
 static bool   scan_en  = true;    
 static bool   rsid_en  = true;    
 static bool   dbg_en   = false;   // rtty dbg on|off — диагностика scan/trk    
-static uint32_t track_lost_ms = 0;   // таймаут потери сигнала в TRACK    
+static volatile uint32_t track_lost_ms = 0;  // таймаут потери сигнала в TRACK (пишет Core 1, читает Core 0)  
 static float    ban_lo = 0, ban_hi = 0;  // забаненная пара (Гц), 0 = нет    
 static uint32_t ban_ms = 0;              // когда забанена (TTL 30 с)    
   
@@ -96,11 +96,12 @@ static volatile uint8_t  chq[RTTY_CHQ_LEN];
 static volatile uint16_t chq_head = 0, chq_tail = 0;      
   
 // Очередь децимированных отсчётов Core1->Core0 для сканера (только в SCAN).      
-#define RTTY_SQ_LEN 256      
-static volatile int16_t  sq[RTTY_SQ_LEN];      
-static volatile uint16_t sq_head = 0, sq_tail = 0;      
-      
-static void sq_put(int16_t v) {             // Core 1      
+#define RTTY_SQ_LEN 256        
+static volatile int16_t  sq[RTTY_SQ_LEN];        
+static volatile uint16_t sq_head = 0, sq_tail = 0;        
+static volatile uint32_t rtty_dropped_cnt = 0;  // переполнение sq (Core 0 не успевает)  
+        
+static void sq_put(int16_t v) {             // Core 1           
     uint16_t n = (uint16_t)((sq_head + 1) & (RTTY_SQ_LEN - 1));      
     if (n == sq_tail) { rtty_dropped_cnt++; return; }  // Core 0 не успевает      
     sq[sq_head] = v;      
@@ -426,8 +427,8 @@ static void scan_sample(float x) {
 // ---------------------------------------------------------------------------  
 // Обвязка rttydec_* — SPSC-очередь (как cwdec_*)  
 // ---------------------------------------------------------------------------  
-static int push_decim = 0;              // счётчик децимации /4 (Core 1)    
-static volatile uint32_t rtty_dropped_cnt = 0;  // не используется — оставлен для stats    
+static int push_decim = 0;              // счётчик децимации /4 (Core 1)      
+// rtty_dropped_cnt объявлен выше, у очереди sq — используется в sq_put  
   
 void rttydec_init(void) {    
     chq_head = chq_tail = 0;      
