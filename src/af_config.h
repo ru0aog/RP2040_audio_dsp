@@ -98,7 +98,7 @@
 #define AF_RX_PRES_ON_DEFAULT   0  
 
 // --- RX low-shelf («бас» в конце тракта) ---  
-#define AF_RX_SHELF_DB_X10_DEFAULT   30     // +3.0 дБ  
+#define AF_RX_SHELF_DB_X10_DEFAULT    0     // басс-шелф по умолчанию отключен, было +3.0 дБ  
 #define AF_RX_SHELF_FREQ_HZ         450     // частота среза шелфа  
 #define AF_RX_SHELF_Q_X100           70     // Q = 0.70  
   
