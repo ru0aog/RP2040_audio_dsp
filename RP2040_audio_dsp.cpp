@@ -28,7 +28,8 @@
 #include "src/af_fm.h"            // файловый менеджер: FAT12-диск 16 КБ, SET.TXT
 #include "src/modes/cw_rx.h"      // cwdec_set_wpm — стартовая скорость декодера
 #include "src/modes/cw_tx.h"
-#include "src/modes/af_oled.h"      // OLED 128x32 SSD1306, GP14 SDA / GP15 SCL
+#include "src/modes/af_oled.h"    // OLED 128x32 SSD1306, GP14 SDA / GP15 SCL
+#include "src/modes/rtty_rx.h"    // rttydec_poll — RTTY-декодер на Core 0
 
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    

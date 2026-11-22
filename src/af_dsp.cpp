@@ -21,13 +21,14 @@
 #include "af_config.h"  
 #include "af_capture.h"
 #include "af_store.h"
-#include "af_voice.h"     // подмес голосовых клипов в выход
-#include "af_tx.h"        // передающий тракт SSB    
-#include "af_pwm.h"       // af_pwm_set_tx_pin — выход GP0(RX)/GP1(TX) 
-#include "af_rec.h"       // запись/воспроизведение цифрового магнитофона
+#include "af_voice.h"       // подмес голосовых клипов в выход
+#include "af_tx.h"          // передающий тракт SSB    
+#include "af_pwm.h"         // af_pwm_set_tx_pin — выход GP0(RX)/GP1(TX) 
+#include "af_rec.h"         // запись/воспроизведение цифрового магнитофона
 #include "af_snr.h"
-#include "modes/cw_rx.h"   // CW-декодер: cwdec_push (Core 1) / cwdec_poll (Core 0)  
-#include "modes/cw_tx.h"   // CW-передатчик: cwtx_sample (Core 1) / cwtx_* (Core 0)  
+#include "modes/cw_rx.h"    // CW-декодер: cwdec_push (Core 1) / cwdec_poll (Core 0)  
+#include "modes/cw_tx.h"    // CW-передатчик: cwtx_sample (Core 1) / cwtx_* (Core 0)
+#include "modes/rtty_rx.h"  // RTTY-декодер: rttydec_push (Core 1) / rttydec_poll (Core 0)
 
 static uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
 static volatile bool snr_reset_req = false;  // запрос сброса spec-NR (Core 0 -> Core 1)  
@@ -1159,8 +1160,9 @@ void af_dsp_set_rtty(bool on) {
 }  
 bool af_dsp_rtty_on(void) { return rtty_on; } 
 
-void af_dsp_set_cw(bool on) {    
-    if (on && !cw_on) {        
+void af_dsp_set_cw(bool on) {  
+    if (on && rtty_on) af_dsp_set_rtty(false);   // взаимоисключение с RTTY  
+    if (on && !cw_on) {  
         // Блокировка снята для теста: NT/NR больше не снимаются при CW.  
         // if (notch_on) af_dsp_set_notch(false);      
         // if (nr_on)    af_dsp_set_nr(false);      
@@ -1529,19 +1531,18 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 if (ay > rx_in_peak) rx_in_peak = ay;   // пик за интервал чтения  
             }  
             if (cw_on) {  
-                // Добавка шума: LFSR xorshift32, уровень из `cw noise`.  
-                // Фильтр всегда возбуждён — не звенит на тишине;  
-                // сигнал проходит без порогов (сквелча нет).  
                 cw_lfsr ^= cw_lfsr << 13;  
                 cw_lfsr ^= cw_lfsr >> 17;  
                 cw_lfsr ^= cw_lfsr << 5;  
                 int32_t noise = ((int32_t)(cw_lfsr & 0xFFFF) - 32768) >> 6; // ~±512  
                 noise = (noise * (int32_t)cw_noise) >> 9;  
-                y = cw_push(sat16(y + noise));    
-                if (cwdec_on) cwdec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));
-                if (rtty_on && !bypass_on && !tx_on) rttydec_push(x);  
-            }    
-            if (notch_on) y = notch_lms_push(y);    
+                y = cw_push(sat16(y + noise));  
+                if (cwdec_on) cwdec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));  
+            }  
+            // Отвод для RTTY-декодера: после полосового FIR, до NT/NR/АРУ.  
+            // TX и bypass выше уходят по continue — гейтить только rtty_on.  
+            if (rtty_on) rttydec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));  
+            if (notch_on) y = notch_lms_push(y);  
             if (nr_on)    y = (nr_mode == 1) ? af_snr_push(y) : nr_lms_push(y); 
             int16_t s = agc_limit(y);  
             // Гребёнка — после АРУ (контур не «отменяет» нотчи), но ДО пост-FIR:  

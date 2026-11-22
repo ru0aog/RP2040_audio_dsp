@@ -42,7 +42,8 @@
 #include "af_snr.h"  
 #include "modes/cw_rx.h"   // cwdec_set_wpm — стартовая скорость декодера  
 #include "modes/cw_tx.h"   // cwtx_set_wpm/cwtx_abort
-#include "modes/af_oled.h"   // эхо cw tx на экран  
+#include "modes/af_oled.h"   // эхо cw tx на экран
+#include "modes/rtty_rx.h"   // rttydec_set_* — RTTY-декодер
 
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -79,8 +80,14 @@ static void cli_help(void) {
     Serial.println("#   cw dec on|off     — CW-декодер: текст в Serial (только при cw on)");    
     Serial.println("#   cw wpm <5..60>    — стартовая скорость декодера, WPM");      
     Serial.println("#   cw sql <0..1>     — сквелч декодера (0 = off, 0.25 = дефолт)");
-    Serial.println("#   cw tx <текст>     — передать посылку CW (тон = cw f0, авто-возврат в RX)");  
-    Serial.println("#   cw txwpm <5..60>  — скорость передачи;  cw abort — оборвать посылку");  
+    Serial.println("#   cw tx <текст>     — передать посылку CW (тон = cw f0, авто-возврат в RX)");    
+    Serial.println("#   cw txwpm <5..60>  — скорость передачи;  cw abort — оборвать посылку");    
+    Serial.println("#   rtty on|off       — RTTY-декодер 45.45/170: текст в Serial (взаимоискл. с cw)");  
+    Serial.println("#   rtty rsid on|off  — захват центра по RSID-метке (дефолт on)");  
+    Serial.println("#   rtty scan on|off  — сканер тонов как fallback без RSID (дефолт on)");  
+    Serial.println("#   rtty ctr <hz>     — ручной центр mark/space (отключает rsid/scan)");  
+    Serial.println("#   rtty rev on|off   — инверсия полярности mark/space");  
+    Serial.println("#   rtty sql <0..1>   — сквелч декодера (0 = off, 0.15 = дефолт)");  
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
     Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
     Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
@@ -174,13 +181,24 @@ static void cli_stats(void) {
                   af_dsp_nrmode()    ? "spec" : "lms",    
                   af_dsp_bypass_on() ? "on" : "off",        
                   af_dsp_ramp_on()   ? "on" : "off");        
-    Serial.printf("#   cw      = %s   f0=%lu bw=%lu noise=%lu dec=%s dropped=%lu\n",        
-                  af_dsp_cw_on() ? "on" : "off",        
-                  (unsigned long)af_dsp_cw_freq(),        
-                  (unsigned long)af_dsp_cw_bw(),        
-                  (unsigned long)af_dsp_cw_noise(),        
-                  af_dsp_cwdec_on() ? "on" : "off",    
-                  (unsigned long)af_dsp_cwdec_dropped());      
+    Serial.printf("#   cw      = %s   f0=%lu bw=%lu noise=%lu dec=%s dropped=%lu\n",          
+                  af_dsp_cw_on() ? "on" : "off",          
+                  (unsigned long)af_dsp_cw_freq(),          
+                  (unsigned long)af_dsp_cw_bw(),          
+                  (unsigned long)af_dsp_cw_noise(),          
+                  af_dsp_cwdec_on() ? "on" : "off",      
+                  (unsigned long)af_dsp_cwdec_dropped());        
+    {   // RTTY-декодер: состояние захвата, тона, AFC-ошибка, потери очереди  
+        static const char* rtty_st[] = { "rsid", "scan", "track" };  
+        Serial.printf("#   rtty    = %s st=%s mark=%.0f space=%.0f ferr=%.1f rev=%s sql=%.2f drop=%lu\n",  
+                      af_dsp_rtty_on() ? "on" : "off",  
+                      rtty_st[rttydec_state()],  
+                      (double)rttydec_f_mark(), (double)rttydec_f_space(),  
+                      (double)rttydec_freqerr(),  
+                      rttydec_rev() ? "on" : "off",  
+                      (double)rttydec_sql(),  
+                      (unsigned long)rttydec_dropped());  
+    }  
     Serial.printf("#   agc     = %s   gain=%lu.%02lu\n",      
                   af_dsp_agc_on() ? "on" : "off",      
                   (unsigned long)(g100 / 100), (unsigned long)(g100 % 100));      
@@ -724,6 +742,8 @@ static void p_set_gain(int32_t v)     { af_dsp_set_gain((float)v / 256.0f); }   
 static void p_set_agcmax(int32_t v)   { af_dsp_set_agcmax((float)v / 100.0f); }      // x100  
 static void p_set_agcmin(int32_t v)   { af_dsp_set_agcmin((float)v / 100.0f); }      // x100  
 static void p_set_cw_sql(int32_t v)   { cwdec_set_sql((float)v / 100.0f); }      // x100  
+static void p_set_rtty_sql(int32_t v) { rttydec_set_sql((float)v / 100.0f); }  
+static void p_set_rtty_ctr(int32_t v) { rttydec_set_center((float)v); } 
 
 #define P_SET(fn)  ((void(*)(int32_t))(fn))   // сеттеры u32/bool — совместимы по ABI  
   
@@ -737,7 +757,13 @@ static const af_param_t AF_PARAMS[] = {
     { "cw noise",    PT_U16,   offsetof(af_bank_t, cw_noise),       P_SET(af_dsp_set_cw_noise) },    
     { "cw dec",      PT_ONOFF, offsetof(af_bank_t, cwdec_on),       P_SET(af_dsp_set_cwdec) },    
     { "cw wpm",      PT_U8,    offsetof(af_bank_t, cw_wpm),         P_SET(cwdec_set_wpm) },    
-    { "cw sql",      PT_X100,  offsetof(af_bank_t, cw_sql_x100),    p_set_cw_sql },    
+    { "cw sql",      PT_X100,  offsetof(af_bank_t, cw_sql_x100),    p_set_cw_sql },
+    { "rtty",        PT_ONOFF, offsetof(af_bank_t, rtty_on),        P_SET(af_dsp_set_rtty) },  
+    { "rtty scan",   PT_ONOFF, offsetof(af_bank_t, rtty_scan),      P_SET(rttydec_set_scan) },  
+    { "rtty rsid",   PT_ONOFF, offsetof(af_bank_t, rtty_rsid),      P_SET(rttydec_set_rsid) },  
+    { "rtty rev",    PT_ONOFF, offsetof(af_bank_t, rtty_rev),       P_SET(rttydec_set_rev) },  
+    { "rtty ctr",    PT_U16,   offsetof(af_bank_t, rtty_ctr),       p_set_rtty_ctr },  
+    { "rtty sql",    PT_X100,  offsetof(af_bank_t, rtty_sql_x100),  p_set_rtty_sql }, 
     { "agc",         PT_ONOFF, offsetof(af_bank_t, agc_on),         P_SET(af_dsp_set_agc) },    
     { "gain",        PT_GAIN,  offsetof(af_bank_t, gain_pct),       p_set_gain },  
     { "voice vol",   PT_U16,   offsetof(af_bank_t, voice_vol),      P_SET(af_voice_set_volume) },  
