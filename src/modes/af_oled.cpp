@@ -103,7 +103,79 @@ static const uint8_t FONT5x7[][5] = {
     {0x00,0x41,0x36,0x08,0x00}, // '}'  
     {0x10,0x08,0x08,0x10,0x08}, // '~'  
 };  
-  
+
+// ---------------------------------------------------------------------------  
+// Кириллица 5x7: А..Я (0..31), а..я (32..63), Ё=64, ё=65  
+// ---------------------------------------------------------------------------  
+static const uint8_t FONT5x7_RU[][5] = {  
+    {0x7C,0x12,0x11,0x12,0x7C}, // А  
+    {0x7F,0x49,0x49,0x49,0x33}, // Б  
+    {0x7F,0x49,0x49,0x49,0x36}, // В  
+    {0x7F,0x41,0x41,0x41,0x41}, // Г  
+    {0x60,0x3C,0x22,0x22,0x3C}, // Д  
+    {0x7F,0x49,0x49,0x49,0x41}, // Е  
+    {0x77,0x08,0x7F,0x08,0x77}, // Ж  
+    {0x22,0x41,0x49,0x49,0x36}, // З  
+    {0x7F,0x10,0x08,0x04,0x7F}, // И  
+    {0x7F,0x10,0x09,0x04,0x7A}, // Й  
+    {0x7F,0x08,0x14,0x22,0x41}, // К  
+    {0x20,0x40,0x3F,0x01,0x7F}, // Л  
+    {0x7F,0x02,0x0C,0x02,0x7F}, // М  
+    {0x7F,0x08,0x08,0x08,0x7F}, // Н  
+    {0x3E,0x41,0x41,0x41,0x3E}, // О  
+    {0x7F,0x41,0x41,0x41,0x7F}, // П  
+    {0x7F,0x09,0x09,0x09,0x06}, // Р  
+    {0x3E,0x41,0x41,0x41,0x22}, // С  
+    {0x01,0x01,0x7F,0x01,0x01}, // Т  
+    {0x47,0x28,0x10,0x08,0x07}, // У  
+    {0x1C,0x22,0x7F,0x22,0x1C}, // Ф  
+    {0x63,0x14,0x08,0x14,0x63}, // Х  
+    {0x7F,0x40,0x40,0x40,0xFF}, // Ц  
+    {0x07,0x08,0x08,0x08,0x7F}, // Ч  
+    {0x7F,0x40,0x7F,0x40,0x7F}, // Ш  
+    {0x7F,0x40,0x7F,0x40,0xFF}, // Щ  
+    {0x01,0x7F,0x48,0x48,0x30}, // Ъ  
+    {0x7F,0x48,0x48,0x30,0x7F}, // Ы  
+    {0x7F,0x48,0x48,0x48,0x30}, // Ь  
+    {0x22,0x41,0x49,0x49,0x36}, // Э  
+    {0x7F,0x08,0x3E,0x41,0x3E}, // Ю  
+    {0x46,0x29,0x19,0x09,0x7F}, // Я  
+    {0x20,0x54,0x54,0x54,0x78}, // а  
+    {0x38,0x44,0x44,0x44,0x28}, // б  
+    {0x38,0x54,0x54,0x54,0x18}, // в  
+    {0x7C,0x04,0x04,0x04,0x04}, // г  
+    {0x60,0x3C,0x24,0x24,0x3C}, // д  
+    {0x38,0x54,0x54,0x54,0x18}, // е  
+    {0x6C,0x10,0x7C,0x10,0x6C}, // ж  
+    {0x44,0x44,0x54,0x54,0x28}, // з  
+    {0x7C,0x20,0x10,0x08,0x7C}, // и  
+    {0x7C,0x21,0x10,0x09,0x7C}, // й  
+    {0x7C,0x10,0x28,0x44,0x00}, // к  
+    {0x20,0x40,0x3C,0x04,0x7C}, // л  
+    {0x7C,0x08,0x10,0x08,0x7C}, // м  
+    {0x7C,0x10,0x10,0x10,0x7C}, // н  
+    {0x38,0x44,0x44,0x44,0x38}, // о  
+    {0x7C,0x44,0x44,0x44,0x7C}, // п  
+    {0xFC,0x24,0x24,0x24,0x18}, // р  
+    {0x38,0x44,0x44,0x44,0x28}, // с  
+    {0x04,0x04,0x7C,0x04,0x04}, // т  
+    {0x9C,0x50,0x50,0x50,0x3C}, // у  
+    {0x30,0x48,0xFE,0x49,0x30}, // ф  
+    {0x44,0x28,0x10,0x28,0x44}, // х  
+    {0x7C,0x40,0x40,0x40,0xFC}, // ц  
+    {0x0C,0x10,0x10,0x10,0x7C}, // ч  
+    {0x7C,0x40,0x7C,0x40,0x7C}, // ш  
+    {0x7C,0x40,0x7C,0x40,0xFC}, // щ  
+    {0x04,0x7C,0x50,0x50,0x20}, // ъ  
+    {0x7C,0x50,0x50,0x20,0x7C}, // ы  
+    {0x7C,0x50,0x50,0x50,0x20}, // ь  
+    {0x28,0x44,0x54,0x54,0x38}, // э  
+    {0x7C,0x10,0x38,0x44,0x38}, // ю  
+    {0x48,0x54,0x34,0x14,0x7C}, // я  
+    {0x7F,0x4B,0x49,0x4B,0x41}, // Ё  
+    {0x38,0x55,0x54,0x55,0x18}, // ё  
+};  
+
 // ---------------------------------------------------------------------------  
 // Состояние  
 // ---------------------------------------------------------------------------  
@@ -111,7 +183,8 @@ static bool     oled_ok;                    // модуль ответил на 
 static bool     oled_dirty;                 // буфер изменился — нужна перерисовка  
 static uint32_t oled_last_ms;               // троттлинг перерисовки  
 static char     oled_lines[AF_OLED_ROWS][AF_OLED_COLS + 1];  // текстовый буфер  
-static uint8_t  oled_col;                   // позиция в текущей строке скролла  
+static uint8_t  oled_col;                   // позиция в текущей строке скролла    
+static uint8_t  oled_utf8_hi;               // первый байт UTF-8 (0xD0/0xD1), 0 = нет    
   
 // ---------------------------------------------------------------------------  
 // Bit-bang I2C (open-drain: 0 = output low, 1 = input с внешней подтяжкой)  
@@ -176,9 +249,11 @@ static void oled_render(void) {
         oled_cmd(0x10);                     // col high  
         uint8_t buf[AF_OLED_W];  
         for (uint8_t col = 0; col < AF_OLED_COLS; col++) {  
-            char c = oled_lines[page][col];  
-            const uint8_t* g = (c >= 0x20 && c <= 0x7E)  
-                             ? FONT5x7[c - 0x20] : FONT5x7[0];  
+            uint8_t c = (uint8_t)oled_lines[page][col];    
+            const uint8_t* g;    
+            if (c >= 0x80 && c < 0x80 + 66)      g = FONT5x7_RU[c - 0x80];   // кириллица    
+            else if (c >= 0x20 && c <= 0x7E)     g = FONT5x7[c - 0x20];      // ASCII    
+            else                                 g = FONT5x7[0];             // пробел    
             for (uint8_t k = 0; k < 5; k++) buf[col * 6 + k] = g[k];  
             buf[col * 6 + 5] = 0x00;        // межсимвольный зазор  
         }  
@@ -236,9 +311,22 @@ void af_oled_clear(void) {
     oled_dirty = true;  
 }  
   
-void af_oled_putc(char c) {                 // скролл-вывод в строки 1..3  
-    if (!oled_ok) return;  
-    if (c == '\n' || oled_col >= AF_OLED_COLS) {  
+void af_oled_putc(char c) {                 // скролл-вывод в строки 1..3    
+    if (!oled_ok) return;    
+    uint8_t b = (uint8_t)c;    
+    // UTF-8: кириллица = 0xD0 0x90..0xBF (А..п) / 0xD1 0x80..0x8F (р..я),    
+    //        Ё = D0 81, ё = D1 91. Кодируем в буфере как 0x80+index.    
+    if (oled_utf8_hi) {    
+        uint8_t hi = oled_utf8_hi; oled_utf8_hi = 0;    
+        if (hi == 0xD0 && b >= 0x90 && b <= 0xBF)      c = (char)(0x80 + (b - 0x90));        // А..п    
+        else if (hi == 0xD1 && b >= 0x80 && b <= 0x8F) c = (char)(0x80 + 16 + (b - 0x80));   // р..я    
+        else if (hi == 0xD0 && b == 0x81)              c = (char)(0x80 + 64);                // Ё    
+        else if (hi == 0xD1 && b == 0x91)              c = (char)(0x80 + 65);                // ё    
+        else return;                                   // не кириллица — пропуск    
+    } else if (b == 0xD0 || b == 0xD1) {    
+        oled_utf8_hi = b; return;                      // ждём второй байт    
+    }    
+    if (c == '\n' || oled_col >= AF_OLED_COLS) {    
         // скролл вверх: строка 1 <- 2 <- 3  
         memcpy(oled_lines[1], oled_lines[2], AF_OLED_COLS + 1);  
         memcpy(oled_lines[2], oled_lines[3], AF_OLED_COLS + 1);  
@@ -251,26 +339,40 @@ void af_oled_putc(char c) {                 // скролл-вывод в стр
     oled_dirty = true;  
 }  
   
-void af_oled_status(void) {                 // строка 0: режим + полоса + f0  
-    if (!oled_ok) return;  
-    char* s = oled_lines[0];  
-    if (af_dsp_cwtx_busy()) {  
-        snprintf(s, AF_OLED_COLS + 1, "TX CW %luHz",  
-                 (unsigned long)af_dsp_cw_freq());  
-    } else if (af_dsp_cw_on()) { 
-        snprintf(s, AF_OLED_COLS + 1, "RX CW %luHz",  
-                 (unsigned long)af_dsp_cw_freq());  
-    } else {  
-        snprintf(s, AF_OLED_COLS + 1, "RX %lu-%lu",  
-                 (unsigned long)af_dsp_band_lo_hz(),  
-                 (unsigned long)af_dsp_band_hi_hz());  
-    }  
-    // добить пробелами до ширины  
-    size_t l = strlen(s);  
-    while (l < AF_OLED_COLS) s[l++] = ' ';  
-    s[AF_OLED_COLS] = '\0';  
-    oled_dirty = true;  
-}  
+void af_oled_status(void) {                 // строка 0: режим + полоса + f0    
+    if (!oled_ok) return;    
+    char tmp[48];    
+    if (af_dsp_cwtx_busy()) {    
+        snprintf(tmp, sizeof(tmp), "ПРД CW %luHz",    
+                 (unsigned long)af_dsp_cw_freq());    
+    } else if (af_dsp_cw_on()) {    
+        snprintf(tmp, sizeof(tmp), "ПРМ CW %luHz",    
+                 (unsigned long)af_dsp_cw_freq());    
+    } else {    
+        snprintf(tmp, sizeof(tmp), "ПРМ %lu-%lu",    
+                 (unsigned long)af_dsp_band_lo_hz(),    
+                 (unsigned long)af_dsp_band_hi_hz());    
+    }    
+    // Прогоняем через UTF-8 декодер в строку 0 (временно перенаправляем вывод)    
+    memset(oled_lines[0], ' ', AF_OLED_COLS);    
+    oled_lines[0][AF_OLED_COLS] = '\0';    
+    uint8_t col = 0;    
+    uint8_t hi = 0;    
+    for (const char* p = tmp; *p && col < AF_OLED_COLS; p++) {    
+        uint8_t b = (uint8_t)*p;    
+        char c = (char)b;    
+        if (hi) {    
+            uint8_t h = hi; hi = 0;    
+            if (h == 0xD0 && b >= 0x90 && b <= 0xBF)      c = (char)(0x80 + (b - 0x90));    
+            else if (h == 0xD1 && b >= 0x80 && b <= 0x8F) c = (char)(0x80 + 16 + (b - 0x80));    
+            else if (h == 0xD0 && b == 0x81)              c = (char)(0x80 + 64);    
+            else if (h == 0xD1 && b == 0x91)              c = (char)(0x80 + 65);    
+            else continue;    
+        } else if (b == 0xD0 || b == 0xD1) { hi = b; continue; }    
+        oled_lines[0][col++] = c;    
+    }    
+    oled_dirty = true;    
+}    
   
 void af_oled_poll(void) {    
     if (!oled_ok) return;    
