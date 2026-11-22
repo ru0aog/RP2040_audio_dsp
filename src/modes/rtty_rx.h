@@ -33,8 +33,9 @@ uint32_t rttydec_dropped(void);         // отсчёты, не влезшие �
 void     rttydec_set_scan(bool on);     // сканер как fallback после RSID-таймаута  
 void     rttydec_set_rsid(bool on);     // слушать RSID-метки  
 void     rttydec_set_center(float hz);  // ручной центр -> сразу TRACK, без поиска  
-void     rttydec_set_rev(bool on);      // инверсия полярности mark/space  
-void     rttydec_set_sql(float lvl);    // сквелч 0..1 (0 = off)  
+void     rttydec_set_rev(bool on);      // инверсия полярности mark/space    
+void     rttydec_set_sql(float lvl);    // сквелч 0..1 (0 = off)    
+void     rttydec_set_dbg(bool on);      // диагностика # scan:/# trk: в Serial    
   
 // ---- статус (для stats/банков) ----  
 rttydec_state_t rttydec_state(void);  
@@ -42,6 +43,7 @@ float    rttydec_f_mark(void);
 float    rttydec_f_space(void);  
 float    rttydec_freqerr(void);  
 bool     rttydec_rev(void);  
-bool     rttydec_scan_en(void);  
-bool     rttydec_rsid_en(void);  
+bool     rttydec_scan_en(void);    
+bool     rttydec_rsid_en(void);    
+bool     rttydec_dbg_en(void);    
 float    rttydec_sql(void);  

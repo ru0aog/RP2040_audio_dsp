@@ -59,9 +59,12 @@ static float  sq_level    = 0.15f;   // сквелч по SNR огибающих
 static bool   sq_open     = true;  
   
 static rttydec_state_t state = RTTY_ST_SCAN;  
-static bool   scan_en  = true;  
-static bool   rsid_en  = true;  
-static uint32_t track_lost_ms = 0;   // таймаут потери сигнала в TRACK  
+static bool   scan_en  = true;    
+static bool   rsid_en  = true;    
+static bool   dbg_en   = false;   // rtty dbg on|off — диагностика scan/trk    
+static uint32_t track_lost_ms = 0;   // таймаут потери сигнала в TRACK    
+static float    ban_lo = 0, ban_hi = 0;  // забаненная пара (Гц), 0 = нет    
+static uint32_t ban_ms = 0;              // когда забанена (TTL 30 с)    
   
 // ---------------------------------------------------------------------------  
 // Таблицы Бодо / МТК-2 (verbatim из rx_decoders.cpp)  
@@ -282,12 +285,11 @@ static void rtty_tune(float center_hz) {
 // Сканер Гёрцеля: банк тонов 300..3000 Гц, ищем пару пиков со сдвигом 170 Гц.  
 // Работает на децимированном потоке /4 (3866 Гц) — 27 тонов, окно ~53 мс.  
 // ---------------------------------------------------------------------------  
-#define SCAN_FS       (RTTY_FS / 4.0f)          // 3866 Гц  
-#define SCAN_NTONES   27                         // 300..3000 шаг ~104 Гц  
+#define SCAN_FS       (RTTY_FS / 6.0f)           // 2577 Гц — синхронно с scan_decim /6  
+#define SCAN_NTONES   19                         // 300..1200 шаг 50 Гц (Найквист 1288)  
 #define SCAN_F0       300.0f  
-#define SCAN_STEP     ((3000.0f - 300.0f) / (SCAN_NTONES - 1))  
-#define SCAN_WIN      205                        // отсчётов @3866 = ~53 мс  
-#define SCAN_SHIFT_T  2                          // 170 Гц ≈ 1.63 тона -> ±1  
+#define SCAN_STEP     50.0f  
+#define SCAN_WIN      128                        // отсчётов @2577 = ~50 мс  
 #define SCAN_NEED     3                          // окон подряд для захвата  
   
 typedef struct { float cr, ci, ar, ai; } gtz_t;  
@@ -345,16 +347,19 @@ static void scan_sample(float x) {
             float d = f_u - f_t;      
             if (d < 125.0f) continue;      
             if (d > 215.0f) break;      
-            if (p[u] < avg2 * 3.0f) continue;      
-            float pp = fminf(p[t], p[u]);      
+            if (p[u] < avg2 * 3.0f) continue;        
+            // Пропуск забаненной пары (TTL 30 с — частота QSO могла смениться)    
+            if (ban_lo > 0 && millis() - ban_ms < 30000 &&    
+                fabsf(f_t - ban_lo) < 60.0f && fabsf(f_u - ban_hi) < 60.0f) continue;    
+            float pp = fminf(p[t], p[u]);        
             if (pp > best_p) { best_p = pp; best = t; best_u = u; }      
         }      
     }      
   
-    // --- ДИАГНОСТИКА: лучшая пара и топ-3 пика раз в секунду ---    
-    {    
-        static uint32_t dbg_ms = 0;    
-        if (millis() - dbg_ms > 1000) {    
+    // --- ДИАГНОСТИКА: лучшая пара и топ-3 пика раз в секунду ---      
+    if (dbg_en) {      
+        static uint32_t dbg_ms = 0;      
+        if (millis() - dbg_ms > 1000) {      
             dbg_ms = millis();    
             // топ-3 тона по мощности    
             int i1 = 0, i2 = 0, i3 = 0;    
@@ -364,7 +369,7 @@ static void scan_sample(float x) {
                 else if (p[t] > p[i3]) { i3 = t; }    
             }    
             Serial.printf("# scan: avg=%d thr=%d | top: %dHz=%d %dHz=%d %dHz=%d | best=%s hit=%d/%d\n",  
-                (int)avg, (int)(avg * 6.0f),  
+                (int)avg2, (int)(avg2 * 3.0f),    
                 (int)(SCAN_F0 + i1 * SCAN_STEP), (int)p[i1],  
                 (int)(SCAN_F0 + i2 * SCAN_STEP), (int)p[i2],  
                 (int)(SCAN_F0 + i3 * SCAN_STEP), (int)p[i3],  
@@ -405,8 +410,9 @@ void rttydec_init(void) {
     rrx.fs = RTTY_FS;  
     rrx.symbollen = RTTY_SYMLEN;  
     rrx.nbits = 5;  
-    sq_open = (sq_level == 0.0f);  
-    scan_init();    
+    sq_open = (sq_level == 0.0f);    
+    ban_lo = ban_hi = 0;               // чистый старт — бан снят    
+    scan_init();      
     // RSID отключён: старт сразу со сканера (или TRACK при ручном центре).    
     state = scan_en ? RTTY_ST_SCAN : RTTY_ST_TRACK;    
     if (state == RTTY_ST_TRACK) rtty_tune(RTTY_DEF_CENTER);    
@@ -427,11 +433,25 @@ void rttydec_push(int16_t x) {          // Core 1, горячий путь
 void rttydec_poll(void) {               // Core 0, из loop()    
     if (!rtty_active) return;    
     
-    // Потеря сигнала в TRACK: 5 с без валидных символов -> перезахват    
-    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 5000) {    
-        state = RTTY_ST_SCAN;    
-        scan_init();    
-        Serial.println("# rtty: lost -> scan");    
+    // Потеря сигнала в TRACK: 5 с без валидных символов -> перезахват      
+    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 5000) {      
+        state = RTTY_ST_SCAN;      
+        scan_init();      
+        Serial.println("# rtty: lost -> scan");      
+    }      
+      
+    // False lock: 3 с в TRACK, а в каналах mark/space энергии нет —    
+    // сканер захватил помеху. Баним пару и назад в сканер.    
+    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 3000) {    
+        float env = fmaxf(rrx.mark_env, rrx.space_env);    
+        if (env < 2.0f) {      
+            ban_lo = rrx.f_space; ban_hi = rrx.f_mark;    
+            ban_ms = millis();    
+            state = RTTY_ST_SCAN;    
+            scan_init();    
+            Serial.printf("# rtty: false lock %d/%d -> scan\n",    
+                          (int)ban_lo, (int)ban_hi);    
+        }    
     }    
     
     while (rtty_q_tail != rtty_q_head) {    
@@ -439,15 +459,15 @@ void rttydec_poll(void) {               // Core 0, из loop()
         rtty_q_tail = (uint16_t)((rtty_q_tail + 1) & (RTTYDEC_Q_LEN - 1));    
     
         if (state == RTTY_ST_SCAN) {    
-            if (++scan_decim >= 8) { scan_decim = 0; scan_sample((float)x); }    
+            if (++scan_decim >= 6) { scan_decim = 0; scan_sample((float)x); }      
             continue;                              // в SCAN не декодируем    
         }    
         rtty_rx_sample((float)x, 0.0f);            // моно: xq=0    
     }    
   
-    // --- ДИАГНОСТИКА TRACK: огибающие/шум/сквелч раз в 2 с ---    
-    if (state == RTTY_ST_TRACK) {    
-        static uint32_t dbg_trk_ms = 0;    
+    // --- ДИАГНОСТИКА TRACK: огибающие/шум/сквелч раз в 2 с ---      
+    if (dbg_en && state == RTTY_ST_TRACK) {      
+        static uint32_t dbg_trk_ms = 0;       
         if (millis() - dbg_trk_ms > 2000) {    
             dbg_trk_ms = millis();    
             float env = fmaxf(rrx.mark_env, rrx.space_env);    
@@ -470,9 +490,10 @@ void rttydec_stop(void) {
 }    
   
 // ---- настройки ----  
-void rttydec_set_scan(bool on)  { scan_en = on; }  
-void rttydec_set_rsid(bool on)  { rsid_en = on; }  
-void rttydec_set_rev(bool on)   { rtty_rev = on; }  
+void rttydec_set_scan(bool on)  { scan_en = on; }    
+void rttydec_set_rsid(bool on)  { rsid_en = on; }    
+void rttydec_set_rev(bool on)   { rtty_rev = on; }    
+void rttydec_set_dbg(bool on)   { dbg_en = on; }    
 void rttydec_set_sql(float lvl) {  
     if (lvl < 0.0f || lvl > 0.9f) return;  
     sq_level = lvl;  
@@ -497,7 +518,8 @@ float rttydec_f_mark(void)   { return rrx.f_mark; }
 float rttydec_f_space(void)  { return rrx.f_space; }  
 float rttydec_freqerr(void)  { return rrx.freqerr; }  
 bool  rttydec_rev(void)      { return rtty_rev; }  
-bool  rttydec_scan_en(void)  { return scan_en; }  
-bool  rttydec_rsid_en(void)  { return rsid_en; }  
+bool  rttydec_scan_en(void)  { return scan_en; }    
+bool  rttydec_rsid_en(void)  { return rsid_en; }    
+bool  rttydec_dbg_en(void)   { return dbg_en; }    
 float rttydec_sql(void)      { return sq_level; }  
 uint32_t rttydec_dropped(void) { return rtty_dropped_cnt; }  

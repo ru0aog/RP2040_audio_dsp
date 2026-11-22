@@ -27,9 +27,10 @@ struct af_bank_t {
     uint8_t  rtty_on;        // RTTY-декодер (0/1)  
     uint8_t  rtty_scan;      // сканер Гёрцеля (0/1)  
     uint8_t  rtty_rsid;      // захват по RSID (0/1)  
-    uint8_t  rtty_rev;       // инверсия полярности (0/1)  
-    uint16_t rtty_ctr;       // ручной центр, Гц (0 = авто)  
-    uint16_t rtty_sql_x100;  // сквелч x100 (15 = 0.15, 0 = off)  
+    uint8_t  rtty_rev;       // инверсия полярности (0/1)    
+    uint8_t  rtty_dbg;       // диагностика # scan:/# trk: (0/1)    
+    uint16_t rtty_ctr;       // ручной центр, Гц (0 = авто)    
+    uint16_t rtty_sql_x100;  // сквелч x100 (15 = 0.15, 0 = off)    
     uint8_t  agc_on;        // 0/1 — АРУ; при 0 действует gain_pct      
     uint16_t gain_pct;      // ручное усиление, Q8 (256 = ×1.0)  
     uint16_t voice_vol;     // громкость голосовых сообщений, % (0..400)  

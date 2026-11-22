@@ -53,9 +53,8 @@
   
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
-#define AF_STORE_VER      9   // было 8: +rtty_on/scan/rsid/rev/ctr/sql_x100 в af_bank_t  
-                            // (RTTY-декодер 45.45/170: вкл, сканер, RSID, инверсия,  
-                            //  ручной центр, сквелч). Старые банки невалидны.  
+#define AF_STORE_VER      10  // было 9: +rtty_dbg в af_bank_t    
+                            // (диагностика # scan:/# trk:). Старые банки невалидны.    
   
 // Смещение сектора банков от начала flash — последний сектор чипа.  
 // Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
@@ -229,8 +228,9 @@ void af_store_snapshot(af_bank_t* out) {
     out->rtty_on       = af_dsp_rtty_on() ? 1 : 0;  
     out->rtty_scan     = rttydec_scan_en() ? 1 : 0;  
     out->rtty_rsid     = rttydec_rsid_en() ? 1 : 0;  
-    out->rtty_rev      = rttydec_rev() ? 1 : 0;  
-    out->rtty_ctr      = 0;   // центр не персистентен — при load всегда авто-захват  
+    out->rtty_rev      = rttydec_rev() ? 1 : 0;    
+    out->rtty_dbg      = rttydec_dbg_en() ? 1 : 0;    
+    out->rtty_ctr      = 0;   // центр не персистентен — при load всегда авто-захват    
     out->rtty_sql_x100 = (uint16_t)(rttydec_sql() * 100.0f + 0.5f);  
     out->agc_on   = af_dsp_agc_on() ? 1 : 0;        
     out->gain_pct = (uint16_t)(af_dsp_gain() * 256.0f + 0.5f);    
@@ -360,8 +360,9 @@ bool af_store_load(uint8_t idx) {
     // загруженными scan/rsid/rev/sql, а не со старыми.  
     rttydec_set_scan(b.rtty_scan != 0);  
     rttydec_set_rsid(b.rtty_rsid != 0);  
-    rttydec_set_rev(b.rtty_rev != 0);  
-    rttydec_set_sql((float)b.rtty_sql_x100 / 100.0f);  
+    rttydec_set_rev(b.rtty_rev != 0);    
+    rttydec_set_dbg(b.rtty_dbg != 0);    
+    rttydec_set_sql((float)b.rtty_sql_x100 / 100.0f);    
     if (b.rtty_ctr) rttydec_set_center((float)b.rtty_ctr);  
     af_dsp_set_rtty(b.rtty_on != 0);  
     af_dsp_set_agc(b.agc_on != 0);        
@@ -490,7 +491,8 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].cw_on = 0;  b[i].cw_f0 = 700;  b[i].cw_bw = 150;  b[i].cw_noise = 0;          
         b[i].cwdec_on = 1;  b[i].cw_wpm = 20;  b[i].cw_sql_x100 = 25;    
         b[i].rtty_on = 0;  b[i].rtty_scan = 1;  b[i].rtty_rsid = 1;  
-        b[i].rtty_rev = 0; b[i].rtty_ctr = 0;   b[i].rtty_sql_x100 = 15;  
+        b[i].rtty_rev = 0; b[i].rtty_ctr = 0;   b[i].rtty_sql_x100 = 15;    
+        b[i].rtty_dbg = 0;   // диагностика выключена по умолчанию    
         b[i].agc_on = 1;  b[i].gain_pct = 256;  b[i].voice_vol = 300;      
         b[i].agc_ref = AGC_REF;      
         b[i].agc_max_x100 = (uint16_t)(AGC_MAX_GAIN * 100.0f + 0.5f);      
