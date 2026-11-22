@@ -169,9 +169,11 @@ void cwtx_poll(void) {
 // ---------------------------------------------------------------------------  
 // Core 0: API  
 // ---------------------------------------------------------------------------  
-void cwtx_init(uint32_t tone_hz) {  
-    for (uint32_t i = 0; i < CWTX_LUT_LEN; i++)  
-        cwtx_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / CWTX_LUT_LEN) * 32767.0f);  
+#define CWTX_AMP  14000   // ~0.43 FS — запас под FIR (norm=2/sum) и клиппер  
+  
+void cwtx_init(uint32_t tone_hz) {    
+    for (uint32_t i = 0; i < CWTX_LUT_LEN; i++)    
+        cwtx_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / CWTX_LUT_LEN) * (float)CWTX_AMP);    
     cwtx_nco_step = (uint32_t)(((uint64_t)tone_hz << 32) / AF_FS_OUT_HZ);  
     cwtx_phase = 0;  
     cwtx_rise = (AF_FS_OUT_HZ * CWTX_RISE_MS) / 1000u;  
