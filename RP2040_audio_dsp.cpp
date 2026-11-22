@@ -188,7 +188,7 @@ void setup() {
   
     af_cli_init();    
     af_oled_init();               // OLED: если модуль не ответил — все вызовы no-op  
-    af_oled_text("RP2040 DSP");   // тестовый вывод: строка скролла  
+    //af_oled_text("RP2040 DSP");   // тестовый вывод: строка скролла  
 
     //af_oled_init();  
     //af_oled_text("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ ");  
