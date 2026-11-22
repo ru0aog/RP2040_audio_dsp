@@ -203,3 +203,7 @@ void cwtx_abort(void) {
     cwtx_el_rem = 0;  
     cwtx_tlen = cwtx_tpos = 0;  
 }  
+
+void cwtx_set_tone(uint32_t tone_hz) {  
+    cwtx_nco_step = (uint32_t)(((uint64_t)tone_hz << 32) / AF_FS_OUT_HZ);  
+}  

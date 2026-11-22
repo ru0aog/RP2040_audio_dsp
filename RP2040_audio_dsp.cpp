@@ -27,6 +27,7 @@
 #include "src/af_rec.h"           // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
 #include "src/af_fm.h"            // файловый менеджер: FAT12-диск 16 КБ, SET.TXT
 #include "src/modes/cw_rx.h"      // cwdec_set_wpm — стартовая скорость декодера
+#include "src/modes/cw_tx.h"
 
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    
@@ -211,9 +212,10 @@ void loop() {
     af_pwm_poll();      // ×3: заполняем duty-кольцо быстрее, чем один проход loop      
     af_pwm_poll();      
     af_pwm_poll();      
-    cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial    
-    // CW-посылка отыграна — вернуться в RX (ADC обратно на GP26, PWM на GP0)  
-    if (af_dsp_cwtx_started() && !af_dsp_cwtx_busy()) {  
+    cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial      
+    cwtx_poll();        // CW-передатчик: подача элементов/пауз в cwtx_el_rem    
+    // CW-посылка отыграна — вернуться в RX (ADC обратно на GP26, PWM на GP0)    
+    if (af_dsp_cwtx_started() && !af_dsp_cwtx_busy()) {    
         af_dsp_cwtx_clear_started();  
         af_dsp_set_tx(false);  
     }  

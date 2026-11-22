@@ -19,3 +19,4 @@ void     cwtx_abort(void);                   // оборвать передач�
   
 // ---- Core 1 (TX-ветка af_dsp) ----  
 int16_t  cwtx_sample(void);                  // следующий отсчёт тона (0 в паузах)  
+void     cwtx_set_tone(uint32_t tone_hz);    // перестройка NCO без пересоздания LUT  
