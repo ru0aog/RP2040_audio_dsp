@@ -1371,7 +1371,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rxs_x1 = rxs_x2 = rxs_y1 = rxs_y2 = 0;  
         rxe_hp1_x1 = rxe_hp1_x2 = rxe_hp1_y1 = rxe_hp1_y2 = 0;  
         rxe_hp2_x1 = rxe_hp2_x2 = rxe_hp2_y1 = rxe_hp2_y2 = 0;  
-        nb_env = 8192;  nb_last = 0;  nb_hold_cnt = 0;        
+        rxe_harm_lvl = 0;  rxe_harm_peak = 0;  
+        nb_env = 8192;  nb_last = 0;  nb_hold_cnt = 0;            
         agc_avg_q16  = (int64_t)4096 << 16;  
         lim_peak_q16 = (int64_t)2048 << 16;  
         rx_in_lvl_q16 = (int64_t)256 << 16;    

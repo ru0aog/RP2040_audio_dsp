@@ -201,14 +201,18 @@ static void cli_stats(void) {
                   (unsigned long)af_dsp_rxshelfq(),  
                   af_dsp_rxexc_on() ? "on" : "off",  
                   (long)af_dsp_rxexcmix());  
-    {   // Эксайтер: уровень гармоник и реальный вклад в выходной сигнал  
+    {   // Эксайтер: уровень гармоник и реальный вклад в выходной сигнал.  
+        // %f в printf не работает — dBFS печатаем как целое дБx10.  
         int32_t hl = af_dsp_rxexc_harm();  
         int32_t hp = af_dsp_rxexc_hpeak();   // чтение сбрасывает пик  
         int32_t mx = af_dsp_rxexcmix();  
-        Serial.printf("#   rxexc   : harm=%ld hpk=%ld   out_lvl=%ld (%.1f dBFS)\n",  
-                      (long)hl, (long)hp,  
-                      (long)((hl * mx) >> 15),  
-                      20.0 * log10(((hl * mx) >> 15) / 32768.0 + 1e-6));  
+        int32_t ol = (hl * mx) >> 15;        // реальный вклад в выход  
+        int32_t db_x10 = (ol > 0)  
+            ? (int32_t)(200.0f * log10f((float)ol / 32768.0f) + 0.5f)  
+            : -1200;                          // пол floor -120.0 дБ  
+        Serial.printf("#   rxexc   : harm=%ld hpk=%ld   out_lvl=%ld (%ld.%01ld dBFS)\n",  
+                      (long)hl, (long)hp, (long)ol,  
+                      (long)(db_x10 / 10), (long)(db_x10 < 0 ? -(db_x10 % 10) : db_x10 % 10));  
     }  
     Serial.printf("#   nb      = %s thr=%ld   hits=%lu\n",      
                   af_dsp_nb_on() ? "on" : "off",      
@@ -217,9 +221,11 @@ static void cli_stats(void) {
     {   // S-meter: уровень и пик после FIR в линейных единицах и dBFS  
         int32_t lvl = af_dsp_rx_in_lvl();  
         int32_t pk  = af_dsp_rx_in_peak();   // чтение сбрасывает пик  
-        Serial.printf("#   inlvl   = %ld (%.1f dBFS)   inpk=%ld (%.1f dBFS)\n",  
-                      (long)lvl, 20.0 * log10((lvl + 1) / 32768.0),  
-                      (long)pk,  20.0 * log10((pk + 1) / 32768.0));  
+        int32_t ldb = (int32_t)(200.0f * log10f((float)(lvl + 1) / 32768.0f) + 0.5f);  
+        int32_t pdb = (int32_t)(200.0f * log10f((float)(pk + 1) / 32768.0f) + 0.5f);  
+        Serial.printf("#   inlvl   = %ld (%ld.%01ld dBFS)   inpk=%ld (%ld.%01ld dBFS)\n",  
+                      (long)lvl, (long)(ldb / 10), (long)(ldb < 0 ? -(ldb % 10) : ldb % 10),  
+                      (long)pk,  (long)(pdb / 10), (long)(pdb < 0 ? -(pdb % 10) : pdb % 10));  
     }  
 
     // ---- TX: параметры передающего тракта (при tx=off неактивен) ----      
