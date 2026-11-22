@@ -35,14 +35,33 @@ static const cwtx_sym_t CWTX_TAB[] = {
     {'8',5,0b11100},{'9',5,0b11110},  
     {'.',6,0b010101},{',',6,0b110011},{'?',6,0b001100},{'/',5,0b10010},  
     {'=',5,0b10001},{'+',5,0b01010},{'-',6,0b100001}, // -....-    
-    {' ',0,0},  
+    {' ',0,0},
+    {'\x01',4,0b1111},{'\x02',4,0b1111},                  // Ч ----, Ш ----  
+    {'\x04',6,0b011010},{'\x05',5,0b00100},               // Ъ .--.-., Э ..-..  
+    {'\x06',4,0b0011},{'\x07',4,0b0101},                  // Ю ..--, Я .-.-  
 };  
 #define CWTX_TAB_LEN  (sizeof(CWTX_TAB)/sizeof(CWTX_TAB[0]))  
-  
+
+// Русская Морзе: UTF-8 (второй_байт<<8 | первый_байт) -> код.  
+// Буквы, совпадающие с латинскими по коду (А Е К М Н О Р С Т Х),  
+// маппятся на латиницу; уникальные — на псевдосимволы \x01..\x06.  
+struct cwtx_rus_t { uint16_t u; char ch; };  
+static const cwtx_rus_t CWTX_RUS[] = {  
+    {0x90D0,'A'},{0x91D0,'B'},{0x92D0,'W'},{0x93D0,'G'},{0x94D0,'D'},  
+    {0x95D0,'E'},{0x96D0,'V'},{0x97D0,'Z'},{0x98D0,'I'},{0x99D0,'J'},  
+    {0x9AD0,'K'},{0x9BD0,'L'},{0x9CD0,'M'},{0x9DD0,'N'},{0x9ED0,'O'},  
+    {0x9FD0,'P'},{0xA0D0,'R'},{0xA1D0,'S'},{0xA2D0,'T'},{0xA3D0,'U'},  
+    {0xA4D0,'F'},{0xA5D0,'H'},{0xA6D0,'C'},{0xA7D0,'\x01'}, // Ф Х Ц Ч  
+    {0xA8D0,'\x02'},{0xA9D0,'Q'},{0xAAD0,'\x04'},{0xABD0,'Y'}, // Ш Щ Ъ Ы  
+    {0xACD0,'X'},{0xADD0,'\x05'},{0xAED0,'\x06'},{0xAFD0,'\x07'}, // Ь Э Ю Я  
+};  
+#define CWTX_RUS_LEN  (sizeof(CWTX_RUS)/sizeof(CWTX_RUS[0]))  
+
 // ---------------------------------------------------------------------------  
 // Состояние  
 // ---------------------------------------------------------------------------  
-static int16_t  cwtx_lut[CWTX_LUT_LEN];   // Q15 синус  
+static int16_t  cwtx_lut[CWTX_LUT_LEN];   // Q15 синус (ослаблен CWTX_AMP)  
+static int16_t  cwtx_env_lut[CWTX_LUT_LEN / 4 + 1];  // четверть волны, полная шкала — для огибающей  
 static uint32_t cwtx_nco_step;            // шаг фазы: tone_hz * 2^32 / Fs  
 static uint32_t cwtx_phase;               // аккумулятор фазы (непрерывный)  
   
@@ -78,16 +97,16 @@ static inline int32_t cwtx_env(uint32_t pos, uint32_t len) {
     if (pos < cwtx_rise) {  
         // (1 - cos(pi * pos/rise)) / 2  — через LUT синуса:  
         // sin(pi/2 * pos/rise)^2 = (1-cos(pi*pos/rise))/2  
-        uint32_t idx = (pos * (CWTX_LUT_LEN / 4)) / cwtx_rise;   // 0..64 = 0..pi/2  
-        int32_t s = cwtx_lut[idx];  
-        return (s * s) >> 15;  
-    }  
-    if (pos >= len - cwtx_rise) {  
-        uint32_t p = len - pos;                                   // rise..0  
-        uint32_t idx = (p * (CWTX_LUT_LEN / 4)) / cwtx_rise;  
-        int32_t s = cwtx_lut[idx];  
-        return (s * s) >> 15;  
-    }  
+        uint32_t idx = (pos * (CWTX_LUT_LEN / 4)) / cwtx_rise;   // 0..64 = 0..pi/2    
+        int32_t s = cwtx_env_lut[idx];    
+        return (s * s) >> 15;    
+    }    
+    if (pos >= len - cwtx_rise) {    
+        uint32_t p = len - pos;                                   // rise..0    
+        uint32_t idx = (p * (CWTX_LUT_LEN / 4)) / cwtx_rise;    
+        int32_t s = cwtx_env_lut[idx];    
+        return (s * s) >> 15;    
+    }    
     return 32767;  
 }  
   
@@ -138,10 +157,21 @@ void cwtx_poll(void) {
     }  
   
     // следующий символ  
-    if (cwtx_tpos < cwtx_tlen) {  
-        char c = cwtx_text[cwtx_tpos++];  
-        if (c >= 'a' && c <= 'z') c -= 32;  
-        const cwtx_sym_t* s = NULL;  
+    if (cwtx_tpos < cwtx_tlen) {    
+        uint8_t c = (uint8_t)cwtx_text[cwtx_tpos++];    
+        if (c == 0xD0 || c == 0xD1) {                    // кириллица UTF-8    
+            uint8_t c2 = (uint8_t)cwtx_text[cwtx_tpos++];    
+            if (c == 0xD0 && c2 >= 0xB0 && c2 <= 0xBF) c2 -= 0x20;  // а..п -> А..П    
+            else if (c == 0xD1 && c2 >= 0x80 && c2 <= 0x8F) { c = 0xD0; c2 += 0x20; } // р..я    
+            uint16_t u = ((uint16_t)c2 << 8) | c;        // формат таблицы    
+            if (u == 0x81D0 || u == 0x91D0) u = 0x95D0;  // Ё/ё -> Е    
+            c = 0;    
+            for (uint8_t i = 0; i < CWTX_RUS_LEN; i++)    
+                if (CWTX_RUS[i].u == u) { c = (uint8_t)CWTX_RUS[i].ch; break; }    
+            if (c == 0) { cwtx_gap = 3; return; }        // неизвестная — пауза    
+        }    
+        if (c >= 'a' && c <= 'z') c -= 32;    
+        const cwtx_sym_t* s = NULL;    
         for (uint8_t i = 0; i < CWTX_TAB_LEN; i++)  
             if (CWTX_TAB[i].ch == c) { s = &CWTX_TAB[i]; break; }  
         if (s == NULL) { cwtx_gap = 3; return; }      // неизвестный — как буква-пауза    
@@ -172,8 +202,10 @@ void cwtx_poll(void) {
 #define CWTX_AMP  14000   // ~0.43 FS — запас под FIR (norm=2/sum) и клиппер  
   
 void cwtx_init(uint32_t tone_hz) {    
-    for (uint32_t i = 0; i < CWTX_LUT_LEN; i++)    
-        cwtx_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / CWTX_LUT_LEN) * (float)CWTX_AMP);    
+    for (uint32_t i = 0; i < CWTX_LUT_LEN; i++)      
+        cwtx_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / CWTX_LUT_LEN) * (float)CWTX_AMP);      
+    for (uint32_t i = 0; i <= CWTX_LUT_LEN / 4; i++)   // полная шкала — огибающая не ослабляется  
+        cwtx_env_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / CWTX_LUT_LEN) * 32767.0f);  
     cwtx_nco_step = (uint32_t)(((uint64_t)tone_hz << 32) / AF_FS_OUT_HZ);  
     cwtx_phase = 0;  
     cwtx_rise = (AF_FS_OUT_HZ * CWTX_RISE_MS) / 1000u;  
@@ -194,8 +226,9 @@ void cwtx_set_wpm(uint8_t wpm) {
 bool cwtx_send(const char* text) {  
     if (cwtx_active) return false;  
     uint8_t n = 0;  
-    while (text[n] && n < CWTX_TEXT_LEN - 1) { cwtx_text[n] = text[n]; n++; }  
-    if (n == 0) return false;  
+    while (text[n] && n < CWTX_TEXT_LEN - 1) { cwtx_text[n] = text[n]; n++; }    
+    if (n == 0) return false;    
+    cwtx_text[n] = '\0';  
     cwtx_tlen = n;  
     cwtx_tpos = 0;  
     cwtx_bpos = cwtx_blen = 0;  
@@ -219,4 +252,8 @@ void cwtx_abort(void) {
 
 void cwtx_set_tone(uint32_t tone_hz) {  
     cwtx_nco_step = (uint32_t)(((uint64_t)tone_hz << 32) / AF_FS_OUT_HZ);  
+}  
+
+uint32_t cwtx_tone_hz(void) {  
+    return (uint32_t)(((uint64_t)cwtx_nco_step * AF_FS_OUT_HZ) >> 32);  
 }  

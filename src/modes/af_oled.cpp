@@ -345,18 +345,18 @@ void af_oled_putc(char c) {                 // скролл-вывод в стр
 void af_oled_status(void) {                 // строка 0: режим + полоса + f0    
     if (!oled_ok) return;    
     char tmp[48];    
-    if (af_dsp_cwtx_busy()) {      
-        snprintf(tmp, sizeof(tmp), "ПРД CW %luHz",      
-                 (unsigned long)af_dsp_cw_freq());      
+    if (af_dsp_cwtx_busy()) {        
+        snprintf(tmp, sizeof(tmp), "ПРД CW %luHz",        
+                 (unsigned long)cwtx_tone_hz());        
     } else if (af_dsp_rttytx_busy()) {  
         snprintf(tmp, sizeof(tmp), "ПРД RTTY %luHz",  
                  (unsigned long)rttytx_center_hz());  
-    } else if (af_dsp_rtty_on()) {     
-        snprintf(tmp, sizeof(tmp), "ПРМ CW %luHz",      
-                 (unsigned long)af_dsp_cw_freq());      
-    } else if (af_dsp_rtty_on()) {        
-        snprintf(tmp, sizeof(tmp), "ПРМ RTTY %dHz",        
-                 (int)((rttydec_f_mark() + rttydec_f_space()) * 0.5f));        
+    } else if (af_dsp_cw_on()) {       
+        snprintf(tmp, sizeof(tmp), "ПРМ CW %luHz",        
+                 (unsigned long)af_dsp_cw_freq());        
+    } else if (af_dsp_rtty_on()) {          
+        snprintf(tmp, sizeof(tmp), "ПРМ RTTY %dHz",          
+                 (int)((rttydec_f_mark() + rttydec_f_space()) * 0.5f));           
     } else {         
         snprintf(tmp, sizeof(tmp), "ПРМ %lu-%lu",    
                  (unsigned long)af_dsp_band_lo_hz(),    
