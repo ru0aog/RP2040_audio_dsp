@@ -156,3 +156,4 @@ int32_t  af_dsp_rxexc_hpeak(void);  // пик, чтение сбрасывает
 
 void     af_dsp_set_cwdec(bool on);  
 bool     af_dsp_cwdec_on(void);  
+uint32_t af_dsp_cwdec_dropped(void); 

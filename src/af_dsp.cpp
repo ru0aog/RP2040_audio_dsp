@@ -1274,6 +1274,7 @@ void af_dsp_set_cwdec(bool on) {
     cwdec_on = on;    
 }    
 bool     af_dsp_cwdec_on(void) { return cwdec_on; }    
+uint32_t af_dsp_cwdec_dropped(void) { return cwdec_dropped(); } 
 bool     af_dsp_cw_on(void)    { return cw_on; }    
 uint32_t af_dsp_cw_freq(void)  { return cw_f0; }  
 uint32_t af_dsp_cw_bw(void)    { return cw_bw; }  
