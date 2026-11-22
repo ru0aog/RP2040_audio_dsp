@@ -7,7 +7,8 @@
 //        agcref agcmax agcmin limceil nrdepth nrmakeup ntmu nrmu      
 //        "rx pres" "rx presmax" "rx pres f" "rx pres q" (метки AF_PARAMS)    
 //        "rx shelf" "rx shelf f" "rx shelf q" "rx exc" "rx excmix" (AF_PARAMS)  
-//        "nb" "nb thr" (метки AF_PARAMS)      
+//        "nb" "nb thr" (метки AF_PARAMS)        
+//        cw dec|wpm — CW-декодер (морзянка -> текст в Serial)    
 //   TX:  tx txband txap txagc txagcmax txgate txgatehold txgatehyst txgfloor  
 //        tx2band txsplit txlr2 txcomp txcompthr txcompthrlo txcompthrhi  
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
@@ -38,7 +39,8 @@
 #include "af_gpio_ctl.h"  // af_gpio_bank_code — текущий банк с пинов
 #include "af_rec.h"       // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
 #include "af_fm.h"        // af_fm_request_sync — перерендер SET.TXT 
-#include "af_snr.h"
+#include "af_snr.h"  
+#include "modes/cw_rx.h"   // cwdec_set_wpm — стартовая скорость декодера  
 
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -71,7 +73,9 @@ static void cli_help(void) {
     Serial.println("#   cw on|off         — телеграфный фильтр");    
     Serial.println("#   cw freq <hz>      — центральная частота CW (300..3000)");    
     Serial.println("#   cw bw <hz>        — полоса CW (80..500)");    
-    Serial.println("#   cw noise <0..2000> — примесь шума эфира в CW");  
+    Serial.println("#   cw noise <0..2000> — примесь шума эфира в CW");    
+    Serial.println("#   cw dec on|off     — CW-декодер: текст в Serial (только при cw on)");    
+    Serial.println("#   cw wpm <5..60>    — стартовая скорость декодера, WPM");    
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
     Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
     Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
@@ -165,11 +169,13 @@ static void cli_stats(void) {
                   af_dsp_nrmode()    ? "spec" : "lms",    
                   af_dsp_bypass_on() ? "on" : "off",        
                   af_dsp_ramp_on()   ? "on" : "off");        
-    Serial.printf("#   cw      = %s   f0=%lu bw=%lu noise=%lu\n",      
-                  af_dsp_cw_on() ? "on" : "off",      
-                  (unsigned long)af_dsp_cw_freq(),      
-                  (unsigned long)af_dsp_cw_bw(),      
-                  (unsigned long)af_dsp_cw_noise());      
+    Serial.printf("#   cw      = %s   f0=%lu bw=%lu noise=%lu dec=%s dropped=%lu\n",        
+                  af_dsp_cw_on() ? "on" : "off",        
+                  (unsigned long)af_dsp_cw_freq(),        
+                  (unsigned long)af_dsp_cw_bw(),        
+                  (unsigned long)af_dsp_cw_noise(),        
+                  af_dsp_cwdec_on() ? "on" : "off",    
+                  (unsigned long)af_dsp_cwdec_dropped());      
     Serial.printf("#   agc     = %s   gain=%lu.%02lu\n",      
                   af_dsp_agc_on() ? "on" : "off",      
                   (unsigned long)(g100 / 100), (unsigned long)(g100 % 100));      
@@ -1131,7 +1137,7 @@ static void cli_exec(char* line) {
     }
     else if (strcmp(cmd, "cw") == 0) {  
         char* sub = strtok(NULL, " \t");  
-        if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>"); return; }  
+        if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>|dec on|off|wpm <5..60>"); return; }    
   
         if (strcmp(sub, "on") == 0) {  
             af_dsp_set_cw(true);
@@ -1154,15 +1160,29 @@ static void cli_exec(char* line) {
             af_dsp_set_cw_bw((uint32_t)strtoul(v, NULL, 10));  
             Serial.printf("# OK cw_bw=%lu Hz\n", (unsigned long)af_dsp_cw_bw());  
         }  
-        else if (strcmp(sub, "noise") == 0) {  
-            char* v = strtok(NULL, " \t");  
-            if (v == NULL) { Serial.println("# ERR: cw noise <0..100>"); return; }  
-            af_dsp_set_cw_noise((uint32_t)strtoul(v, NULL, 10));  
-            Serial.printf("# OK cw_noise=%lu%%\n", (unsigned long)af_dsp_cw_noise());  
-        }  
-        else {  
-            Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>");  
-        }  
+        else if (strcmp(sub, "noise") == 0) {    
+            char* v = strtok(NULL, " \t");    
+            if (v == NULL) { Serial.println("# ERR: cw noise <0..100>"); return; }    
+            af_dsp_set_cw_noise((uint32_t)strtoul(v, NULL, 10));    
+            Serial.printf("# OK cw_noise=%lu%%\n", (unsigned long)af_dsp_cw_noise());    
+        }    
+        else if (strcmp(sub, "dec") == 0) {    
+            char* v = strtok(NULL, " \t");    
+            if (v == NULL) { Serial.println("# ERR: cw dec on|off"); return; }    
+            af_dsp_set_cwdec(strcmp(v, "on") == 0);    
+            Serial.printf("# OK cw dec=%s\n", af_dsp_cwdec_on() ? "on" : "off");    
+        }    
+        else if (strcmp(sub, "wpm") == 0) {    
+            char* v = strtok(NULL, " \t");    
+            if (v == NULL) { Serial.println("# ERR: cw wpm <5..60>"); return; }    
+            int w = (int)strtoul(v, NULL, 10);    
+            if (w < 5) w = 5; if (w > 60) w = 60;    
+            cwdec_set_wpm((uint8_t)w);    
+            Serial.printf("# OK cw wpm=%d\n", w);    
+        }    
+        else {    
+            Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>|dec on|off|wpm <5..60>");    
+        }    
     }
 
     else if (strcmp(cmd, "save") == 0) {  
