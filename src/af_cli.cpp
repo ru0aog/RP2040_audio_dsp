@@ -303,12 +303,10 @@ static void cli_stats(void) {
                   (unsigned long)af_drop_scratch,      
                   (unsigned long)af_drop_busy,      
                   (unsigned long)af_capture_dropped());      
-    Serial.printf("#   out     : dropped=%lu clip=%lu   usb: er=%lu fill_max=%u   pwm: er=%lu fill_max=%u\n",      
+    Serial.printf("#   out     : dropped=%lu clip=%lu   usb: fill_max=%u   pwm: fill_max=%u\n",      
                   (unsigned long)af_dsp_out_dropped(),      
                   (unsigned long)af_dsp_clip_count(),      
-                  (unsigned long)af_dsp_out_empty_reads_usb(),      
                   (unsigned)af_dsp_out_fill_max_usb(),      
-                  (unsigned long)af_dsp_out_empty_reads_pwm(),      
                   (unsigned)af_dsp_out_fill_max_pwm());      
     // Настоящее здоровье PWM: underruns — IRQ без готового блока (слышимые    
     // пропуски), restarts — перезапуски DMA, duty — пик заполнения среза.    
@@ -343,14 +341,15 @@ static void cli_stats(void) {
 // Инженерный дамп: дельты счётчиков с прошлого вызова + ur-логи.  
 // Бывшая периодическая сводка из loop() — теперь по запросу.  
 static void cli_dump(void) {  
-    static uint32_t p_pub = 0, p_dU = 0, p_dP = 0, p_urU = 0, p_urP = 0;  
+    static uint32_t p_pub = 0, p_dU = 0, p_dP = 0;    
     static uint32_t p_usb_ur = 0, p_pwm_ur = 0, p_cap = 0, p_isr = 0;  
   
     const uint32_t pub   = af_dsp_out_published_usb();  
     const uint32_t dU    = af_dsp_out_dropped_usb();  
     const uint32_t dP    = af_dsp_out_dropped_pwm();  
-    const uint32_t urU   = af_dsp_out_empty_reads_usb();  // пустые опросы, не пропуски  
-    const uint32_t urP   = af_dsp_out_empty_reads_pwm();  
+    // empty_reads (erU/erP) из вывода убраны: счётчик пустых опросов растёт  
+    // всегда (consumer быстрее производителя) и не сигнализирует о проблеме.  
+    // Реальные пропуски — af_usb_underruns()/af_pwm_underruns() ниже.  
     const uint32_t uur   = af_usb_underruns();  
     const uint32_t pur   = af_pwm_underruns();  
     const uint32_t cap   = af_capture_dropped();  
@@ -359,7 +358,7 @@ static void cli_dump(void) {
     Serial.printf(  
         "# L0=%lu.%lu%% L1=%lu.%lu%% blk=%lu max=%luus inlvl=%ld inpk=%ld |"  
         " cap: isr=%lu d=%lu scr=%lu qf=%lu bs=%lu fcs=%lu both=%lu qmax=%lu |"    
-        " out: dU=%lu dP=%lu erU=%lu erP=%lu fU=%u fP=%u |"      
+        " out: dU=%lu dP=%lu fU=%u fP=%u |"      
         " usb: ur=%lu short=%lu rs=%ldmHz rpr=%lu gap=%luus ff=%lu ws=%lu av=%lu |"    
         " pwm: ur=%lu rst=%lu dmax=%u | clip=%lu\n",    
         (unsigned long)(af_core0_load_permille() / 10u),    
@@ -374,9 +373,8 @@ static void cli_dump(void) {
         (unsigned long)af_drop_scratch, (unsigned long)af_drop_queue_full,  
         (unsigned long)af_drop_busy, (unsigned long)af_adc_fcs_over,  
         (unsigned long)af_irq_both_pending, (unsigned long)af_q_fill_max,  
-        (unsigned long)(dU - p_dU), (unsigned long)(dP - p_dP),  
-        (unsigned long)(urU - p_urU), (unsigned long)(urP - p_urP),  
-        (unsigned)af_dsp_out_fill_max_usb(), (unsigned)af_dsp_out_fill_max_pwm(),  
+        (unsigned long)(dU - p_dU), (unsigned long)(dP - p_dP),    
+        (unsigned)af_dsp_out_fill_max_usb(), (unsigned)af_dsp_out_fill_max_pwm(),    
         (unsigned long)(uur - p_usb_ur), (unsigned long)af_usb_frames_short(),  
         (long)af_usb_rs_adj_mhz(), (unsigned long)af_usb_reprimes(),  
         (unsigned long)af_usb_poll_gap_max(), (unsigned long)af_usb_fifo_full(),  
@@ -406,8 +404,6 @@ static void cli_dump(void) {
         const uint32_t d_cap  = cap - p_cap;      // потери на захвате за период    
         const uint32_t d_dU   = dU - p_dU;        // дропы USB-очереди    
         const uint32_t d_dP   = dP - p_dP;        // дропы PWM-очереди    
-        const uint32_t d_urU  = urU - p_urU;      // пустые опросы USB-очереди  
-        const uint32_t d_urP  = urP - p_urP;      // пустые опросы PWM-очереди  
         const uint32_t max_us = af_dsp_max_block_us();    
         const uint32_t l1     = af_dsp_load_permille();    
         bool ok = true;    
@@ -438,8 +434,9 @@ static void cli_dump(void) {
             Serial.printf("# WARN out: дропы блоков usb=%lu pwm=%lu\n",    
                           (unsigned long)d_dU, (unsigned long)d_dP);    
         }    
-        // erU — пустые опросы out_usb из af_usb_poll: хост читает эндпоинт  
-        // всегда, poll быстрее производителя — штатно и неслышно.  
+        // erP — пустые опросы out_pwm из af_pwm_poll: consumer быстрее    
+        // производителя, счётчик растёт всегда — это НЕ пропуски звука.    
+        // Реальный критерий голодания — af_pwm_underruns (IRQ без блока).    
         // WARN только при реальных потерях: дропы публикации (d_dU выше)    
         // или перезаправки очереди (reprimes — дно + уход на заправку).    
         // USB-здоровье оцениваем только когда хост реально читает поток.  
@@ -447,11 +444,12 @@ static void cli_dump(void) {
         // AudioTools всегда), а rs_adj: при нечитающем хосте ресемплер  
         // стоит на -48000 mHz (буфер полон, av=2048). При чтении rs  
         // колеблется около нуля.  
-        if (af_usb_mounted() && af_usb_rs_adj_mhz() > -40000) {  
-            if (d_urU != 0) {  
-                Serial.printf("# INFO usb: паддинг +%lu фреймов (штатно при читающем хосте)\n",  
-                              (unsigned long)d_urU);  
-            }  
+        if (af_usb_mounted() && af_usb_rs_adj_mhz() > -40000) {    
+            const uint32_t d_uur = uur - p_usb_ur;   // реальные underrun UAC за период  
+            if (d_uur != 0) {    
+                Serial.printf("# INFO usb: паддинг +%lu фреймов (штатно при читающем хосте)\n",    
+                              (unsigned long)d_uur);    
+            }    
             const uint32_t rpr_now = af_usb_reprimes();  
             static uint32_t p_rpr = 0;  
             if (rpr_now - p_rpr != 0) {  
@@ -482,8 +480,8 @@ static void cli_dump(void) {
         if (ok) Serial.println("# OK: потерь нет, тракт здоров");    
     }    
     
-    p_pub = pub; p_dU = dU; p_dP = dP; p_urU = urU; p_urP = urP;    
-    p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap; p_isr = isr;    
+    p_pub = pub; p_dU = dU; p_dP = dP;    
+    p_usb_ur = uur; p_pwm_ur = pur; p_cap = cap; p_isr = isr;      
 }    
 
 // ---------------------------------------------------------------------------  
