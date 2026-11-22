@@ -1305,12 +1305,14 @@ bool af_dsp_tx_on(void) { return tx_on; }
 // --- CW-передатчик (Core 0) ---    
 // Постановка текста в очередь + подъём TX. Возврат в RX — автоматически    
 // в loop() по !cwtx_busy() при cwtx_started.    
-void af_dsp_cwtx_start(const char* text) {    
-    cwtx_set_tone((float)cw_f0);   // тон следует за текущим cw f0    
-    cwtx_send(text);    
-    cwtx_started = true;    
-    af_dsp_set_tx(true);    
-}    
+bool af_dsp_cwtx_start(const char* text) {      
+    if (!cwtx_send(text)) return false;  // очередь занята — посылка не встала,  
+                                         // TX не поднимаем, флаг не взводим  
+    cwtx_set_tone((float)cw_f0);   // тон следует за текущим cw f0      
+    cwtx_started = true;      
+    af_dsp_set_tx(true);      
+    return true;  
+}      
 bool af_dsp_cwtx_started(void) { return cwtx_started; }    
 void af_dsp_cwtx_clear_started(void) { cwtx_started = false; }    
 bool af_dsp_cwtx_busy(void) { return cwtx_busy(); }    

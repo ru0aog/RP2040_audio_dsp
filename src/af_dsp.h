@@ -158,7 +158,7 @@ bool     af_dsp_cwdec_on(void);
 uint32_t af_dsp_cwdec_dropped(void); 
 
 // --- CW-передатчик ---    
-void af_dsp_cwtx_start(const char* text);   // текст в очередь + TX on    
+bool af_dsp_cwtx_start(const char* text);   // текст в очередь + TX on; false = очередь занята  
 bool af_dsp_cwtx_started(void);             // TX поднят командой cw tx    
 void af_dsp_cwtx_clear_started(void);       // сброс флага после возврата в RX    
 bool af_dsp_cwtx_busy(void);                // посылка ещё играет    

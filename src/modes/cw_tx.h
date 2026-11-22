@@ -10,12 +10,13 @@
 #define CWTX_RISE_MS     5u     // фронт/спад посылки, мс (raised cosine)  
 #define CWTX_LUT_LEN     256u   // таблица синуса, отсчётов на период  
   
-// ---- Core 0 ----  
-void     cwtx_init(uint32_t tone_hz);        // построить LUT + NCO-шаг  
-bool     cwtx_send(const char* text);        // поставить текст в очередь (false = занято)  
-void     cwtx_set_wpm(uint8_t wpm);          // скорость 5..60  
-bool     cwtx_busy(void);                    // идёт передача (очередь/элементы)  
-void     cwtx_abort(void);                   // оборвать передачу  
+// ---- Core 0 ----    
+void     cwtx_init(uint32_t tone_hz);        // построить LUT + NCO-шаг    
+bool     cwtx_send(const char* text);        // поставить текст в очередь (false = занято)    
+void     cwtx_poll(void);                    // подача элементов/пауз в cwtx_el_rem (из loop())    
+void     cwtx_set_wpm(uint8_t wpm);          // скорость 5..60    
+bool     cwtx_busy(void);                    // идёт передача (очередь/элементы)    
+void     cwtx_abort(void);                   // оборвать передачу    
   
 // ---- Core 1 (TX-ветка af_dsp) ----  
 int16_t  cwtx_sample(void);                  // следующий отсчёт тона (0 в паузах)  
