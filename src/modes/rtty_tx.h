@@ -23,3 +23,4 @@ void     rttytx_abort(void);             // оборвать
   
 // ---- Core 1 (TX-ветка af_dsp) ----  
 int16_t  rttytx_sample(void);            // следующий отсчёт FSK-тона  
+uint32_t rttytx_center_hz(void);   // центр mark/space для статусной строки  

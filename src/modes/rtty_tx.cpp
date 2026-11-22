@@ -258,7 +258,11 @@ bool rttytx_send(const char* text) {
     return true;  
 }  
   
-bool rttytx_busy(void) { return tx_active; }  
+bool rttytx_busy(void) { return tx_active; }    
+  
+uint32_t rttytx_center_hz(void) {    
+    return (RTTYTX_MARK_HZ + RTTYTX_SPACE_HZ) / 2;   // 1000 Гц    
+}    
   
 void rttytx_abort(void) {  
     tx_active = false;    
