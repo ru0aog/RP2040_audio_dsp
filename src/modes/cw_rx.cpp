@@ -251,12 +251,11 @@ static void process_window(float value) {
         // Пробел: только после напечатанной буквы и паузы ~7 точек    
         // (стандартный word gap). 4*dot давал лишние пробелы внутри    
         // слов при неровной манипуляции и на шумовых срабатываниях.    
-        if (!space_sent && word_started && gap > two_dots * 4.5f) {      
-            Serial.write(' ');      
-            af_oled_putc(' ');      
-            space_sent = true;      
-            word_started = false;      
-        }      
+        // Межсловная пауза = 7 точек. two_dots ≈ 2*dot -> порог 3.5*two_dots ≈ 7 точек.  
+        if (!space_sent && word_started && gap > dot_win * 5.0f) {    // 5 точек  
+            Serial.write(' '); af_oled_putc(' ');  
+            space_sent = true;  
+        }  
     }  
 }  
   
