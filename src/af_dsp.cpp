@@ -992,12 +992,15 @@ uint32_t af_dsp_af_hi_hz(void) { return af_hi_hz; }
 // Возврат: 0 = выключено, 1 = включено, 2 = включено и NR снят (приоритет NT),  
 //          3 = отклонено (CW on — NT в узкой полосе бесполезен и перегружает Core 1).  
 int af_dsp_set_notch(bool on) {    
-    if (on && cw_on) return 3;      // запрет: CW + NT = перегрузка Core 1    
-    int rc = on ? 1 : 0;    
-    if (on && nr_on) {              // NT имеет приоритет — снимаем NR    
-        af_dsp_set_nr(false);    
-        rc = 2;    
-    }    
+    // Блокировка снята для теста: CW + NT и NT + NR допустимы.  
+    // ВНИМАНИЕ: суммарная нагрузка может превысить окно блока Core 1 —  
+    // контролировать max_block_us в stats.  
+    // if (on && cw_on) return 3;      // запрет: CW + NT = перегрузка Core 1      
+    int rc = on ? 1 : 0;      
+    // if (on && nr_on) {              // NT имеет приоритет — снимаем NR      
+    //     af_dsp_set_nr(false);      
+    //     rc = 2;      
+    // }
     if (on && !notch_on) {          // сброс состояния при включении — без щелчка  
         memset(notch_buf, 0, sizeof(notch_buf));  
         memset(notch_w,   0, sizeof(notch_w));  
@@ -1127,9 +1130,10 @@ int32_t  af_dsp_rx_in_peak(void)  { int32_t p = rx_in_peak; rx_in_peak = 0; retu
   
 // Возвращает false, если команда отклонена (NT on — приоритет NT;  
 // CW on — NR в узкой полосе бесполезен и перегружает Core 1).    
-bool af_dsp_set_nr(bool on) {      
-    if (on && notch_on) return false;   // NT и NR взаимоисключающие    
-    if (on && cw_on)    return false;   // запрет: CW + NR = перегрузка Core 1    
+bool af_dsp_set_nr(bool on) {        
+    // Блокировка снята для теста: NT + NR и CW + NR допустимы.  
+    // if (on && notch_on) return false;   // NT и NR взаимоисключающие      
+    // if (on && cw_on)    return false;   // запрет: CW + NR = перегрузка Core 1       
     if (on && !nr_on) {              // чистый старт → без щелчка    
         memset(nr_buf, 0, sizeof(nr_buf));    
         memset(nr_w,   0, sizeof(nr_w));    
@@ -1141,12 +1145,11 @@ bool af_dsp_set_nr(bool on) {
 }
   
 void af_dsp_set_cw(bool on) {    
-    if (on && !cw_on) {      
-        // CW + NT/NR перегружают Core 1 (max_block_us > окна блока) и  
-        // бесполезны в полосе f0±bw/2 — снимаем до включения фильтра.  
-        if (notch_on) af_dsp_set_notch(false);    
-        if (nr_on)    af_dsp_set_nr(false);    
-        cw_design();  
+    if (on && !cw_on) {        
+        // Блокировка снята для теста: NT/NR больше не снимаются при CW.  
+        // if (notch_on) af_dsp_set_notch(false);      
+        // if (nr_on)    af_dsp_set_nr(false);      
+        cw_design();    
         agc_avg_q16 = (int64_t)4096 << 16;    
         // Сохранить текущую полосу и подтянуть FIR под f0 ± 250 Гц.  
         af_saved_lo_hz = af_lo_hz;  
