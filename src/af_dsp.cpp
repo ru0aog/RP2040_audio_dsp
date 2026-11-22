@@ -26,6 +26,7 @@
 #include "af_pwm.h"       // af_pwm_set_tx_pin — выход GP0(RX)/GP1(TX) 
 #include "af_rec.h"       // запись/воспроизведение цифрового магнитофона
 #include "af_snr.h"
+#include "modes/cw_rx.h"   // CW-декодер: cwdec_push (Core 1) / cwdec_poll (Core 0)
 
 static uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
 static volatile bool snr_reset_req = false;  // запрос сброса spec-NR (Core 0 -> Core 1)  
@@ -530,9 +531,10 @@ static inline int32_t __not_in_flash_func(rx_exc_push)(int32_t x) {
 // Каскад из N одинаковых секций сужает полосу: BW_sec = BW / sqrt(2^(1/N)-1).  
 // Работает на AF_FS_OUT_HZ = 15.625 ksps.  
 // ---------------------------------------------------------------------------  
-static volatile bool     cw_on = false;  
-static volatile uint32_t cw_f0 = AF_CW_F0_DEFAULT;  
-static volatile uint32_t cw_bw = AF_CW_BW_DEFAULT;  
+static volatile bool     cw_on = false;    
+static volatile uint32_t cw_f0 = AF_CW_F0_DEFAULT;    
+static volatile uint32_t cw_bw = AF_CW_BW_DEFAULT;    
+static volatile bool     cwdec_on = true;   // декодер морзянки активен при cw on    
   
 static volatile uint32_t cw_noise = 400;   // уровень добавки шума (±)  
   
@@ -1149,33 +1151,35 @@ void af_dsp_set_cw(bool on) {
         // Блокировка снята для теста: NT/NR больше не снимаются при CW.  
         // if (notch_on) af_dsp_set_notch(false);      
         // if (nr_on)    af_dsp_set_nr(false);      
-        cw_design();    
-        agc_avg_q16 = (int64_t)4096 << 16;    
-        // Сохранить текущую полосу и подтянуть FIR под f0 ± 250 Гц.  
-        af_saved_lo_hz = af_lo_hz;  
-        af_saved_hi_hz = af_hi_hz;  
-        cw_band_follow();  
-    }  
+        cw_design();      
+        agc_avg_q16 = (int64_t)4096 << 16;      
+        cwdec_init((float)cw_f0);   // гетеродин декодера под текущий f0    
+        // Сохранить текущую полосу и подтянуть FIR под f0 ± 250 Гц.    
+        af_saved_lo_hz = af_lo_hz;    
+        af_saved_hi_hz = af_hi_hz;    
+        cw_band_follow();    
+    }    
     if (on) {  
         for (int s = 0; s < AF_CW_SECTIONS; s++)  
             cw_sec[s].x1 = cw_sec[s].x2 = cw_sec[s].y1 = cw_sec[s].y2 = 0;  
     }  
-    if (!on && cw_on) {  
-        // Восстановить полосу, которая была до включения CW.  
-        af_lo_hz = af_saved_lo_hz;  
-        af_hi_hz = af_saved_hi_hz;  
-        af_fir_init();  
-    }  
-    cw_on = on;  
-}
+    if (!on && cw_on) {    
+        cwdec_stop();               // добить последнюю букву, очистить очередь    
+        // Восстановить полосу, которая была до включения CW.    
+        af_lo_hz = af_saved_lo_hz;    
+        af_hi_hz = af_saved_hi_hz;    
+        af_fir_init();    
+    }    
+    cw_on = on;    
+}  
   
 void af_dsp_set_cw_freq(uint32_t hz) {  
     if (hz < AF_CW_F0_MIN) hz = AF_CW_F0_MIN;  
     if (hz > AF_CW_F0_MAX) hz = AF_CW_F0_MAX;  
-    cw_f0 = hz;  
-    cw_design();  
-    if (cw_on) cw_band_follow();  
-}  
+    cw_f0 = hz;    
+    cw_design();    
+    if (cw_on) { cw_band_follow(); cwdec_init((float)cw_f0); }    
+}    
   
 void af_dsp_set_cw_bw(uint32_t hz) {  
     if (hz < AF_CW_BW_MIN) hz = AF_CW_BW_MIN;  
@@ -1264,7 +1268,13 @@ void af_dsp_set_ramp(bool on) { ramp_on = on; ramp_val = 0; }
 bool af_dsp_ramp_on(void)     { return ramp_on; }  
 bool     af_dsp_agc_on(void)     { return agc_on; }  
 bool     af_dsp_bypass_on(void)  { return bypass_on; }
-bool     af_dsp_cw_on(void)    { return cw_on; }  
+void af_dsp_set_cwdec(bool on) {    
+    if (on && !cwdec_on && cw_on) cwdec_init((float)cw_f0);  // чистый старт    
+    if (!on) cwdec_stop();    
+    cwdec_on = on;    
+}    
+bool     af_dsp_cwdec_on(void) { return cwdec_on; }    
+bool     af_dsp_cw_on(void)    { return cw_on; }    
 uint32_t af_dsp_cw_freq(void)  { return cw_f0; }  
 uint32_t af_dsp_cw_bw(void)    { return cw_bw; }  
 uint32_t af_dsp_cw_noise(void) { return cw_noise; }  
@@ -1487,9 +1497,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 cw_lfsr ^= cw_lfsr << 5;  
                 int32_t noise = ((int32_t)(cw_lfsr & 0xFFFF) - 32768) >> 6; // ~±512  
                 noise = (noise * (int32_t)cw_noise) >> 9;  
-                y = cw_push(sat16(y + noise));  
-            }  
-            if (notch_on) y = notch_lms_push(y);  
+                y = cw_push(sat16(y + noise));    
+                if (cwdec_on) cwdec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));    
+            }    
+            if (notch_on) y = notch_lms_push(y);    
             if (nr_on)    y = (nr_mode == 1) ? af_snr_push(y) : nr_lms_push(y); 
             int16_t s = agc_limit(y);  
             // Гребёнка — после АРУ (контур не «отменяет» нотчи), но ДО пост-FIR:  
