@@ -49,8 +49,9 @@ static int      last_elem;        // длительность предыдуще
 static uint8_t  code;             // сборка: 1 = старт-бит, dot=0, dash=1    
 static bool     space_sent;    
 static bool     word_started;     // была напечатана буква — иначе пробел не нужен    
-static bool     sq_open;          // сквелч: сигнал над шумом    
-static float    sq_level = 0.25f; // порог открытия (norm_sig - norm_noise), 0=off    
+static bool     sq_open;          // сквелч: сигнал над шумом      
+static float    sq_level = 0.25f; // порог открытия (norm_sig - norm_noise), 0=off      
+static uint8_t  cw_wpm = CW_DEFAULT_WPM;  // стартовая скорость (для банка)    
   
 // состояние приёма (как cw_receive_state в FLDigi)  
 enum { RS_IDLE = 0, RS_IN_TONE, RS_AFTER_TONE };  
@@ -144,10 +145,11 @@ void cw_rx_init(uint32_t center_hz) {
                   (unsigned long)tone_hz, (unsigned)CW_DEFAULT_WPM);  
 }  
   
-void cw_rx_set_wpm(uint8_t wpm) {  
-    if (wpm < 5 || wpm > 60) return;   // защита от мусора  
-    cw_reset_timing((float)wpm);  
-}  
+void cw_rx_set_wpm(uint8_t wpm) {    
+    if (wpm < 5 || wpm > 60) return;   // защита от мусора    
+    cw_wpm = wpm;    
+    cw_reset_timing((float)wpm);    
+}    
   
 static void process_window(float value) {  
     // --- AGC (FLDigi decode_stream) ---  
@@ -317,6 +319,9 @@ void cwdec_stop(void) {
     cw_rx_stop();  
 }  
   
-uint32_t cwdec_dropped(void) { return cwdec_dropped_cnt; }  
-// cw_rx.cpp, обвязка  
-void cwdec_set_sql(float lvl) { cw_rx_set_sql(lvl); }  
+uint32_t cwdec_dropped(void) { return cwdec_dropped_cnt; }    
+  
+void cwdec_set_sql(float lvl) { cw_rx_set_sql(lvl); }    
+  
+uint8_t cwdec_wpm(void) { return cw_wpm; }    
+float   cwdec_sql(void) { return sq_level; }  

@@ -42,7 +42,8 @@
 #include "af_pwm.h"                   // af_pwm_set_enabled — глушение выхода на окно
 #include "af_usb.h"                   // af_usb_set_muted/poll — тишина в USB на окно
 #include "af_gpio_ctl.h"              // af_gpio_set_bank_code — stats 'bank=' при автозагрузке
-#include "af_fm.h"                    // af_fm_request_sync — перерендер SET.TXT 
+#include "af_fm.h"                    // af_fm_request_sync — перерендер SET.TXT   
+#include "modes/cw_rx.h"              // cwdec_wpm/sql/set_wpm/set_sql — банк декодера  
   
 #include "pico/stdlib.h"
 #include "hardware/flash.h"  
@@ -51,8 +52,8 @@
   
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
-#define AF_STORE_VER      7   // было 6: +rx_shelf_*/rx_exc_* в af_bank_t    
-                              // (RX low-shelf + гармонический эксайтер T2)    
+#define AF_STORE_VER      8   // было 7: +cwdec_on/cw_wpm/cw_sql_x100 в af_bank_t    
+                              // (CW-декодер: вкл, стартовый WPM, порог сквелча)    
   
 // Смещение сектора банков от начала flash — последний сектор чипа.  
 // Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
@@ -219,8 +220,11 @@ void af_store_snapshot(af_bank_t* out) {
     out->cw_on    = af_dsp_cw_on() ? 1 : 0;      
     out->cw_f0    = (uint16_t)af_dsp_cw_freq();      
     out->cw_bw    = (uint16_t)af_dsp_cw_bw();      
-    out->cw_noise = (uint16_t)af_dsp_cw_noise();    
-    out->agc_on   = af_dsp_agc_on() ? 1 : 0;      
+    out->cw_noise = (uint16_t)af_dsp_cw_noise();      
+    out->cwdec_on    = af_dsp_cwdec_on() ? 1 : 0;      
+    out->cw_wpm      = cwdec_wpm();      
+    out->cw_sql_x100 = (uint16_t)(cwdec_sql() * 100.0f + 0.5f);      
+    out->agc_on   = af_dsp_agc_on() ? 1 : 0;        
     out->gain_pct = (uint16_t)(af_dsp_gain() * 256.0f + 0.5f);    
     out->voice_vol = af_voice_volume();    
     out->agc_ref      = (uint16_t)af_dsp_agcref();      
@@ -336,10 +340,15 @@ bool af_store_load(uint8_t idx) {
     // Порядок важен: сначала CW-параметры и флаг (при cw on полоса    
     // подтянется к f0±250), затем полоса — при cw off она встанет как    
     // сохранённая, при cw on set_band отклонится и сработает follow.    
-    af_dsp_set_cw_freq(b.cw_f0);    
-    af_dsp_set_cw_bw(b.cw_bw);    
-    af_dsp_set_cw_noise(b.cw_noise);  
-    af_dsp_set_agc(b.agc_on != 0);    
+    af_dsp_set_cw_freq(b.cw_f0);      
+    af_dsp_set_cw_bw(b.cw_bw);      
+    af_dsp_set_cw_noise(b.cw_noise);    
+    // CW-декодер: wpm/sql до set_cw — при cw on идёт cwdec_init(cw_f0),    
+    // который читает cw_wpm для стартового dot_samples.    
+    cwdec_set_wpm(b.cw_wpm);    
+    cwdec_set_sql((float)b.cw_sql_x100 / 100.0f);    
+    af_dsp_set_cwdec(b.cwdec_on != 0);    
+    af_dsp_set_agc(b.agc_on != 0);      
     af_dsp_set_gain((float)b.gain_pct / 256.0f);  
     af_voice_set_volume(b.voice_vol);  
     af_dsp_set_cw(b.cw_on != 0);    
@@ -462,7 +471,8 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
     for (int i = 0; i < AF_STORE_BANKS; i++) {        
         // RX — из af_config.h      
         b[i].lo_hz = 300;  b[i].hi_hz = 3000;      
-        b[i].cw_on = 0;  b[i].cw_f0 = 700;  b[i].cw_bw = 150;  b[i].cw_noise = 0;        
+        b[i].cw_on = 0;  b[i].cw_f0 = 700;  b[i].cw_bw = 150;  b[i].cw_noise = 0;          
+        b[i].cwdec_on = 1;  b[i].cw_wpm = 15;  b[i].cw_sql_x100 = 25;   // dec on, 15 wpm, sql 0.25    
         b[i].agc_on = 1;  b[i].gain_pct = 256;  b[i].voice_vol = 300;      
         b[i].agc_ref = AGC_REF;      
         b[i].agc_max_x100 = (uint16_t)(AGC_MAX_GAIN * 100.0f + 0.5f);      

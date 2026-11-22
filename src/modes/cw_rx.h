@@ -16,15 +16,16 @@
 void     cwdec_init(uint32_t center_hz); // инициализация декодера на тон, Гц  
 void     cwdec_push(int16_t sample);     // Core 1: отсчёт в очередь (cheap)  
 void     cwdec_poll(void);               // Core 0: дренаж очереди -> cw_rx_push  
-void     cwdec_set_wpm(uint8_t wpm);     // стартовая скорость 5..60  
-void     cwdec_stop(void);               // флаш незавершённого символа + сброс  
-uint32_t cwdec_dropped(void);            // отсчёты, не влезшие в очередь  
+void     cwdec_set_wpm(uint8_t wpm);     // стартовая скорость 5..60    
+void     cwdec_set_sql(float lvl);       // порог сквелча 0..1 (0 = off)    
+uint8_t  cwdec_wpm(void);                // текущий стартовый WPM (для банка)    
+float    cwdec_sql(void);                // текущий порог сквелча (для банка)    
+void     cwdec_stop(void);               // флаш незавершённого символа + сброс    
+uint32_t cwdec_dropped(void);            // отсчёты, не влезшие в очередь    
   
-// ---- внутренний API декодера (вызывается только из cwdec_poll, Core 0) ----  
-void cw_rx_init(uint32_t center_hz);  
-void cw_rx_push(int16_t sample);  
-void cw_rx_set_wpm(uint8_t wpm);  
+// ---- внутренний API декодера (вызывается только из cwdec_poll, Core 0) ----    
+void cw_rx_init(uint32_t center_hz);    
+void cw_rx_push(int16_t sample);    
+void cw_rx_set_wpm(uint8_t wpm);    
+void cw_rx_set_sql(float lvl);    
 void cw_rx_stop(void);  
-// cw_rx.h  
-void cw_rx_set_sql(float lvl);  
-void cwdec_set_sql(float lvl);  
