@@ -162,3 +162,7 @@ bool af_dsp_cwtx_start(const char* text);   // текст в очередь + TX
 bool af_dsp_cwtx_started(void);             // TX поднят командой cw tx    
 void af_dsp_cwtx_clear_started(void);       // сброс флага после возврата в RX    
 bool af_dsp_cwtx_busy(void);                // посылка ещё играет    
+
+// RTTY-декодер (45.45/170, RSID-захват + сканер + AFC)  
+void af_dsp_set_rtty(bool on);  
+bool af_dsp_rtty_on(void);  

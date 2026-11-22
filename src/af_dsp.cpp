@@ -535,7 +535,8 @@ static inline int32_t __not_in_flash_func(rx_exc_push)(int32_t x) {
 static volatile bool     cw_on = false;    
 static volatile uint32_t cw_f0 = AF_CW_F0_DEFAULT;    
 static volatile uint32_t cw_bw = AF_CW_BW_DEFAULT;    
-static volatile bool     cwdec_on = true;   // декодер морзянки активен при cw on    
+static volatile bool     cwdec_on = true;   // декодер морзянки активен при cw on
+static volatile bool rtty_on = false; 
   
 static volatile uint32_t cw_noise = 0;     // подмес шума выключен: на чистом    
                                            // тоне размывал спектр и мешал декодеру  
@@ -1149,7 +1150,15 @@ bool af_dsp_set_nr(bool on) {
     nr_on = on;    
     return true;  
 }
-  
+
+void af_dsp_set_rtty(bool on) {  
+    if (on && cw_on) af_dsp_set_cw(false);   // взаимоисключение  
+    if (on && !rtty_on) rttydec_init();  
+    if (!on && rtty_on) rttydec_stop();  
+    rtty_on = on;  
+}  
+bool af_dsp_rtty_on(void) { return rtty_on; } 
+
 void af_dsp_set_cw(bool on) {    
     if (on && !cw_on) {        
         // Блокировка снята для теста: NT/NR больше не снимаются при CW.  
@@ -1529,7 +1538,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 int32_t noise = ((int32_t)(cw_lfsr & 0xFFFF) - 32768) >> 6; // ~±512  
                 noise = (noise * (int32_t)cw_noise) >> 9;  
                 y = cw_push(sat16(y + noise));    
-                if (cwdec_on) cwdec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));    
+                if (cwdec_on) cwdec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));
+                if (rtty_on && !bypass_on && !tx_on) rttydec_push(x);  
             }    
             if (notch_on) y = notch_lms_push(y);    
             if (nr_on)    y = (nr_mode == 1) ? af_snr_push(y) : nr_lms_push(y); 

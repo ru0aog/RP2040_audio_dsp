@@ -222,7 +222,8 @@ void loop() {
     af_pwm_poll();      // ×3: заполняем duty-кольцо быстрее, чем один проход loop      
     af_pwm_poll();      
     af_pwm_poll();      
-    cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial        
+    cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial
+    rttydec_poll();     // RTTY: дренаж очереди + RSID/сканер/декодер
     cwtx_poll();        // CW-передатчик: подача элементов/пауз в cwtx_el_rem      
     af_oled_poll();     // OLED: отложенная перерисовка (пачками, не на каждый символ)  
     // CW-посылка отыграна — вернуться в RX (ADC обратно на GP26, PWM на GP0)    
