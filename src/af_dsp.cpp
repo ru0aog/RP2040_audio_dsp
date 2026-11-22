@@ -1462,7 +1462,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —    
                                                            // подъём до +6 дБ может превысить int16    
             if (rx_shelf_db_x10) s = sat16(rx_shelf_push(s)); // low-shelf: «бас» в конце тракта  
-            if (rx_exc_on)       s = sat16(rx_exc_push(s));   // эксайтер: последним перед выходом  
+            if (rx_exc_on && !cw_on) s = sat16(rx_exc_push(s)); // эксайтер: только речь,  
+                                                                // в CW гармоника тона не нужна  
             if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса      
             s = af_voice_mix(s);                       // голосовые сообщения          
             if (af_rec_active == 2) s = af_rec_mix(s); // подмес воспроизведения слота
