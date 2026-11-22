@@ -89,33 +89,37 @@ static char morse_decode(uint8_t c) {
     }  
 }  
   
-static void emit_char(void) {    
-    if (code > 1) {    
-        char ch = morse_decode(code);    
-        if (ch && sq_open) { Serial.write(ch); word_started = true; }    
-    }    
-    code = 1;    
-}    
+static void emit_char(void) {      
+    if (code > 1) {      
+        char ch = morse_decode(code);      
+        if (ch && sq_open) { Serial.write(ch); word_started = true; }      
+        else if (!sq_open) word_started = false;  // не копить «слово» на шуме    
+    }      
+    code = 1;      
+}      
   
 // Подстройка two_dots по парам точка-тире / тире-точка (FLDigi update_tracking)  
-static void update_tracking(int d1, int d2) {  
-    if (d1 <= 0 || d2 <= 0) return;  
-    if (d1 > d2 && d1 > 4 * d2) return;  
-    if (d2 > d1 && d2 > 4 * d1) return;  
-    float avg = (float)(d1 + d2) * 0.5f;      // ≈ (dot+dash)/2 ≈ 2*dot    
-    two_dots = decayavg(two_dots, avg, 16.0f);    
-    // Клампы: dot 5..60 WPM = 240..20 мс = 48..4 окон по 5 мс.    
-    // Без них трекинг на шумовых парах схлопывал two_dots -> все T.    
-    if (two_dots < 8.0f)  two_dots = 8.0f;    // dot >= 4 окна (60 WPM)    
-    if (two_dots > 96.0f) two_dots = 96.0f;   // dot <= 48 окон (5 WPM)    
-    dot_win  = two_dots * 0.5f;    
-    spike_win = dot_win * 0.5f;               // отсев всплесков < полуточки    
-    if (spike_win < 1.0f) spike_win = 1.0f;   // не опускать ниже 1 окна    
-}  
+static void update_tracking(int d1, int d2) {    
+    if (d1 <= 0 || d2 <= 0) return;    
+    // Трекаем ТОЛЬКО пары точка-тире (d1 < d2): avg ≈ 2*dot.      
+    // Пары тире-точка давали avg ≈ 2*dot тоже, но на шумовых      
+    // элементах тянули two_dots вверх -> тире стали точками.      
+    if (d1 >= d2) return;    
+    if (d2 > 4 * d1) return;                  // не пара dot-dash    
+    float avg = (float)(d1 + d2) * 0.5f;      // ≈ (dot+dash)/2 ≈ 2*dot      
+    two_dots = decayavg(two_dots, avg, 16.0f);      
+    // Клампы: dot 5..60 WPM = 240..20 мс = 48..4 окон по 5 мс.      
+    if (two_dots < 8.0f)  two_dots = 8.0f;    // dot >= 4 окна (60 WPM)      
+    if (two_dots > 96.0f) two_dots = 96.0f;   // dot <= 48 окон (5 WPM)      
+    dot_win  = two_dots * 0.5f;      
+    spike_win = dot_win * 0.5f;               // отсев всплесков < полуточки      
+    if (spike_win < 1.0f) spike_win = 1.0f;   // не опускать ниже 1 окна      
+}    
   
 static void cw_reset_timing(float wpm) {  
-    dot_win   = (1200.0f / wpm) / CW_WIN_MS;  // ≈12 окон @20WPM, 16 @15WPM  
-    if (dot_win < 1.0f) dot_win = 1.0f;  
+    dot_win   = (1200.0f / wpm) / CW_WIN_MS;  // ≈12 окон @20WPM, 16 @15WPM    
+    if (dot_win < 1.0f)  dot_win = 1.0f;    
+    if (dot_win > 48.0f) dot_win = 48.0f;     // точка > 240 мс = <5 WPM    
     two_dots  = dot_win * 2.0f;  
     spike_win = dot_win * 0.5f;  
   
@@ -188,11 +192,12 @@ static void process_window(float value) {
     // Страж: тон длиннее ~2 с (400 окон) — залипший keydown или    
     // несущая без манипуляции. Принудительный keyup + сброс AGC,    
     // иначе один гигантский elem ломает трекинг (все T).    
-    if (rx_state == RS_IN_TONE && (win_idx - tone_start) > 400) {    
-        rx_state  = RS_IDLE;    
-        last_elem = 0;    
-        agc_peak  = sig_avg > 1e-6f ? sig_avg : 1.0f;    
-    }    
+    if (rx_state == RS_IN_TONE && (win_idx - tone_start) > 400) {      
+        rx_state  = RS_IDLE;      
+        last_elem = 0;      
+        key_up_at = win_idx;   // иначе gap огромный -> лишний пробел    
+        agc_peak  = sig_avg > 1e-6f ? sig_avg : 1.0f;      
+    }      
 
     // --- гистерезисный детектор ключа ---  
     if (v > upper && rx_state != RS_IN_TONE) {  
@@ -217,13 +222,13 @@ static void process_window(float value) {
             space_sent = false;    
             // не добавляем в code — это не элемент Морзе    
         } else {    
-        // трекинг скорости по паре элементов    
-        if (last_elem > 0) {    
-            if (elem > 2 * last_elem && elem < 4 * last_elem)  
-                update_tracking(last_elem, elem);  
-            if (last_elem > 2 * elem && last_elem < 4 * elem)  
-                update_tracking(elem, last_elem);  
-        }  
+        // трекинг скорости: только пара точка->тире (короткий, потом      
+        // длинный в 2..4 раза). Пара тире->точка в трекинг не идёт —      
+        // на ней two_dots полз вверх и тире классифицировались точками.      
+        if (last_elem > 0) {      
+            if (elem > 2 * last_elem && elem < 4 * last_elem)    
+                update_tracking(last_elem, elem);    
+        }    
         last_elem = elem;  
   
         bool dash = ((float)elem > two_dots);    
@@ -244,7 +249,7 @@ static void process_window(float value) {
         // Пробел: только после напечатанной буквы и паузы ~7 точек    
         // (стандартный word gap). 4*dot давал лишние пробелы внутри    
         // слов при неровной манипуляции и на шумовых срабатываниях.    
-        if (!space_sent && word_started && gap > two_dots * 3.5f) {    
+        if (!space_sent && word_started && gap > two_dots * 4.5f) {    
             Serial.write(' ');    
             space_sent = true;    
             word_started = false;    
