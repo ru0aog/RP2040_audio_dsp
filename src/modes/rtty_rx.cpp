@@ -4,17 +4,21 @@
 //     -> mix(space) -> boxcar(Tбит) -> env_s -> clipped ATC v3 -> бит-автомат  
 // AFC: dphi между boxcar-суммами на стробах битов, кламп +-22.7 Гц, k=0.25.  
 // Захват: RSID (rsid_rx.cpp) или сканер Гёрцеля (пара пиков со сдвигом 170).  
-// Обвязка rttydec_*: Core 1 push -> SPSC -> Core 0 poll (как cwdec_*).  
-#include "rtty_rx.h"  
-// #include "rsid_rx.h"     // RSID временно отключён — экономия ~50 КБ RAM 
-#include "af_oled.h"        // af_oled_putc — эхо декодированного текста на экран
-#include "../af_config.h"  
-#include <math.h>  
-#include <string.h>  
-  
-#define RTTY_FS        ((float)AF_FS_OUT_HZ)   // 15464  
-#define RTTY_SYMLEN    ((int)(RTTY_FS / RTTY_BAUD + 0.5f))   // ~340  
-#define RTTY_MAX_SYMLEN 400  
+// Обвязка rttydec_*: Core 1 push = децимация /4 + сканер/декодер (тяжёлая    
+// часть на Core 1, разгрузка Core 0); в SPSC-очередь идут только символы.    
+// Core 0 poll: дренаж очереди -> Serial/OLED + таймауты lost/false-lock.    
+#include "rtty_rx.h"    
+// #include "rsid_rx.h"     // RSID временно отключён — экономия ~50 КБ RAM   
+#include "af_oled.h"        // af_oled_putc — эхо декодированного текста на экран  
+#include "../af_config.h"    
+#include <math.h>    
+#include <string.h>    
+    
+#define RTTY_FS        ((float)AF_FS_OUT_HZ)   // 15464 — вход push    
+#define RTTY_DECIM     4                       // децимация в push (Core 1)    
+#define RTTY_DFS       (RTTY_FS / RTTY_DECIM)  // 3866 — Fs декодера/сканера    
+#define RTTY_SYMLEN    ((int)(RTTY_DFS / RTTY_BAUD + 0.5f))  // ~85    
+#define RTTY_MAX_SYMLEN 128    
   
 // ---------------------------------------------------------------------------  
 // Состояние декодера (порт rtty_t из rx_decoders.cpp)  
@@ -85,22 +89,32 @@ static const char *baudot_rus[32] = {
 #define MTK2_LAT  0x1F  
 #define MTK2_FIG  0x1B  
   
-static void rtty_emit(uint8_t c) {  
-    if (c == MTK2_FIG) { rrx.figs = 1; return; }  
-    if (c == MTK2_LAT) { rrx.figs = 0; return; }  
-    if (c == MTK2_RUS) { rrx.figs = 2; return; }   // blank -> RUS-регистр МТК-2  
-    if (!sq_open) return;  
-    if (rrx.figs == 2) {    
-        const char *s = baudot_rus[c];    
-        if (s[0]) {    
-            Serial.print(s);    
-            for (const char *p = s; *p; p++) af_oled_putc(*p);  // UTF-8 -> OLED    
-        }    
-    } else {    
-        char ch = rrx.figs ? baudot_figs[c] : baudot_ltrs[c];    
-        if (ch) { Serial.write(ch); af_oled_putc(ch); }    
-    }  
-}  
+// Очередь декодированных байт Core1->Core0 (UTF-8 кириллица идёт побайтно).    
+#define RTTY_CHQ_LEN 256    
+static volatile uint8_t  chq[RTTY_CHQ_LEN];    
+static volatile uint16_t chq_head = 0, chq_tail = 0;    
+    
+static void chq_put(uint8_t b) {          // Core 1    
+    uint16_t n = (uint16_t)((chq_head + 1) & (RTTY_CHQ_LEN - 1));    
+    if (n == chq_tail) return;            // переполнение — байт теряем    
+    chq[chq_head] = b;    
+    __dmb();    
+    chq_head = n;    
+}    
+    
+static void rtty_emit(uint8_t c) {        // Core 1 — только в очередь    
+    if (c == MTK2_FIG) { rrx.figs = 1; return; }    
+    if (c == MTK2_LAT) { rrx.figs = 0; return; }    
+    if (c == MTK2_RUS) { rrx.figs = 2; return; }   // blank -> RUS-регистр МТК-2    
+    if (!sq_open) return;    
+    if (rrx.figs == 2) {      
+        const char *s = baudot_rus[c];      
+        for (const char *p = s; *p; p++) chq_put((uint8_t)*p);  // UTF-8 байты    
+    } else {      
+        char ch = rrx.figs ? baudot_figs[c] : baudot_ltrs[c];      
+        if (ch) chq_put((uint8_t)ch);      
+    }    
+}    
   
 // ---------------------------------------------------------------------------  
 // Ядро: миксер, boxcar, ATC v3, бит-автомат (порт rtty.cxx)  
@@ -285,27 +299,27 @@ static void rtty_tune(float center_hz) {
 // Сканер Гёрцеля: банк тонов 300..3000 Гц, ищем пару пиков со сдвигом 170 Гц.  
 // Работает на децимированном потоке /4 (3866 Гц) — 27 тонов, окно ~53 мс.  
 // ---------------------------------------------------------------------------  
-#define SCAN_FS       (RTTY_FS / 6.0f)           // 2577 Гц — синхронно с scan_decim /6  
-#define SCAN_NTONES   19                         // 300..1200 шаг 50 Гц (Найквист 1288)  
-#define SCAN_F0       300.0f  
-#define SCAN_STEP     50.0f  
-#define SCAN_WIN      128                        // отсчётов @2577 = ~50 мс  
-#define SCAN_NEED     3                          // окон подряд для захвата  
-  
-typedef struct { float cr, ci, ar, ai; } gtz_t;  
-static gtz_t   gtz[SCAN_NTONES];  
-static int     scan_decim = 0, scan_cnt = 0;  
-static int     scan_hit_tone = -1, scan_hit_n = 0;  
-  
-static void scan_init(void) {  
-    for (int t = 0; t < SCAN_NTONES; t++) {  
-        float w = 2.0f * (float)M_PI * (SCAN_F0 + t * SCAN_STEP) / SCAN_FS;  
-        gtz[t].cr = cosf(w); gtz[t].ci = sinf(w);  
-        gtz[t].ar = gtz[t].ai = 0.0f;  
-    }  
-    scan_decim = scan_cnt = 0;  
-    scan_hit_tone = -1; scan_hit_n = 0;  
-}  
+#define SCAN_FS       RTTY_DFS                   // 3866 — поток после децимации    
+#define SCAN_NTONES   19                         // 300..1200 шаг 50 Гц (Найквист 1933)    
+#define SCAN_F0       300.0f    
+#define SCAN_STEP     50.0f    
+#define SCAN_WIN      128                        // отсчётов @3866 = ~33 мс    
+#define SCAN_NEED     3                          // окон подряд для захвата    
+    
+typedef struct { float cr, ci, ar, ai; } gtz_t;    
+static gtz_t   gtz[SCAN_NTONES];    
+static int     scan_cnt = 0;    
+static int     scan_hit_tone = -1, scan_hit_n = 0;    
+    
+static void scan_init(void) {    
+    for (int t = 0; t < SCAN_NTONES; t++) {    
+        float w = 2.0f * (float)M_PI * (SCAN_F0 + t * SCAN_STEP) / SCAN_FS;    
+        gtz[t].cr = cosf(w); gtz[t].ci = sinf(w);    
+        gtz[t].ar = gtz[t].ai = 0.0f;    
+    }    
+    scan_cnt = 0;    
+    scan_hit_tone = -1; scan_hit_n = 0;    
+}    
   
 // Один децимированный отсчёт в банк; по окну — поиск пары.  
 static void scan_sample(float x) {  
@@ -398,16 +412,15 @@ static void scan_sample(float x) {
 // ---------------------------------------------------------------------------  
 // Обвязка rttydec_* — SPSC-очередь (как cwdec_*)  
 // ---------------------------------------------------------------------------  
-#define RTTYDEC_Q_LEN 512  
-static volatile int16_t  rtty_q[RTTYDEC_Q_LEN];  
-static volatile uint16_t rtty_q_head = 0, rtty_q_tail = 0;  
-static volatile uint32_t rtty_dropped_cnt = 0;  
+static int push_decim = 0;              // счётчик децимации /4 (Core 1)    
+static volatile uint32_t rtty_dropped_cnt = 0;  // не используется — оставлен для stats    
   
-void rttydec_init(void) {  
-    rtty_q_head = rtty_q_tail = 0;  
-    rtty_dropped_cnt = 0;  
-    memset(&rrx, 0, sizeof(rrx));  
-    rrx.fs = RTTY_FS;  
+void rttydec_init(void) {    
+    chq_head = chq_tail = 0;    
+    push_decim = 0;    
+    rtty_dropped_cnt = 0;    
+    memset(&rrx, 0, sizeof(rrx));    
+    rrx.fs = RTTY_DFS;                 // 3866 — Fs после децимации    
     rrx.symbollen = RTTY_SYMLEN;  
     rrx.nbits = 5;  
     sq_open = (sq_level == 0.0f);    
@@ -421,73 +434,72 @@ void rttydec_init(void) {
                   state == RTTY_ST_SCAN ? "scan" : "track");    
 }  
   
-void rttydec_push(int16_t x) {          // Core 1, горячий путь  
-    uint16_t h = rtty_q_head;  
-    uint16_t n = (uint16_t)((h + 1) & (RTTYDEC_Q_LEN - 1));  
-    if (n == rtty_q_tail) { ++rtty_dropped_cnt; return; }  
-    rtty_q[h] = x;  
-    __dmb();  
-    rtty_q_head = n;  
-}  
-  
-void rttydec_poll(void) {               // Core 0, из loop()    
+void rttydec_push(int16_t x) {          // Core 1, горячий путь — вся обработка    
     if (!rtty_active) return;    
-    
-    // Потеря сигнала в TRACK: 5 с без валидных символов -> перезахват      
-    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 5000) {      
-        state = RTTY_ST_SCAN;      
-        scan_init();      
-        Serial.println("# rtty: lost -> scan");      
+    if (++push_decim < RTTY_DECIM) return;    
+    push_decim = 0;    
+    float xd = (float)x;                // 3866 Гц    
+    if (state == RTTY_ST_SCAN) {    
+        scan_sample(xd);    
+    } else {    
+        rtty_rx_sample(xd, 0.0f);       // моно: xq=0    
+    }    
+}    
+  
+void rttydec_poll(void) {               // Core 0, из loop()      
+    if (!rtty_active) return;      
+      
+    // Потеря сигнала в TRACK: 5 с без валидных символов -> перезахват        
+    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 5000) {        
+        state = RTTY_ST_SCAN;        
+        scan_init();        
+        Serial.println("# rtty: lost -> scan");        
+    }        
+        
+    // False lock: 3 с в TRACK, а в каналах mark/space энергии нет —      
+    // сканер захватил помеху. Баним пару и назад в сканер.      
+    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 3000) {      
+        float env = fmaxf(rrx.mark_env, rrx.space_env);      
+        if (env < 2.0f) {        
+            ban_lo = rrx.f_space; ban_hi = rrx.f_mark;      
+            ban_ms = millis();      
+            state = RTTY_ST_SCAN;      
+            scan_init();      
+            Serial.printf("# rtty: false lock %d/%d -> scan\n",      
+                          (int)ban_lo, (int)ban_hi);      
+        }      
     }      
       
-    // False lock: 3 с в TRACK, а в каналах mark/space энергии нет —    
-    // сканер захватил помеху. Баним пару и назад в сканер.    
-    if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 3000) {    
-        float env = fmaxf(rrx.mark_env, rrx.space_env);    
-        if (env < 2.0f) {      
-            ban_lo = rrx.f_space; ban_hi = rrx.f_mark;    
-            ban_ms = millis();    
-            state = RTTY_ST_SCAN;    
-            scan_init();    
-            Serial.printf("# rtty: false lock %d/%d -> scan\n",    
-                          (int)ban_lo, (int)ban_hi);    
-        }    
-    }    
+    // Дренаж очереди символов -> Serial + OLED (только Core 0 трогает их)    
+    while (chq_tail != chq_head) {      
+        uint8_t b = chq[chq_tail];      
+        chq_tail = (uint16_t)((chq_tail + 1) & (RTTY_CHQ_LEN - 1));      
+        Serial.write(b);      
+        af_oled_putc((char)b);      
+    }      
     
-    while (rtty_q_tail != rtty_q_head) {    
-        int16_t x = rtty_q[rtty_q_tail];    
-        rtty_q_tail = (uint16_t)((rtty_q_tail + 1) & (RTTYDEC_Q_LEN - 1));    
-    
-        if (state == RTTY_ST_SCAN) {    
-            if (++scan_decim >= 6) { scan_decim = 0; scan_sample((float)x); }      
-            continue;                              // в SCAN не декодируем    
-        }    
-        rtty_rx_sample((float)x, 0.0f);            // моно: xq=0    
-    }    
+    // --- ДИАГНОСТИКА TRACK --- (без изменений)        
+    if (dbg_en && state == RTTY_ST_TRACK) {        
+        static uint32_t dbg_trk_ms = 0;         
+        if (millis() - dbg_trk_ms > 2000) {      
+            dbg_trk_ms = millis();      
+            float env = fmaxf(rrx.mark_env, rrx.space_env);      
+            float snr = (rrx.noise_floor > 1e-6f) ? env / rrx.noise_floor : 0.0f;      
+            Serial.printf("# trk: m=%d s=%d nf=%d snr=%d.%d sq=%s v3=%d ferr=%d.%d\n",    
+                (int)rrx.mark_env, (int)rrx.space_env,    
+                (int)rrx.noise_floor,    
+                (int)snr, abs((int)(snr * 10.0f)) % 10,    
+                sq_open ? "open" : "shut",    
+                (int)rrx.v3,    
+                (int)rrx.freqerr, abs((int)(rrx.freqerr * 10.0f)) % 10);    
+        }      
+    }      
+}      
   
-    // --- ДИАГНОСТИКА TRACK: огибающие/шум/сквелч раз в 2 с ---      
-    if (dbg_en && state == RTTY_ST_TRACK) {      
-        static uint32_t dbg_trk_ms = 0;       
-        if (millis() - dbg_trk_ms > 2000) {    
-            dbg_trk_ms = millis();    
-            float env = fmaxf(rrx.mark_env, rrx.space_env);    
-            float snr = (rrx.noise_floor > 1e-6f) ? env / rrx.noise_floor : 0.0f;    
-            // ferr и snr — в десятых долях целым: 12.3 -> "123"  
-            Serial.printf("# trk: m=%d s=%d nf=%d snr=%d.%d sq=%s v3=%d ferr=%d.%d\n",  
-                (int)rrx.mark_env, (int)rrx.space_env,  
-                (int)rrx.noise_floor,  
-                (int)snr, abs((int)(snr * 10.0f)) % 10,  
-                sq_open ? "open" : "shut",  
-                (int)rrx.v3,  
-                (int)rrx.freqerr, abs((int)(rrx.freqerr * 10.0f)) % 10);  
-        }    
-    }    
-}    
-  
-void rttydec_stop(void) {    
-    rtty_q_head = rtty_q_tail = 0;    
-    rtty_active = false;    
-}    
+void rttydec_stop(void) {      
+    rtty_active = false;               // push сразу перестаёт работать    
+    chq_head = chq_tail = 0;      
+}      
   
 // ---- настройки ----  
 void rttydec_set_scan(bool on)  { scan_en = on; }    
