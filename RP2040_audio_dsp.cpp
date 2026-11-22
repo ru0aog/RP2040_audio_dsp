@@ -192,7 +192,7 @@ void setup() {
 
     //af_oled_init();  
     //af_oled_text("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ ");  
-    af_oled_text("абвгдеёжзийклмнопрстуфхцчшщъыьэюя ");  
+    //af_oled_text("абвгдеёжзийклмнопрстуфхцчшщъыьэюя ");  
     //af_oled_text("ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789");
 
     af_oled_status();             // строка 0: RX/TX, band, cw f0  

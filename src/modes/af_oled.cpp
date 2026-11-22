@@ -116,8 +116,8 @@ static const uint8_t FONT5x7_RU[][5] = {
     {0x7F,0x49,0x49,0x49,0x41}, // Е  
     {0x77,0x08,0x7F,0x08,0x77}, // Ж  
     {0x22,0x41,0x49,0x49,0x36}, // З  
-    {0x7F,0x10,0x08,0x04,0x7F}, // И  
-    {0x7F,0x10,0x08,0x04,0x7F}, // И 
+    {0x7F,0x10,0x08,0x04,0x7F}, // И    
+    {0x7F,0x11,0x0A,0x04,0x7F}, // Й — И + галочка (бит0 в col1, бит1 в col2)  
     {0x7F,0x08,0x14,0x22,0x41}, // К  
     {0x20,0x40,0x3F,0x01,0x7F}, // Л  
     {0x7F,0x02,0x0C,0x02,0x7F}, // М  
@@ -172,8 +172,8 @@ static const uint8_t FONT5x7_RU[][5] = {
     {0x28,0x44,0x54,0x54,0x38}, // э  
     {0x7C,0x10,0x38,0x44,0x38}, // ю  
     {0x48,0x54,0x34,0x14,0x7C}, // я  
-    {0x7F,0x49,0x49,0x49,0x41}, // Е  
-    {0x7F,0x4B,0x49,0x4B,0x41}, // Ё
+    {0x7F,0x4B,0x49,0x4B,0x41}, // Ё — Е + две точки сверху  
+    {0x38,0x56,0x54,0x56,0x18}, // ё — е + две точки сверху  
 };  
 
 // ---------------------------------------------------------------------------  
@@ -185,6 +185,7 @@ static uint32_t oled_last_ms;               // троттлинг перерис
 static char     oled_lines[AF_OLED_ROWS][AF_OLED_COLS + 1];  // текстовый буфер  
 static uint8_t  oled_col;                   // позиция в текущей строке скролла    
 static uint8_t  oled_utf8_hi;               // первый байт UTF-8 (0xD0/0xD1), 0 = нет    
+static char     oled_status_prev[AF_OLED_COLS];   // прошлая строка 0 — для dirty-on-change  
   
 // ---------------------------------------------------------------------------  
 // Bit-bang I2C (open-drain: 0 = output low, 1 = input с внешней подтяжкой)  
@@ -369,10 +370,13 @@ void af_oled_status(void) {                 // строка 0: режим + по
             else if (h == 0xD1 && b == 0x91)              c = (char)(0x80 + 65);    
             else continue;    
         } else if (b == 0xD0 || b == 0xD1) { hi = b; continue; }    
-        oled_lines[0][col++] = c;    
-    }    
-    oled_dirty = true;    
-}    
+        oled_lines[0][col++] = c;      
+    }      
+    if (memcmp(oled_lines[0], oled_status_prev, AF_OLED_COLS) != 0) {  // изменилась?  
+        memcpy(oled_status_prev, oled_lines[0], AF_OLED_COLS);  
+        oled_dirty = true;  
+    }  
+}      
   
 void af_oled_poll(void) {    
     if (!oled_ok) return;    
