@@ -472,7 +472,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         // RX — из af_config.h      
         b[i].lo_hz = 300;  b[i].hi_hz = 3000;      
         b[i].cw_on = 0;  b[i].cw_f0 = 700;  b[i].cw_bw = 150;  b[i].cw_noise = 0;          
-        b[i].cwdec_on = 1;  b[i].cw_wpm = 15;  b[i].cw_sql_x100 = 25;   // dec on, 15 wpm, sql 0.25    
+        b[i].cwdec_on = 1;  b[i].cw_wpm = 20;  b[i].cw_sql_x100 = 25;  
         b[i].agc_on = 1;  b[i].gain_pct = 256;  b[i].voice_vol = 300;      
         b[i].agc_ref = AGC_REF;      
         b[i].agc_max_x100 = (uint16_t)(AGC_MAX_GAIN * 100.0f + 0.5f);      

@@ -139,10 +139,10 @@ void cw_rx_init(uint32_t center_hz) {
     // AGC: agc_peak стартует с 1, чтобы деление было корректным сразу  
     sig_avg = 0.0f; noise_floor = 0.0f; agc_peak = 1.0f;  
   
-    cw_reset_timing((float)CW_DEFAULT_WPM);  
-    cw_active = true;  
-    Serial.printf("[CW] init tone=%lu Hz wpm=%u\n",  
-                  (unsigned long)tone_hz, (unsigned)CW_DEFAULT_WPM);  
+    cw_reset_timing((float)cw_wpm);    
+    cw_active = true;    
+    Serial.printf("[CW] init tone=%lu Hz wpm=%u\n",    
+                  (unsigned long)tone_hz, (unsigned)cw_wpm);    
 }  
   
 void cw_rx_set_wpm(uint8_t wpm) {    
@@ -262,7 +262,7 @@ void cw_rx_stop(void) {
         if (!space_sent && word_started) Serial.write(' '); // закрыть слово    
     }  
     cw_active = false;  
-    cw_reset_timing((float)CW_DEFAULT_WPM);  
+    cw_reset_timing((float)cw_wpm);    
     sig_avg = 0.0f; noise_floor = 0.0f; agc_peak = 1.0f;  
     win_cnt = 0; win_acc = 0.0f;  
     lp_re = lp_im = 0.0f;  

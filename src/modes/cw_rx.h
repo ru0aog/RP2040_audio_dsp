@@ -10,7 +10,7 @@
 #include <Arduino.h>  
   
 #define CW_TONE_OFFSET_HZ   600u     // дефолтный тон, если центр не задан  
-#define CW_DEFAULT_WPM      15u      // стартовая скорость (PARIS), дальше трекинг  
+#define CW_DEFAULT_WPM      20u      // стартовая скорость (PARIS), дальше трекинг  
   
 // ---- обвязка (Core 0 / Core 1 граница) ----  
 void     cwdec_init(uint32_t center_hz); // инициализация декодера на тон, Гц  

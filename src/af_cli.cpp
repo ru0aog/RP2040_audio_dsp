@@ -75,7 +75,8 @@ static void cli_help(void) {
     Serial.println("#   cw bw <hz>        — полоса CW (80..500)");    
     Serial.println("#   cw noise <0..2000> — примесь шума эфира в CW");    
     Serial.println("#   cw dec on|off     — CW-декодер: текст в Serial (только при cw on)");    
-    Serial.println("#   cw wpm <5..60>    — стартовая скорость декодера, WPM");    
+    Serial.println("#   cw wpm <5..60>    — стартовая скорость декодера, WPM");      
+    Serial.println("#   cw sql <0..1>     — сквелч декодера (0 = off, 0.25 = дефолт)");      
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
     Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
     Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
@@ -718,7 +719,8 @@ static void p_set_notch2(int32_t v)   { af_tx_set_notchf(af_tx_notch1(), (uint32
 static void p_set_gain(int32_t v)     { af_dsp_set_gain((float)v / 256.0f); }        // Q8  
 static void p_set_agcmax(int32_t v)   { af_dsp_set_agcmax((float)v / 100.0f); }      // x100  
 static void p_set_agcmin(int32_t v)   { af_dsp_set_agcmin((float)v / 100.0f); }      // x100  
-  
+static void p_set_cw_sql(int32_t v)   { cwdec_set_sql((float)v / 100.0f); }      // x100  
+
 #define P_SET(fn)  ((void(*)(int32_t))(fn))   // сеттеры u32/bool — совместимы по ABI  
   
 static const af_param_t AF_PARAMS[] = {  
@@ -728,8 +730,11 @@ static const af_param_t AF_PARAMS[] = {
     { "cw",          PT_ONOFF, offsetof(af_bank_t, cw_on),          P_SET(af_dsp_set_cw) },  
     { "cw f0",       PT_U16,   offsetof(af_bank_t, cw_f0),          P_SET(af_dsp_set_cw_freq) },  
     { "cw bw",       PT_U16,   offsetof(af_bank_t, cw_bw),          P_SET(af_dsp_set_cw_bw) },  
-    { "cw noise",    PT_U16,   offsetof(af_bank_t, cw_noise),       P_SET(af_dsp_set_cw_noise) },  
-    { "agc",         PT_ONOFF, offsetof(af_bank_t, agc_on),         P_SET(af_dsp_set_agc) },  
+    { "cw noise",    PT_U16,   offsetof(af_bank_t, cw_noise),       P_SET(af_dsp_set_cw_noise) },    
+    { "cw dec",      PT_ONOFF, offsetof(af_bank_t, cwdec_on),       P_SET(af_dsp_set_cwdec) },    
+    { "cw wpm",      PT_U8,    offsetof(af_bank_t, cw_wpm),         P_SET(cwdec_set_wpm) },    
+    { "cw sql",      PT_X100,  offsetof(af_bank_t, cw_sql_x100),    p_set_cw_sql },    
+    { "agc",         PT_ONOFF, offsetof(af_bank_t, agc_on),         P_SET(af_dsp_set_agc) },    
     { "gain",        PT_GAIN,  offsetof(af_bank_t, gain_pct),       p_set_gain },  
     { "voice vol",   PT_U16,   offsetof(af_bank_t, voice_vol),      P_SET(af_voice_set_volume) },  
     { "agc ref",     PT_U16,   offsetof(af_bank_t, agc_ref),        P_SET(af_dsp_set_agcref) },  
@@ -1137,7 +1142,7 @@ static void cli_exec(char* line) {
     }
     else if (strcmp(cmd, "cw") == 0) {  
         char* sub = strtok(NULL, " \t");  
-        if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>|dec on|off|wpm <5..60>"); return; }    
+        if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..2000>|dec on|off|wpm <5..60>|sql <0..1>"); return; }      
   
         if (strcmp(sub, "on") == 0) {  
             af_dsp_set_cw(true);
