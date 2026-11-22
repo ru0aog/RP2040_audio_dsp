@@ -549,3 +549,61 @@ flash-окно (park Core1 → mute → 125 МГц → capture pause → pwm off
 IRQ-off → erase+program → restore). Воспроизведение: XIP-чтение слота  
 с интерполяцией ×2 → подстановка в tx_in → один проход TX-тракта.  
 
+## 6a. CW-декодер (`src/modes/cw_rx.cpp`)  
+  
+Порт `rx_cw.cpp` из RP2040_receiver (детекция — порт FLDigi cw.cxx).  
+Декодер на float — живёт на **Core 0**; Core 1 кладёт отсчёты  
+в SPSC-очередь (`cwdec_push`), дренаж — `cwdec_poll()` из `loop()`.  
+  
+- Гетеродин сносит `cw_f0` в DC + однополюсный НЧ.  
+- Детекция ключа: `sig_avg`/`noise_floor`/`agc_peak` (быстрый attack,  
+  медленный decay), нормализация `value /= agc_peak`, асимметричные  
+  пороги гистерезиса, отсев всплесков < 2 окон (окно = 5 мс).  
+- Точка/тире: порог `two_dots` от `cw wpm` + трекинг только по парам  
+  «точка-тире» (d1 < d2), клампы 8..96 окон — защита от схлопывания  
+  в «TTT» и раздувания в точки.  
+- Страж залипшего ключа: >400 окон в тоне → принудительный keyup.  
+- Сквелч `sq_level`: печать при `norm_sig − norm_noise > порог`,  
+  гистерезис; `sq_open` сбрасывается в `cw_reset_timing`.  
+- Пробел: пауза `> 5 × dot_win` (между межбуквенной 3 и межсловной 7).  
+- Вывод: `Serial.write` + `af_oled_putc` (только при `sq_open`).  
+  
+## 6b. CW-передатчик (`src/modes/cw_tx.cpp`)  
+  
+- Core 0: `cwtx_init` (LUT синуса 256, float), `cwtx_send` (текст →  
+  очередь 128), `cwtx_poll` из `loop()` — подача элементов/пауз  
+  в `cwtx_el_rem`.  
+- Core 1: `cwtx_sample()` — только int32/LUT, вызывается на каждый  
+  отсчёт в TX-ветке `af_dsp` в обход `af_tx_process` (речевой тракт  
+  не ломает огибающую).  
+- Огибающая raised cosine, `CWTX_RISE_MS = 5` мс — нет щелчков  
+  ключевания и внеполосных лепестков. NCO с непрерывной фазой.  
+- Тайминги PARIS: `dot_samples = Fs × 1.2 / wpm`.  
+- Хвост: после опустошения очереди `cwtx_tail` подаёт `7 × dot`  
+  тишины — авто-возврат в RX не обрезает спад последнего элемента.  
+- Авто-TX: `af_dsp_cwtx_start` → `cwtx_send` + `af_dsp_set_tx(true)`;  
+  возврат в `loop()`: `cwtx_started && !cwtx_busy()` → `set_tx(false)`.  
+- Таблица Морзе: биты MSB-first, 1 = тире, 0 = точка.  
+  
+## 6c. OLED (`src/modes/af_oled.cpp`)  
+  
+- SSD1306 128×32, I2C 0x3C, bit-bang на GP14 (SDA) / GP15 (SCL),  
+  open-drain через `INPUT_PULLUP`. Core 0.  
+- 4 строки по 21 символу (5×7 + межсимвольный px). Строка 0 — статус  
+  (`af_oled_status`, пересборка в `af_oled_poll` каждые 250 мс,  
+  рендер только при изменении — `oled_status_prev`).  
+- Строки 1–3 — скролл: `af_oled_putc`/`af_oled_text`.  
+- Шрифт `FONT5x7` (ASCII) + `FONT5x7_RU` (А..я, Ёё): UTF-8 пары  
+  0xD0/0xD1 склеиваются в `putc` и в `status`, в буфере — код  
+  `0x80 + индекс`, маппинг в `oled_render`.  
+- `af_oled_init` при NACK → `oled_ok = false`, все вызовы no-op.  
+
+modes/cw_rx.cpp/.h — CW-декодер (Core 0, float), SPSC от Core 1  
+modes/cw_tx.cpp/.h — CW-передатчик: текст→Морзе→тон, Core 0/Core 1  
+modes/af_oled.cpp/.h — SSD1306 128×32 I2C bit-bang, статус + скролл  
+
+cw dec on|off, cw wpm <5..60>, cw sql <0..0.9>,  
+cw tx <текст>, cw txwpm <5..60>, cw abort  
+
+| GP14 | OLED SDA (I2C bit-bang) | — |  
+| GP15 | OLED SCL (I2C bit-bang) | — |  
