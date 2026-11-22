@@ -23,17 +23,17 @@
 struct cwtx_sym_t { char ch; uint8_t len; uint8_t bits; };  
   
 static const cwtx_sym_t CWTX_TAB[] = {  
-    {'A',2,0b10},{'B',4,0b0111},{'C',4,0b0101},{'D',3,0b011},{'E',1,0b1},  
-    {'F',4,0b0100},{'G',3,0b001},{'H',4,0b0000},{'I',2,0b00},{'J',4,0b1000},  
-    {'K',3,0b010},{'L',4,0b0010},{'M',2,0b11},{'N',2,0b01},{'O',3,0b111},  
-    {'P',4,0b0110},{'Q',4,0b1101},{'R',3,0b010},{'S',3,0b000},{'T',1,0b0},  
-    {'U',3,0b100},{'V',4,0b1000},{'W',3,0b100},{'X',4,0b1001},{'Y',4,0b1011},  
-    {'Z',4,0b1100},  
+    {'A',2,0b01},{'B',4,0b1000},{'C',4,0b1010},{'D',3,0b100},{'E',1,0b0},    
+    {'F',4,0b0010},{'G',3,0b110},{'H',4,0b0000},{'I',2,0b00},{'J',4,0b0111},    
+    {'K',3,0b101},{'L',4,0b0100},{'M',2,0b11},{'N',2,0b10},{'O',3,0b111},      
+    {'P',4,0b0110},{'Q',4,0b1101},{'R',3,0b010},{'S',3,0b000},{'T',1,0b1},    
+    {'U',3,0b001},{'V',4,0b0001},{'W',3,0b011},{'X',4,0b1001},{'Y',4,0b1011},    
+    {'Z',4,0b1100},    
     {'0',5,0b11111},{'1',5,0b01111},{'2',5,0b00111},{'3',5,0b00011},  
     {'4',5,0b00001},{'5',5,0b00000},{'6',5,0b10000},{'7',5,0b11000},  
     {'8',5,0b11100},{'9',5,0b11110},  
     {'.',6,0b010101},{',',6,0b110011},{'?',6,0b001100},{'/',5,0b10010},  
-    {'=',5,0b10001},{'+',5,0b01010},{'-',6,0b10000 | 0b1}, // -....- = 0b100001  
+    {'=',5,0b10001},{'+',5,0b01010},{'-',6,0b100001}, // -....-    
     {' ',0,0},  
 };  
 #define CWTX_TAB_LEN  (sizeof(CWTX_TAB)/sizeof(CWTX_TAB[0]))  
@@ -62,7 +62,8 @@ static volatile uint8_t  cwtx_bits;       // биты текущего симв�
 static volatile uint8_t  cwtx_blen;       // элементов в символе  
 static volatile uint8_t  cwtx_bpos;       // текущий элемент  
 static volatile uint8_t  cwtx_gap;        // пауза после символа, в точках (1/3/7)  
-static volatile bool     cwtx_active;     // идёт передача  
+static volatile bool     cwtx_active;     // идёт передача    
+static volatile bool     cwtx_tail;       // хвост после последнего элемента подан    
   
 // Огибающая: позиция внутри элемента для raised-cosine  
 static volatile uint32_t cwtx_el_pos;     // отсчётов от начала элемента  
@@ -92,12 +93,9 @@ static inline int32_t cwtx_env(uint32_t pos, uint32_t len) {
 // ---------------------------------------------------------------------------  
 // Core 1: следующий отсчёт. Вызывается на каждый выходной сэмпл в TX-режиме.  
 // ---------------------------------------------------------------------------  
-int16_t cwtx_sample(void) {  
-    if (!cwtx_active) return 0;  
-  
-    // фаза элемента/паузы истекла — ждём, пока Core 0 подаст следующий  
-    if (cwtx_el_rem == 0) return 0;  
-    cwtx_el_rem--;  
+int16_t cwtx_sample(void) {    
+    if (cwtx_el_rem == 0) return 0;   // ждём, пока Core 0 подаст следующую фазу    
+    cwtx_el_rem--;    
   
     // NCO: непрерывная фаза  
     cwtx_phase += cwtx_nco_step;  
@@ -153,10 +151,18 @@ void cwtx_poll(void) {
         return;                                       // элементы подаст след. вызов  
     }  
   
-    // очередь пуста — конец передачи  
-    cwtx_active = false;  
-    cwtx_key = false;  
-}  
+    // очередь пуста — хвост ~7 точек тишины, потом конец передачи.    
+    // Отдельный флаг: cwtx_gap нельзя использовать как метку —    
+    // ветка паузы выше съест её и хвост зациклится.    
+    if (!cwtx_tail) {    
+        cwtx_tail = true;    
+        cwtx_key = false;    
+        cwtx_el_rem = 7 * cwtx_dot;   // тишина-хвост, доигрывается Core 1    
+    } else {    
+        cwtx_active = false;    
+        cwtx_key = false;    
+    }    
+}    
   
 // ---------------------------------------------------------------------------  
 // Core 0: API  
@@ -167,9 +173,10 @@ void cwtx_init(uint32_t tone_hz) {
     cwtx_nco_step = (uint32_t)(((uint64_t)tone_hz << 32) / AF_FS_OUT_HZ);  
     cwtx_phase = 0;  
     cwtx_rise = (AF_FS_OUT_HZ * CWTX_RISE_MS) / 1000u;  
-    cwtx_set_wpm(20);  
-    cwtx_active = false;  
-    cwtx_tlen = cwtx_tpos = 0;  
+    cwtx_set_wpm(20);    
+    cwtx_active = false;    
+    cwtx_tail = false;    
+    cwtx_tlen = cwtx_tpos = 0;    
     Serial.printf("[CWTX] init tone=%lu Hz rise=%lu ms\n",  
                   (unsigned long)tone_hz, (unsigned long)CWTX_RISE_MS);  
 }  
@@ -189,20 +196,22 @@ bool cwtx_send(const char* text) {
     cwtx_tpos = 0;  
     cwtx_bpos = cwtx_blen = 0;  
     cwtx_gap = 0;  
-    cwtx_el_rem = 0;  
-    cwtx_key = false;  
-    cwtx_active = true;  
-    return true;  
+    cwtx_el_rem = 0;    
+    cwtx_key = false;    
+    cwtx_tail = false;    
+    cwtx_active = true;    
+    return true;    
 }  
   
 bool cwtx_busy(void) { return cwtx_active; }  
   
-void cwtx_abort(void) {  
-    cwtx_active = false;  
-    cwtx_key = false;  
-    cwtx_el_rem = 0;  
-    cwtx_tlen = cwtx_tpos = 0;  
-}  
+void cwtx_abort(void) {    
+    cwtx_active = false;    
+    cwtx_key = false;    
+    cwtx_el_rem = 0;    
+    cwtx_tail = false;    
+    cwtx_tlen = cwtx_tpos = 0;    
+}    
 
 void cwtx_set_tone(uint32_t tone_hz) {  
     cwtx_nco_step = (uint32_t)(((uint64_t)tone_hz << 32) / AF_FS_OUT_HZ);  

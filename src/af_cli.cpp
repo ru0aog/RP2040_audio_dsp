@@ -860,11 +860,12 @@ static bool cli_param_try(char* line) {
         return true;    
     }    
   
-    int32_t val;  
-    if (best->type == PT_ONOFF) {  
-        if      (strncmp(v, "on", 2) == 0)  val = 1;  
-        else if (strncmp(v, "off", 3) == 0) val = 0;  
-        else { Serial.printf("# ERR: %s on|off\n", best->label); return true; }  
+    int32_t val;    
+    if (best->type == PT_ONOFF) {    
+        if      (strncmp(v, "on", 2) == 0)  val = 1;    
+        else if (strncmp(v, "off", 3) == 0) val = 0;    
+        else return false;   // не on|off — это не метка, а подкоманда (cw tx, cw abort):  
+                             // отдаём строку в cli_exec (она ещё не тронута strtok)  
     } else if (best->type == PT_GAIN) {    
         val = (int32_t)(strtof(v, NULL) * 256.0f + 0.5f);   // ввод множителем: 1.5 -> 384    
     } else if (best->type == PT_X100) {    
