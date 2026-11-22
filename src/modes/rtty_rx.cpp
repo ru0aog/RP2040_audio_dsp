@@ -4,9 +4,10 @@
 //     -> mix(space) -> boxcar(Tбит) -> env_s -> clipped ATC v3 -> бит-автомат  
 // AFC: dphi между boxcar-суммами на стробах битов, кламп +-22.7 Гц, k=0.25.  
 // Захват: RSID (rsid_rx.cpp) или сканер Гёрцеля (пара пиков со сдвигом 170).  
-// Обвязка rttydec_*: Core 1 push = децимация /4 + сканер/декодер (тяжёлая    
-// часть на Core 1, разгрузка Core 0); в SPSC-очередь идут только символы.    
-// Core 0 poll: дренаж очереди -> Serial/OLED + таймауты lost/false-lock.    
+// Обвязка rttydec_*: Core 1 push = децимация /4; дальше по состоянию:      
+//   SCAN  — отсчёты в SPSC-очередь -> сканер Гёрцеля на Core 0 (poll);      
+//   TRACK — миксеры/boxcar/ATC/бит-автомат на Core 1, символы в chq.      
+// Core 0 poll: сканер + дренаж chq -> Serial/OLED + таймауты lost/false-lock.        
 #include "rtty_rx.h"    
 // #include "rsid_rx.h"     // RSID временно отключён — экономия ~50 КБ RAM   
 #include "af_oled.h"        // af_oled_putc — эхо декодированного текста на экран  
@@ -89,10 +90,23 @@ static const char *baudot_rus[32] = {
 #define MTK2_LAT  0x1F  
 #define MTK2_FIG  0x1B  
   
-// Очередь декодированных байт Core1->Core0 (UTF-8 кириллица идёт побайтно).    
-#define RTTY_CHQ_LEN 256    
-static volatile uint8_t  chq[RTTY_CHQ_LEN];    
-static volatile uint16_t chq_head = 0, chq_tail = 0;    
+// Очередь декодированных байт Core1->Core0 (UTF-8 кириллица идёт побайтно).      
+#define RTTY_CHQ_LEN 256      
+static volatile uint8_t  chq[RTTY_CHQ_LEN];      
+static volatile uint16_t chq_head = 0, chq_tail = 0;      
+  
+// Очередь децимированных отсчётов Core1->Core0 для сканера (только в SCAN).      
+#define RTTY_SQ_LEN 256      
+static volatile int16_t  sq[RTTY_SQ_LEN];      
+static volatile uint16_t sq_head = 0, sq_tail = 0;      
+      
+static void sq_put(int16_t v) {             // Core 1      
+    uint16_t n = (uint16_t)((sq_head + 1) & (RTTY_SQ_LEN - 1));      
+    if (n == sq_tail) { rtty_dropped_cnt++; return; }  // Core 0 не успевает      
+    sq[sq_head] = v;      
+    __dmb();      
+    sq_head = n;      
+}       
     
 static void chq_put(uint8_t b) {          // Core 1    
     uint16_t n = (uint16_t)((chq_head + 1) & (RTTY_CHQ_LEN - 1));    
@@ -416,8 +430,9 @@ static int push_decim = 0;              // счётчик децимации /4 
 static volatile uint32_t rtty_dropped_cnt = 0;  // не используется — оставлен для stats    
   
 void rttydec_init(void) {    
-    chq_head = chq_tail = 0;    
-    push_decim = 0;    
+    chq_head = chq_tail = 0;      
+    sq_head = sq_tail = 0;      
+    push_decim = 0;      
     rtty_dropped_cnt = 0;    
     memset(&rrx, 0, sizeof(rrx));    
     rrx.fs = RTTY_DFS;                 // 3866 — Fs после децимации    
@@ -434,22 +449,29 @@ void rttydec_init(void) {
                   state == RTTY_ST_SCAN ? "scan" : "track");    
 }  
   
-void rttydec_push(int16_t x) {          // Core 1, горячий путь — вся обработка    
-    if (!rtty_active) return;    
-    if (++push_decim < RTTY_DECIM) return;    
-    push_decim = 0;    
-    float xd = (float)x;                // 3866 Гц    
-    if (state == RTTY_ST_SCAN) {    
-        scan_sample(xd);    
-    } else {    
-        rtty_rx_sample(xd, 0.0f);       // моно: xq=0    
-    }    
-}    
-  
-void rttydec_poll(void) {               // Core 0, из loop()      
+void rttydec_push(int16_t x) {          // Core 1, горячий путь      
     if (!rtty_active) return;      
-      
-    // Потеря сигнала в TRACK: 5 с без валидных символов -> перезахват        
+    if (++push_decim < RTTY_DECIM) return;      
+    push_decim = 0;      
+    if (state == RTTY_ST_SCAN) {      
+        sq_put(x);                      // сканер — на Core 0 (poll)      
+    } else {      
+        rtty_rx_sample((float)x, 0.0f); // декодер — на Core 1, моно: xq=0      
+    }      
+}      
+  
+void rttydec_poll(void) {               // Core 0, из loop()        
+    if (!rtty_active) return;        
+        
+    // Сканер на Core 0: дренаж децимированных отсчётов в банк Гёрцеля.      
+    // В TRACK очередь не наполняется (push идёт в декодер) — цикл пуст.      
+    while (sq_tail != sq_head) {      
+        int16_t v = sq[sq_tail];      
+        sq_tail = (uint16_t)((sq_tail + 1) & (RTTY_SQ_LEN - 1));      
+        if (state == RTTY_ST_SCAN) scan_sample((float)v);      
+    }      
+        
+    // Потеря сигнала в TRACK: 5 с без валидных символов -> перезахват          
     if (state == RTTY_ST_TRACK && millis() - track_lost_ms > 5000) {        
         state = RTTY_ST_SCAN;        
         scan_init();        
@@ -497,8 +519,9 @@ void rttydec_poll(void) {               // Core 0, из loop()
 }      
   
 void rttydec_stop(void) {      
-    rtty_active = false;               // push сразу перестаёт работать    
-    chq_head = chq_tail = 0;      
+    rtty_active = false;               // push сразу перестаёт работать      
+    chq_head = chq_tail = 0;        
+    sq_head = sq_tail = 0;        
 }      
   
 // ---- настройки ----  
