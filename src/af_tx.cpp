@@ -65,7 +65,7 @@ typedef struct {
     
 static tx_fir_t tx_pre, tx_post;      
   
-// --- RTTY TX: отдельный полосовой FIR 200..1800 Гц (как RX-band при rtty on) ---  
+// --- RTTY TX: отдельный полосовой FIR 700..1400 Гц Гц (как RX-band при rtty on) ---  
 // Свой экземпляр: речевой tx_pre трогать нельзя — он настроен под txband.  
 #define TX_RTTY_FIR_N    127     // скаты ~±100 Гц, подавление ~-90 дБ 
 #define TX_RTTY_LO_HZ    700u    // нижний срез фильтра
@@ -674,15 +674,21 @@ static inline int32_t __not_in_flash_func(tx_dc_block)(int32_t x) {
     return y;    
 }    
 
-// RTTY TX: прогон отсчёта rttytx_sample() через полосовой 200..1800.  
-// Вызывается из af_dsp_poll вместо прямого rttytx_sample().  
-int16_t __not_in_flash_func(af_tx_rtty_fir_push)(int32_t x) {    
-    int32_t y = tx_fir_push(&tx_rtty_fir1, x);    
-    y = tx_fir_push(&tx_rtty_fir2, y);        // каскад: скаты и подавление удваиваются    
-    if (y >  32767) y =  32767;    
-    if (y < -32768) y = -32768;    
-    return (int16_t)y;    
-}    
+// RTTY/CW TX: прогон отсчёта через каскадный полосовой 700..1400.    
+// Вызывается из af_dsp_poll вместо прямого rttytx_sample()/cwtx_sample().    
+// DC-blocker на выходе: ключевой тон имеет ненулевое среднее (NCO    
+// останавливается на произвольной фазе) — EMA вычитает DC, срез ~25 Гц.    
+static int32_t tx_rtty_dc = 0;   // EMA постоянной составляющей, Q15    
+  
+int16_t __not_in_flash_func(af_tx_rtty_fir_push)(int32_t x) {      
+    int32_t y = tx_fir_push(&tx_rtty_fir1, x);      
+    y = tx_fir_push(&tx_rtty_fir2, y);        // каскад: скаты и подавление удваиваются      
+    tx_rtty_dc += (y - tx_rtty_dc) >> 10;     // EMA ~25 Гц @15.4 ksps    
+    y -= tx_rtty_dc;                          // вычесть DC    
+    if (y >  32767) y =  32767;      
+    if (y < -32768) y = -32768;      
+    return (int16_t)y;      
+}      
   
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {        
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
@@ -801,7 +807,8 @@ void af_tx_init(void) {
     tx_post.taps = tx_post_taps; tx_post.n = TX_POST_FIR_N;           
     tx_rtty_fir_design();    
     memset(&tx_rtty_fir1, 0, sizeof(tx_rtty_fir1));    
-    memset(&tx_rtty_fir2, 0, sizeof(tx_rtty_fir2));    
+    memset(&tx_rtty_fir2, 0, sizeof(tx_rtty_fir2));  
+    tx_rtty_dc = 0;    
     tx_rtty_fir1.taps = tx_rtty_taps;    
     tx_rtty_fir1.n    = TX_RTTY_FIR_N;    
     tx_rtty_fir2.taps = tx_rtty_taps;    

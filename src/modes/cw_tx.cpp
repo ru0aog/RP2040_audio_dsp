@@ -17,7 +17,9 @@
 #include "cw_tx.h"  
 #include "../af_config.h"     // AF_FS_OUT_HZ
 #include "af_oled.h"          // эхо передаваемого текста на OLED
-  
+
+#define CWTX_AMP  10000   // ~0.43 FS — ослабление на выходе, запас под FIR (norm=2/sum)    
+
 // ---------------------------------------------------------------------------  
 // Таблица Морзе: битовое поле элементов, MSB-first, 1=тире 0=точка.  
 // ---------------------------------------------------------------------------  
@@ -123,9 +125,9 @@ int16_t cwtx_sample(void) {
   
     if (!cwtx_key) return 0;   // пауза — тишина, фаза крутится  
   
-    int32_t env = cwtx_env(cwtx_el_pos, cwtx_el_len);  
-    cwtx_el_pos++;  
-    return (int16_t)((tone * env) >> 15);  
+    int32_t env = cwtx_env(cwtx_el_pos, cwtx_el_len);    
+    cwtx_el_pos++;    
+    return (int16_t)((((tone * env) >> 15) * CWTX_AMP) >> 15);   // ослабление после огибающей    
 }  
   
 // ---------------------------------------------------------------------------  
@@ -202,11 +204,10 @@ void cwtx_poll(void) {
 // ---------------------------------------------------------------------------  
 // Core 0: API  
 // ---------------------------------------------------------------------------  
-#define CWTX_AMP  14000   // ~0.43 FS — запас под FIR (norm=2/sum) и клиппер  
-  
-void cwtx_init(uint32_t tone_hz) {    
-    for (uint32_t i = 0; i < CWTX_LUT_LEN; i++)      
-        cwtx_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / CWTX_LUT_LEN) * (float)CWTX_AMP);      
+   
+void cwtx_init(uint32_t tone_hz) {      
+    for (uint32_t i = 0; i < CWTX_LUT_LEN; i++)        
+        cwtx_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / CWTX_LUT_LEN) * 32767.0f);            
     for (uint32_t i = 0; i <= CWTX_LUT_LEN / 4; i++)   // полная шкала — огибающая не ослабляется  
         cwtx_env_lut[i] = (int16_t)(sinf(2.0f * (float)M_PI * (float)i / CWTX_LUT_LEN) * 32767.0f);  
     cwtx_nco_step = (uint32_t)(((uint64_t)tone_hz << 32) / AF_FS_OUT_HZ);  
@@ -257,6 +258,6 @@ void cwtx_set_tone(uint32_t tone_hz) {
     cwtx_nco_step = (uint32_t)(((uint64_t)tone_hz << 32) / AF_FS_OUT_HZ);  
 }  
 
-uint32_t cwtx_tone_hz(void) {  
-    return (uint32_t)(((uint64_t)cwtx_nco_step * AF_FS_OUT_HZ) >> 32);  
-}  
+uint32_t cwtx_tone_hz(void) {    
+    return (uint32_t)((((uint64_t)cwtx_nco_step * AF_FS_OUT_HZ) + (1u << 31)) >> 32);  // +0.5 — округление    
+}    

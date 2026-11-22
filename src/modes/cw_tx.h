@@ -7,7 +7,7 @@
 #pragma once  
 #include <Arduino.h>  
   
-#define CWTX_RISE_MS     5u     // фронт/спад посылки, мс (raised cosine)  
+#define CWTX_RISE_MS     4u     // фронт/спад посылки, мс (raised cosine)  
 #define CWTX_LUT_LEN     256u   // таблица синуса, отсчётов на период  
   
 // ---- Core 0 ----    
