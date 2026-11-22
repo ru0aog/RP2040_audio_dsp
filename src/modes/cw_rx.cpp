@@ -102,11 +102,15 @@ static void update_tracking(int d1, int d2) {
     if (d1 <= 0 || d2 <= 0) return;  
     if (d1 > d2 && d1 > 4 * d2) return;  
     if (d2 > d1 && d2 > 4 * d1) return;  
-    float avg = (float)(d1 + d2) * 0.5f;      // ≈ (dot+dash)/2 ≈ 2*dot  
-    two_dots = decayavg(two_dots, avg, 16.0f);  
-    dot_win  = two_dots * 0.5f;  
-    if (dot_win < 1.0f) dot_win = 1.0f;  
-    spike_win = dot_win * 0.5f;               // отсев всплесков < полуточки  
+    float avg = (float)(d1 + d2) * 0.5f;      // ≈ (dot+dash)/2 ≈ 2*dot    
+    two_dots = decayavg(two_dots, avg, 16.0f);    
+    // Клампы: dot 5..60 WPM = 240..20 мс = 48..4 окон по 5 мс.    
+    // Без них трекинг на шумовых парах схлопывал two_dots -> все T.    
+    if (two_dots < 8.0f)  two_dots = 8.0f;    // dot >= 4 окна (60 WPM)    
+    if (two_dots > 96.0f) two_dots = 96.0f;   // dot <= 48 окон (5 WPM)    
+    dot_win  = two_dots * 0.5f;    
+    spike_win = dot_win * 0.5f;               // отсев всплесков < полуточки    
+    if (spike_win < 1.0f) spike_win = 1.0f;   // не опускать ниже 1 окна    
 }  
   
 static void cw_reset_timing(float wpm) {  
@@ -115,9 +119,10 @@ static void cw_reset_timing(float wpm) {
     two_dots  = dot_win * 2.0f;  
     spike_win = dot_win * 0.5f;  
   
-    win_idx = 0; tone_start = 0; key_up_at = 0;  
-    last_elem = 0; code = 1; space_sent = true; word_started = false;    
-    rx_state = RS_IDLE;  
+    win_idx = 0; tone_start = 0; key_up_at = 0;    
+    last_elem = 0; code = 1; space_sent = true; word_started = false;      
+    sq_open = (sq_level == 0.0f);   // сквелч off = открыт, иначе закрыт до сигнала    
+    rx_state = RS_IDLE;    
 }  
   
 void cw_rx_init(uint32_t center_hz) {  
@@ -179,7 +184,16 @@ static void process_window(float value) {
     else if (diff < sq_level * 0.5f) sq_open = false;    
   
     win_idx++;  
-  
+
+    // Страж: тон длиннее ~2 с (400 окон) — залипший keydown или    
+    // несущая без манипуляции. Принудительный keyup + сброс AGC,    
+    // иначе один гигантский elem ломает трекинг (все T).    
+    if (rx_state == RS_IN_TONE && (win_idx - tone_start) > 400) {    
+        rx_state  = RS_IDLE;    
+        last_elem = 0;    
+        agc_peak  = sig_avg > 1e-6f ? sig_avg : 1.0f;    
+    }    
+
     // --- гистерезисный детектор ключа ---  
     if (v > upper && rx_state != RS_IN_TONE) {  
         // keydown  
@@ -195,8 +209,16 @@ static void process_window(float value) {
             rx_state = RS_IDLE;  
             return;  
         }  
-        // трекинг скорости по паре элементов  
-        if (last_elem > 0) {  
+        // Элемент длиннее 10*dot — не тире, а залипание/несущая:    
+        // в трекинг не пускать, в код — как тире (или отбросить).    
+        if ((float)elem > two_dots * 10.0f) {    
+            last_elem = 0;    
+            rx_state  = RS_AFTER_TONE;    
+            space_sent = false;    
+            // не добавляем в code — это не элемент Морзе    
+        } else {    
+        // трекинг скорости по паре элементов    
+        if (last_elem > 0) {    
             if (elem > 2 * last_elem && elem < 4 * last_elem)  
                 update_tracking(last_elem, elem);  
             if (last_elem > 2 * elem && last_elem < 4 * elem)  
@@ -204,11 +226,12 @@ static void process_window(float value) {
         }  
         last_elem = elem;  
   
-        bool dash = ((float)elem > two_dots);  
-        code = (uint8_t)((code << 1) | (dash ? 1 : 0));  
-        space_sent = false;  
-        rx_state = RS_AFTER_TONE;  
-    }  
+        bool dash = ((float)elem > two_dots);    
+        code = (uint8_t)((code << 1) | (dash ? 1 : 0));    
+        space_sent = false;    
+        rx_state = RS_AFTER_TONE;    
+        }    
+    }    
   
     // --- тайминг пауз (char gap / word space) ---  
     if (rx_state != RS_IN_TONE) {  
