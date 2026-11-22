@@ -1335,7 +1335,8 @@ bool af_dsp_tx_on(void) { return tx_on; }
 bool af_dsp_cwtx_start(const char* text) {      
     if (!cwtx_send(text)) return false;  // очередь занята — посылка не встала,  
                                          // TX не поднимаем, флаг не взводим  
-    cwtx_set_tone((float)cw_f0);   // тон следует за текущим cw f0      
+    //cwtx_set_tone((float)cw_f0);   // тон следует за текущим cw f0      
+    cwtx_set_tone(1000.0f);        // тон передачи фиксирован: 1000 Гц    
     cwtx_started = true;      
     af_dsp_set_tx(true);      
     return true;  

@@ -1221,7 +1221,7 @@ static void cli_exec(char* line) {
             while (*v == ' ' || *v == '\t') ++v; // пропустить ведущие пробелы  
             if (*v == '\0') { Serial.println("# ERR: cw tx <текст>"); return; }  
             if (af_dsp_cwtx_start(v)) {  
-                af_oled_putc('>');      // маркер начала передачи на экране  
+                // '>' печатает сам rttytx_send — здесь не дублируем
                 Serial.printf("# OK cw tx: %s\n", v);  
             } else {  
                 Serial.println("# ERR cw tx: busy или пустая посылка");  

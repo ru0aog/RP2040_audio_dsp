@@ -344,10 +344,13 @@ void af_oled_putc(char c) {                 // скролл-вывод в стр
 void af_oled_status(void) {                 // строка 0: режим + полоса + f0    
     if (!oled_ok) return;    
     char tmp[48];    
-    if (af_dsp_cwtx_busy()) {    
-        snprintf(tmp, sizeof(tmp), "ПРД CW %luHz",    
-                 (unsigned long)af_dsp_cw_freq());    
-    } else if (af_dsp_cw_on()) {      
+    if (af_dsp_cwtx_busy()) {      
+        snprintf(tmp, sizeof(tmp), "ПРД CW %luHz",      
+                 (unsigned long)af_dsp_cw_freq());      
+    } else if (af_dsp_rttytx_busy()) {    
+        snprintf(tmp, sizeof(tmp), "ПРД RTTY %dHz",    
+                 (int)((rttydec_f_mark() + rttydec_f_space()) * 0.5f));    
+    } else if (af_dsp_cw_on()) {         
         snprintf(tmp, sizeof(tmp), "ПРМ CW %luHz",      
                  (unsigned long)af_dsp_cw_freq());      
     } else if (af_dsp_rtty_on()) {        
