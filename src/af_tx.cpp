@@ -678,17 +678,20 @@ static inline int32_t __not_in_flash_func(tx_dc_block)(int32_t x) {
 // Вызывается из af_dsp_poll вместо прямого rttytx_sample()/cwtx_sample().    
 // DC-blocker на выходе: ключевой тон имеет ненулевое среднее (NCO    
 // останавливается на произвольной фазе) — EMA вычитает DC, срез ~25 Гц.    
-static int32_t tx_rtty_dc = 0;   // EMA постоянной составляющей, Q15    
-  
-int16_t __not_in_flash_func(af_tx_rtty_fir_push)(int32_t x) {      
-    int32_t y = tx_fir_push(&tx_rtty_fir1, x);      
-    y = tx_fir_push(&tx_rtty_fir2, y);        // каскад: скаты и подавление удваиваются      
-    tx_rtty_dc += (y - tx_rtty_dc) >> 10;     // EMA ~25 Гц @15.4 ksps    
-    y -= tx_rtty_dc;                          // вычесть DC    
-    if (y >  32767) y =  32767;      
-    if (y < -32768) y = -32768;      
-    return (int16_t)y;      
-}      
+static int32_t tx_rtty_dc_x1 = 0, tx_rtty_dc_y1 = 0;    
+    
+int16_t __not_in_flash_func(af_tx_rtty_fir_push)(int32_t x) {        
+    int32_t y = tx_fir_push(&tx_rtty_fir1, x);        
+    y = tx_fir_push(&tx_rtty_fir2, y);        // каскад: скаты и подавление удваиваются        
+    int32_t d = y - tx_rtty_dc_x1 + (int32_t)(((int64_t)32510 * tx_rtty_dc_y1) >> 15);    
+    if (d >  32767) d =  32767;    
+    if (d < -32768) d = -32768;    
+    tx_rtty_dc_x1 = y;    
+    tx_rtty_dc_y1 = d;    
+    if (d >  32767) d =  32767;        
+    if (d < -32768) d = -32768;        
+    return (int16_t)d;        
+}        
   
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {        
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
@@ -808,7 +811,8 @@ void af_tx_init(void) {
     tx_rtty_fir_design();    
     memset(&tx_rtty_fir1, 0, sizeof(tx_rtty_fir1));    
     memset(&tx_rtty_fir2, 0, sizeof(tx_rtty_fir2));  
-    tx_rtty_dc = 0;    
+    tx_rtty_dc_x1 = 0;    
+    tx_rtty_dc_y1 = 0;    
     tx_rtty_fir1.taps = tx_rtty_taps;    
     tx_rtty_fir1.n    = TX_RTTY_FIR_N;    
     tx_rtty_fir2.taps = tx_rtty_taps;    
