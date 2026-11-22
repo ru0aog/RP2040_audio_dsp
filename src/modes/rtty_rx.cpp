@@ -323,17 +323,33 @@ static void scan_sample(float x) {
         avg += p[t];  
         gtz[t].ar = gtz[t].ai = 0.0f;  
     }  
-    avg /= SCAN_NTONES;  
-    if (avg < 1.0f) avg = 1.0f;  
-  
-    // Пара (t, t+2): оба пика > 6x среднего — кандидат space/mark    
-    int best = -1; float best_p = 0.0f;    
-    for (int t = 0; t + SCAN_SHIFT_T < SCAN_NTONES; t++) {    
-        float pp = fminf(p[t], p[t + SCAN_SHIFT_T]);    
-        if (p[t] > avg * 6.0f && p[t + SCAN_SHIFT_T] > avg * 6.0f && pp > best_p) {    
-            best_p = pp; best = t;    
-        }    
-    }    
+    avg /= SCAN_NTONES;    
+    if (avg < 1.0f) avg = 1.0f;    
+    
+    // Топ-пик — исключаем его из среднего: мешающая несущая (2792 Гц)    
+    // не должна завышать порог для остальных тонов.    
+    int i_top = 0;    
+    for (int t = 1; t < SCAN_NTONES; t++)    
+        if (p[t] > p[i_top]) i_top = t;    
+    float avg2 = (avg * SCAN_NTONES - p[i_top]) / (SCAN_NTONES - 1);    
+    if (avg2 < 1.0f) avg2 = 1.0f;    
+    
+    // Пара mark/space: для каждого пика t ищем партнёра в окне 170±45 Гц.    
+    // Порог 3x среднего — второй тон слабее и размазан между бинами.    
+    int best = -1, best_u = -1; float best_p = 0.0f;      
+    for (int t = 0; t < SCAN_NTONES; t++) {      
+        if (p[t] < avg2 * 3.0f) continue;      
+        float f_t = SCAN_F0 + t * SCAN_STEP;      
+        for (int u = t + 1; u < SCAN_NTONES; u++) {      
+            float f_u = SCAN_F0 + u * SCAN_STEP;      
+            float d = f_u - f_t;      
+            if (d < 125.0f) continue;      
+            if (d > 215.0f) break;      
+            if (p[u] < avg2 * 3.0f) continue;      
+            float pp = fminf(p[t], p[u]);      
+            if (pp > best_p) { best_p = pp; best = t; best_u = u; }      
+        }      
+    }      
   
     // --- ДИАГНОСТИКА: лучшая пара и топ-3 пика раз в секунду ---    
     {    
@@ -359,12 +375,12 @@ static void scan_sample(float x) {
     if (best >= 0 && best == scan_hit_tone) {    
         if (++scan_hit_n >= SCAN_NEED) {  
             // Захват: центр = середина пары  
-            float f_lo = SCAN_F0 + best * SCAN_STEP;  
-            float f_hi = SCAN_F0 + (best + SCAN_SHIFT_T) * SCAN_STEP;  
+            float f_lo = SCAN_F0 + best * SCAN_STEP;    
+            float f_hi = SCAN_F0 + best_u * SCAN_STEP;   // реальный партнёр, не t+2    
             rtty_tune((f_lo + f_hi) * 0.5f);  
             state = RTTY_ST_TRACK;  
-            Serial.printf("# rtty lock: mark=%.0f space=%.0f\n",  
-                          (double)rrx.f_mark, (double)rrx.f_space);  
+            Serial.printf("# rtty lock: mark=%d space=%d\n",    
+                          (int)rrx.f_mark, (int)rrx.f_space);    
             scan_hit_tone = -1; scan_hit_n = 0;  
             return;  
         }  
@@ -423,7 +439,7 @@ void rttydec_poll(void) {               // Core 0, из loop()
         rtty_q_tail = (uint16_t)((rtty_q_tail + 1) & (RTTYDEC_Q_LEN - 1));    
     
         if (state == RTTY_ST_SCAN) {    
-            if (++scan_decim >= 4) { scan_decim = 0; scan_sample((float)x); }    
+            if (++scan_decim >= 8) { scan_decim = 0; scan_sample((float)x); }    
             continue;                              // в SCAN не декодируем    
         }    
         rtty_rx_sample((float)x, 0.0f);            // моно: xq=0    
