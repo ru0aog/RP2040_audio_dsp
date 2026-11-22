@@ -25,3 +25,6 @@ void cw_rx_init(uint32_t center_hz);
 void cw_rx_push(int16_t sample);  
 void cw_rx_set_wpm(uint8_t wpm);  
 void cw_rx_stop(void);  
+// cw_rx.h  
+void cw_rx_set_sql(float lvl);  
+void cwdec_set_sql(float lvl);  

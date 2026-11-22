@@ -1179,7 +1179,12 @@ static void cli_exec(char* line) {
             if (w < 5) w = 5; if (w > 60) w = 60;    
             cwdec_set_wpm((uint8_t)w);    
             Serial.printf("# OK cw wpm=%d\n", w);    
-        }    
+        }
+        } else if (strcmp(sub, "sql") == 0) {    
+            float v = atof(arg);    
+            cwdec_set_sql(v);    
+            Serial.printf("# OK cw sql=%.2f\n", v);    
+        }
         else {    
             Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>|dec on|off|wpm <5..60>");    
         }    

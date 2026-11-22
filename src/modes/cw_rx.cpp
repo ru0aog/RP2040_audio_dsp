@@ -45,9 +45,12 @@ static uint32_t key_up_at;        // окно последнего спада к
 static float    dot_win;          // длина точки (окон), адаптивная  
 static float    two_dots;         // порог точка/тире (окон)  
 static float    spike_win;        // мин. длительность элемента (окон)  
-static int      last_elem;        // длительность предыдущего элемента (окон)  
-static uint8_t  code;             // сборка: 1 = старт-бит, dot=0, dash=1  
-static bool     space_sent;  
+static int      last_elem;        // длительность предыдущего элемента (окон)    
+static uint8_t  code;             // сборка: 1 = старт-бит, dot=0, dash=1    
+static bool     space_sent;    
+static bool     word_started;     // была напечатана буква — иначе пробел не нужен    
+static bool     sq_open;          // сквелч: сигнал над шумом    
+static float    sq_level = 0.25f; // порог открытия (norm_sig - norm_noise), 0=off    
   
 // состояние приёма (как cw_receive_state в FLDigi)  
 enum { RS_IDLE = 0, RS_IN_TONE, RS_AFTER_TONE };  
@@ -85,13 +88,13 @@ static char morse_decode(uint8_t c) {
     }  
 }  
   
-static void emit_char(void) {  
-    if (code > 1) {  
-        char ch = morse_decode(code);  
-        if (ch) Serial.write(ch);  
-    }  
-    code = 1;  
-}  
+static void emit_char(void) {    
+    if (code > 1) {    
+        char ch = morse_decode(code);    
+        if (ch && sq_open) { Serial.write(ch); word_started = true; }    
+    }    
+    code = 1;    
+}    
   
 // Подстройка two_dots по парам точка-тире / тире-точка (FLDigi update_tracking)  
 static void update_tracking(int d1, int d2) {  
@@ -112,7 +115,7 @@ static void cw_reset_timing(float wpm) {
     spike_win = dot_win * 0.5f;  
   
     win_idx = 0; tone_start = 0; key_up_at = 0;  
-    last_elem = 0; code = 1; space_sent = true;  
+    last_elem = 0; code = 1; space_sent = true; word_started = false;    
     rx_state = RS_IDLE;  
 }  
   
@@ -164,9 +167,14 @@ static void process_window(float value) {
     float norm_sig   = sig_avg     / agc_peak;  
     float v          = value       / agc_peak;  
   
-    float diff  = norm_sig - norm_noise;  
-    float upper = norm_sig   - 0.2f * diff;   // порог keydown  
-    float lower = norm_noise + 0.7f * diff;   // порог keyup (ближе к шуму)  
+    float diff  = norm_sig - norm_noise;    
+    float upper = norm_sig   - 0.2f * diff;   // порог keydown    
+    float lower = norm_noise + 0.7f * diff;   // порог keyup (ближе к шуму)    
+  
+    // Сквелч с гистерезисом: открывается при явном превышении сигнала    
+    // над шумом, закрывается ниже — на чистом шуме diff ≈ 0, печать глуха.    
+    if (diff > sq_level)        sq_open = true;    
+    else if (diff < sq_level * 0.5f) sq_open = false;    
   
     win_idx++;  
   
@@ -208,10 +216,14 @@ static void process_window(float value) {
             rx_state  = RS_IDLE;  
             last_elem = 0;  
         }  
-        if (!space_sent && gap > two_dots * 2.0f) {  
-            Serial.write(' ');                 // пауза > 4*dot -> слово  
-            space_sent = true;  
-        }  
+        // Пробел: только после напечатанной буквы и паузы ~7 точек    
+        // (стандартный word gap). 4*dot давал лишние пробелы внутри    
+        // слов при неровной манипуляции и на шумовых срабатываниях.    
+        if (!space_sent && word_started && gap > two_dots * 3.5f) {    
+            Serial.write(' ');    
+            space_sent = true;    
+            word_started = false;    
+        }    
     }  
 }  
   
@@ -245,7 +257,7 @@ void cw_rx_stop(void) {
     if (!cw_active) return;  
     if (rx_state != RS_IDLE && code > 1) {  
         emit_char();                        // добить последнюю букву  
-        if (!space_sent) Serial.write(' '); // закрыть слово  
+        if (!space_sent && word_started) Serial.write(' '); // закрыть слово    
     }  
     cw_active = false;  
     cw_reset_timing((float)CW_DEFAULT_WPM);  
@@ -292,6 +304,13 @@ void cwdec_poll(void) {
 }  
   
 void cwdec_set_wpm(uint8_t wpm) { cw_rx_set_wpm(wpm); }  
+
+// cw_rx.cpp — рядом с cw_rx_set_wpm  
+void cw_rx_set_sql(float lvl) {          // 0 = сквелч off, типично 0.15..0.4  
+    if (lvl < 0.0f || lvl > 0.9f) return;  
+    sq_level = lvl;  
+    if (lvl == 0.0f) sq_open = true;     // off = всегда открыт  
+}  
   
 void cwdec_stop(void) {  
     cwdec_q_head = cwdec_q_tail = 0;   // хвост очереди выбрасываем  
@@ -299,3 +318,5 @@ void cwdec_stop(void) {
 }  
   
 uint32_t cwdec_dropped(void) { return cwdec_dropped_cnt; }  
+// cw_rx.cpp, обвязка  
+void cwdec_set_sql(float lvl) { cw_rx_set_sql(lvl); }  

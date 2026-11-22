@@ -23,10 +23,11 @@
 #include "src/af_gpio_ctl.h"
 #include "src/af_store.h"
 #include "src/af_led.h"
-#include "src/af_voice.h"     // подмес голосовых клипов в выход
+#include "src/af_voice.h"         // подмес голосовых клипов в выход
 #include "src/af_rec.h"           // цифровой магнитофон: RAM-буфер ~7.8 с (децимация ×2)
 #include "src/af_fm.h"            // файловый менеджер: FAT12-диск 16 КБ, SET.TXT
-  
+#include "src/modes/cw_rx.h"      // cwdec_set_wpm — стартовая скорость декодера
+
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    
 static uint32_t core0_win_ms = 0;    
@@ -207,10 +208,11 @@ void loop() {
     af_fm_poll();       // отложенная регенерация SET.TXT (stale-флаг) 
     af_rec_poll();      // магнитофон: контроль записи (авто-стоп по буферу)  
     af_gpio_ctl_poll();      
-    af_pwm_poll();      // ×3: заполняем duty-кольцо быстрее, чем один проход loop    
-    af_pwm_poll();    
-    af_pwm_poll();    
-    af_usb_poll();      // и ещё раз в конце — сглаживает джиттер итерации  
+    af_pwm_poll();      // ×3: заполняем duty-кольцо быстрее, чем один проход loop      
+    af_pwm_poll();      
+    af_pwm_poll();      
+    cwdec_poll();       // CW-декодер: дренаж очереди -> текст в Serial    
+    af_usb_poll();      // и ещё раз в конце — сглаживает джиттер итерации     
 
     watchdog_update();  
   
