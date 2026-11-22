@@ -1153,16 +1153,25 @@ bool af_dsp_set_nr(bool on) {
     return true;  
 }
 
-void af_dsp_set_rtty(bool on) {    
-    if (on && cw_on) af_dsp_set_cw(false);   // взаимоисключение    
-    if (on && !rtty_on) {    
-        rttydec_init();    
-        af_oled_clear();          // не тащить хвост CW-текста в строки 1-3    
+void af_dsp_set_rtty(bool on) {      
+    if (on && cw_on) af_dsp_set_cw(false);   // взаимоисключение      
+    if (on && !rtty_on) {      
+        rttydec_init();      
+        af_oled_clear();          // не тащить хвост CW-текста в строки 1-3      
+        // Сохранить полосу и поставить рабочую для RTTY:    
+        // 200..1800 Гц — покрывает сканер (300..1200) с запасом,    
+        // отрезает помеху 2792 Гц до отвода декодера.    
+        af_saved_lo_hz = af_lo_hz;      
+        af_saved_hi_hz = af_hi_hz;      
+        af_dsp_set_band(200, 1800);      
+    }      
+    if (!on && rtty_on) {    
+        rttydec_stop();    
+        af_dsp_set_band(af_saved_lo_hz, af_saved_hi_hz);  // вернуть полосу    
     }    
-    if (!on && rtty_on) rttydec_stop();    
-    rtty_on = on;    
-    af_oled_status();             // строка 0: "ПРМ RTTY <центр>Hz"    
-}    
+    rtty_on = on;      
+    af_oled_status();             // строка 0: "ПРМ RTTY <центр>Hz"      
+}       
 bool af_dsp_rtty_on(void) { return rtty_on; } 
 
 void af_dsp_set_cw(bool on) {  
