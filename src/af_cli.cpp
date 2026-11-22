@@ -41,7 +41,8 @@
 #include "af_fm.h"        // af_fm_request_sync — перерендер SET.TXT 
 #include "af_snr.h"  
 #include "modes/cw_rx.h"   // cwdec_set_wpm — стартовая скорость декодера  
-#include "modes/cw_tx.h"
+#include "modes/cw_tx.h"   // cwtx_set_wpm/cwtx_abort
+
 
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -77,7 +78,9 @@ static void cli_help(void) {
     Serial.println("#   cw noise <0..2000> — примесь шума эфира в CW");    
     Serial.println("#   cw dec on|off     — CW-декодер: текст в Serial (только при cw on)");    
     Serial.println("#   cw wpm <5..60>    — стартовая скорость декодера, WPM");      
-    Serial.println("#   cw sql <0..1>     — сквелч декодера (0 = off, 0.25 = дефолт)");      
+    Serial.println("#   cw sql <0..1>     — сквелч декодера (0 = off, 0.25 = дефолт)");
+    Serial.println("#   cw tx <текст>     — передать посылку CW (тон = cw f0, авто-возврат в RX)");  
+    Serial.println("#   cw txwpm <5..60>  — скорость передачи;  cw abort — оборвать посылку");  
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
     Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
     Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
@@ -1143,7 +1146,7 @@ static void cli_exec(char* line) {
     }
     else if (strcmp(cmd, "cw") == 0) {  
         char* sub = strtok(NULL, " \t");  
-        if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..2000>|dec on|off|wpm <5..60>|sql <0..1>"); return; }      
+        if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..2000>|dec on|off|wpm <5..60>|sql <0..1>|tx <текст>|txwpm <5..60>|abort");   return; }      
   
         if (strcmp(sub, "on") == 0) {  
             af_dsp_set_cw(true);
