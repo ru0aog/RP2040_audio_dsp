@@ -67,9 +67,9 @@ static tx_fir_t tx_pre, tx_post;
   
 // --- RTTY TX: отдельный полосовой FIR 200..1800 Гц (как RX-band при rtty on) ---  
 // Свой экземпляр: речевой tx_pre трогать нельзя — он настроен под txband.  
-#define TX_RTTY_FIR_N    63  
-#define TX_RTTY_LO_HZ    200u  
-#define TX_RTTY_HI_HZ    1800u  
+#define TX_RTTY_FIR_N    127     // скаты ~±100 Гц, подавление ~-90 дБ 
+#define TX_RTTY_LO_HZ    500u    // нижний срез фильтра
+#define TX_RTTY_HI_HZ    1500u   // верхний срез фильтра
 static int16_t tx_rtty_taps[TX_RTTY_FIR_N];  
 static tx_fir_t tx_rtty_fir;  
       
