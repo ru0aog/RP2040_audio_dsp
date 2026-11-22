@@ -56,7 +56,7 @@ static volatile uint8_t  tx_clen;              // кодов в очереди
 static volatile uint8_t  tx_cpos;              // текущий код  
   
 // Эхо-строка исходного текста для OLED (печать по мере звучания)  
-#define RTTYTX_TEXT_LEN  96u  
+#define RTTYTX_TEXT_LEN 200   // байт: ~190 латиницы / ~95 кириллицы  
 static char     tx_echo[RTTYTX_TEXT_LEN];  
 static volatile uint8_t  tx_elen;  
 static volatile uint8_t  tx_epos;  

@@ -88,7 +88,8 @@ static void cli_help(void) {
     Serial.println("#   rtty scan on|off  — сканер тонов как fallback без RSID (дефолт on)");  
     Serial.println("#   rtty ctr <hz>     — ручной центр mark/space (отключает rsid/scan)");  
     Serial.println("#   rtty rev on|off   — инверсия полярности mark/space");  
-    Serial.println("#   rtty sql <0..1>   — сквелч декодера (0 = off, 0.15 = дефолт)");    
+    Serial.println("#   rtty sql <0..1>   — сквелч декодера (0 = off, 0.15 = дефолт)");
+    Serial.println("#   rtty dbg on|off   — диагностика # scan:/# trk: в Serial");    
     Serial.println("#   rtty tx <текст>   — передать посылку RTTY 45.45/170 (центр 1000 Гц, авто-возврат в RX)");    
     Serial.println("#   rtty abort        — оборвать посылку RTTY");    
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
@@ -766,7 +767,8 @@ static const af_param_t AF_PARAMS[] = {
     { "rtty",        PT_ONOFF, offsetof(af_bank_t, rtty_on),        P_SET(af_dsp_set_rtty) },  
     { "rtty scan",   PT_ONOFF, offsetof(af_bank_t, rtty_scan),      P_SET(rttydec_set_scan) },  
     { "rtty rsid",   PT_ONOFF, offsetof(af_bank_t, rtty_rsid),      P_SET(rttydec_set_rsid) },  
-    { "rtty rev",    PT_ONOFF, offsetof(af_bank_t, rtty_rev),       P_SET(rttydec_set_rev) },  
+    { "rtty rev",    PT_ONOFF, offsetof(af_bank_t, rtty_rev),       P_SET(rttydec_set_rev) },    
+    { "rtty dbg",    PT_ONOFF, offsetof(af_bank_t, rtty_dbg),       P_SET(rttydec_set_dbg) },    
     { "rtty ctr",    PT_U16,   offsetof(af_bank_t, rtty_ctr),       p_set_rtty_ctr },  
     { "rtty sql",    PT_X100,  offsetof(af_bank_t, rtty_sql_x100),  p_set_rtty_sql }, 
     { "agc",         PT_ONOFF, offsetof(af_bank_t, agc_on),         P_SET(af_dsp_set_agc) },    
@@ -2002,9 +2004,10 @@ void af_cli_init(void) {
     Serial.println("# CLI ready. 'help' — список команд.");  
 }  
   
-void af_cli_poll(void) {
-    static char line[64];
-    static uint8_t pos = 0;
+void af_cli_poll(void) {  
+    static char line[256];   // "rtty tx " + RTTYTX_TEXT_LEN(200) с запасом  
+    static uint8_t pos = 0;  
+    static bool overflow = false;  
 
     // CLI rec включил TX, а запись кончилась без команды stop
     // (авто-стоп по переполнению буфера в af_rec_poll) — вернуть RX.
@@ -2033,19 +2036,29 @@ void af_cli_poll(void) {
     
     while (Serial.available() > 0) {    
         char c = (char)Serial.read();  
-        if (c == '\r') continue;  
-        if (c == '\n') {  
-            line[pos] = '\0';  
-            cli_exec(line);  
-            pos = 0;  
-        } else if (c == ';') {              // CAT-команда Kenwood  
-            line[pos] = '\0';  
-            cat_execute(line);  
-            pos = 0;  
-        } else if (pos < sizeof(line) - 1) {  
-            line[pos++] = c;  
-        } else {  
-            pos = 0;  
-        }
+        if (c == '\r') continue;    
+        if (c == '\n') {    
+            if (overflow) {    
+                Serial.println("# ERR: line too long — dropped");    
+                overflow = false;    
+            } else {    
+                line[pos] = '\0';    
+                cli_exec(line);    
+            }    
+            pos = 0;    
+        } else if (c == ';') {              // CAT-команда Kenwood      
+            if (overflow) {      
+                Serial.println("# ERR: line too long — dropped");      
+            } else {      
+                line[pos] = '\0';      
+                cat_execute(line);      
+            }      
+            pos = 0;      
+            overflow = false;      
+        } else if (pos < sizeof(line) - 1) {    
+            line[pos++] = c;    
+        } else {    
+            overflow = true;   // не сбрасываем pos — хвост не исполнится как команда    
+        }  
     }  
 }
