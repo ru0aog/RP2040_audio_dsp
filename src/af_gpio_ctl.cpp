@@ -8,6 +8,8 @@
 //   GP8 — LOW -> TX (PTT); при playback магнитофона — выход PTT (LOW).    
 //   GP9 — LOW -> запись: тракт -> TX (микрофон), без PTT.    
 //   GP10 — LOW -> воспроизведение: тракт -> TX + PTT на GP8, звук в TX.    
+//   GP13/GP28 — селектор сообщения магнитофона/CW.TXT, 2 бита (LOW=1):    
+//     код 0..3 = строка CW.TXT или голосовой слот 1..4 (этапы 3-4).    
 //   Уровневая логика: LOW = активно, open = стоп.    
 //   sw_ptt_active: GP8 занят как выход — входная ветка PTT отсечена.      
 //   af_gpio_ptt_tx_on/off — то же для CLI (play voice_14 в TX+PTT).      
@@ -38,7 +40,8 @@ static gpio_ctl_t ctl_nt;        // GP6
 static gpio_ctl_t ctl_bypass;    // GP7
 static gpio_ctl_t ctl_ptt;       // GP8 — LOW -> TX    
 static gpio_ctl_t ctl_rec;       // GP9 — LOW -> запись магнитофона  
-static gpio_ctl_t ctl_play;      // GP10 — LOW -> воспроизведение  
+static gpio_ctl_t ctl_play;      // GP10 — LOW -> воспроизведение
+static gpio_ctl_t ctl_sel[2];    // GP13/GP28 — селектор сообщения, 2 бита (LOW=1)    
   
 static uint32_t t_next_poll = 0;      
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
@@ -51,7 +54,13 @@ uint8_t af_gpio_bank_code(void) { return bank_code; }
 // Последний загруженный банк 1..7 — в т.ч. в manual-режиме (bank_code=0).    
 // Для af_rec: слот магнитофона привязан к последнему активному банку.    
 uint8_t af_gpio_last_bank(void) { return last_bank; }      
-    
+
+// Текущий код селектора сообщений GP13/GP28: 0..3 (LOW=1).    
+// Индекс строки CW.TXT / голосового слота 1..4.    
+uint8_t af_gpio_msg_sel(void) {    
+    return (uint8_t)(ctl_sel[0].stable | (ctl_sel[1].stable << 1));    
+}    
+
 // Установить код активного банка извне (CLI 'load N') — чтобы stats      
 // 'bank=' отражал последний применённый банк, а не только пины.      
 // Пины при следующем изменении перезапишут через apply_bank.      
@@ -211,7 +220,10 @@ static void poll_pin(gpio_ctl_t* c) {
                 else if (c == &ctl_bypass) apply_bypass(raw);
                 else if (c == &ctl_ptt)    apply_ptt(raw);    
                 else if (c == &ctl_rec)    apply_rec(raw);  
-                else if (c == &ctl_play)   apply_play(raw);  
+                else if (c == &ctl_play)   apply_play(raw);    
+                else if (c == &ctl_sel[0] || c == &ctl_sel[1]) {    
+                    Serial.printf("[GPIO] msg sel -> %u\n", af_gpio_msg_sel());    
+                }    
                 else {  // банковый пин — пересчитать код и применить    
                     uint8_t code = 0;  
                     for (int i = 0; i < 3; i++)  
@@ -236,11 +248,15 @@ void af_gpio_ctl_init(void) {
     ctl_bypass  = { AF_PIN_BYPASS, false, false, 0 };
     ctl_ptt     = { AF_PIN_PTT,   false, false, 0 };    
     ctl_rec     = { AF_PIN_REC,   false, false, 0 };  
-    ctl_play    = { AF_PIN_PLAY,  false, false, 0 };  
+    ctl_play    = { AF_PIN_PLAY,  false, false, 0 };    
+    ctl_sel[0]  = { AF_MSG_SEL0_PIN, false, false, 0 };    
+    ctl_sel[1]  = { AF_MSG_SEL1_PIN, false, false, 0 };    
     pinMode(ctl_ptt.pin, INPUT_PULLUP);    
     ctl_ptt.stable = ctl_ptt.last_raw = (digitalRead(ctl_ptt.pin) == LOW);    
     pinMode(ctl_rec.pin, INPUT_PULLUP);  
-    pinMode(ctl_play.pin, INPUT_PULLUP);  
+    pinMode(ctl_play.pin, INPUT_PULLUP);
+    pinMode(ctl_sel[0].pin, INPUT_PULLUP);    
+    pinMode(ctl_sel[1].pin, INPUT_PULLUP);    
     pinMode(ctl_bypass.pin, INPUT_PULLUP);  
     ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);  
   
@@ -268,7 +284,9 @@ void af_gpio_ctl_init(void) {
     ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);
     ctl_ptt.stable    = ctl_ptt.last_raw    = (digitalRead(ctl_ptt.pin) == LOW);    
     ctl_rec.stable    = ctl_rec.last_raw    = (digitalRead(ctl_rec.pin) == LOW);  
-    ctl_play.stable   = ctl_play.last_raw   = (digitalRead(ctl_play.pin) == LOW);  
+    ctl_play.stable   = ctl_play.last_raw   = (digitalRead(ctl_play.pin) == LOW);    
+    ctl_sel[0].stable = ctl_sel[0].last_raw = (digitalRead(ctl_sel[0].pin) == LOW);    
+    ctl_sel[1].stable = ctl_sel[1].last_raw = (digitalRead(ctl_sel[1].pin) == LOW);    
     
     // Прогон дебаунса: stable отразит установившиеся уровни,  
     // а не переходку при старте (медленный подъём pull-up, дребезг).  
@@ -279,7 +297,9 @@ void af_gpio_ctl_init(void) {
         poll_pin(&ctl_bypass);
         poll_pin(&ctl_ptt);  
         poll_pin(&ctl_rec);  
-        poll_pin(&ctl_play);  
+        poll_pin(&ctl_play);
+        poll_pin(&ctl_sel[0]);    
+        poll_pin(&ctl_sel[1]);    
         delay(AF_GPIO_POLL_MS);    
     }  
   
@@ -296,9 +316,9 @@ void af_gpio_ctl_init(void) {
     if (code != 0)    
         apply_bank(code);   // 000 = manual: настройки и bank_code не трогаем  
   
-    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u ptt=GP%u rec=GP%u play=GP%u (LOW=1/on)\n",    
-                  AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS, AF_PIN_PTT,  
-                  AF_PIN_REC, AF_PIN_PLAY);    
+    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u ptt=GP%u rec=GP%u play=GP%u sel=GP%u/GP%u (LOW=1/on)\n",      
+                  AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS, AF_PIN_PTT,    
+                  AF_PIN_REC, AF_PIN_PLAY, AF_MSG_SEL0_PIN, AF_MSG_SEL1_PIN);      
   
     t_next_poll = millis() + AF_GPIO_POLL_MS;  
 }  
@@ -314,7 +334,9 @@ void af_gpio_ctl_poll(void) {
     poll_pin(&ctl_bypass);  
     poll_pin(&ctl_ptt);    
     poll_pin(&ctl_rec);    
-    poll_pin(&ctl_play);    
+    poll_pin(&ctl_play);
+    poll_pin(&ctl_sel[0]);
+    poll_pin(&ctl_sel[1]);
   
     // Playback закончился по буферу (GP10 или CLI play voice_14) — отпускаем PTT/TX        
     if (sw_ptt_active && !af_rec_is_playing()) {        

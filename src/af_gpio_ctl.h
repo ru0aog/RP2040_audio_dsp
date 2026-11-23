@@ -22,3 +22,4 @@ void af_gpio_ptt_tx_off(void);
 void    af_gpio_set_bank_code(uint8_t code);  // установить из CLI 'load N'  
 uint8_t af_gpio_bank_code(void);      // текущий код 0..7 (0 = manual)    
 uint8_t af_gpio_last_bank(void);      // последний загруженный банк 1..7    
+uint8_t af_gpio_msg_sel(void);        // код селектора сообщений 0..3 (GP13/GP28)  
