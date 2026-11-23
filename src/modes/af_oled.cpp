@@ -277,7 +277,7 @@ void af_oled_init(void) {
     oled_ok = i2c_write(AF_OLED_ADDR << 1);  
     i2c_stop();  
     if (!oled_ok) {  
-        Serial.println("# OLED: not found at 0x3C — disabled");  
+        Serial.printf("# OLED: not found at 0x%02X — disabled\n", AF_OLED_ADDR);  
         return;  
     }  
     // Init-последовательность SSD1306 128x32  
@@ -302,7 +302,7 @@ void af_oled_init(void) {
     for (uint8_t i = 0; i < sizeof(init_seq); i++) oled_cmd(init_seq[i]);  
     af_oled_clear();  
     af_oled_status();  
-    Serial.println("# OLED: SSD1306 128x32 @0x3C ok");  
+    Serial.printf("# OLED: SSD1306 128x32 @0x%02X ok\n", AF_OLED_ADDR);
 }  
   
 void af_oled_clear(void) {  

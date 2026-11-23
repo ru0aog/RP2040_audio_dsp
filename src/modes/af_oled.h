@@ -9,8 +9,6 @@
 #pragma once  
 #include <Arduino.h>  
   
-#define AF_OLED_SDA_PIN   14u  
-#define AF_OLED_SCL_PIN   15u  
 #define AF_OLED_ADDR      0x3Cu  
 #define AF_OLED_W         128u  
 #define AF_OLED_H         32u  
