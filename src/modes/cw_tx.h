@@ -9,6 +9,13 @@
   
 #define CWTX_RISE_MS     4u     // фронт/спад посылки, мс (raised cosine)  
 #define CWTX_LUT_LEN     256u   // таблица синуса, отсчётов на период  
+
+// ---- Ручной режим (кейер): Core 0 подаёт элементы напрямую, без очереди ----    
+void     cwtx_manual_begin(void);        // вход в ручной режим (сброс состояния)    
+bool     cwtx_manual_feed(bool dash);    // подать элемент (false = фаза ещё играет)    
+void     cwtx_manual_key_down(void);     // прямой ключ: открыть (элемент "бесконечный")    
+void     cwtx_manual_key_up(void);       // прямой ключ: закрыть (спад rise)    
+void     cwtx_manual_end(void);          // выход: хвост-тишина -> active=false    
   
 // ---- Core 0 ----    
 void     cwtx_init(uint32_t tone_hz);        // построить LUT + NCO-шаг    

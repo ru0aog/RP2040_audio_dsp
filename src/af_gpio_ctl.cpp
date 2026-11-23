@@ -15,6 +15,9 @@
 //   Уровневая логика: LOW = активно, open = стоп.    
 //   sw_ptt_active: GP8 занят как выход — входная ветка PTT отсечена.      
 //   af_gpio_ptt_tx_on/off — то же для CLI (play voice_14 в TX+PTT).      
+//
+//   GP11/GP12 — ямбический ключ (dit/dah, LOW=нажат) или прямой ключ;    
+//     режим через 'cw key', тон 1000 Гц через cwtx_manual_*, PTT на GP8.    
 //  
 // Опрос каждые AF_GPIO_POLL_MS мс, дебаунс AF_GPIO_STABLE чтений.  
 // Консольные команды имеют приоритет, но только до следующего изменения  
@@ -28,6 +31,7 @@
 #include "af_led.h"
 #include "af_voice.h"
 #include "af_rec.h"        // af_rec_start/stop/play/play_stop — GP9/GP10
+#include "modes/cw_tx.h"   // cwtx_manual_*, cwtx_busy, cwtx_el_rem_free — ямбик  
   
 struct gpio_ctl_t {  
     uint8_t  pin;  
@@ -43,7 +47,20 @@ static gpio_ctl_t ctl_bypass;    // GP7
 static gpio_ctl_t ctl_ptt;       // GP8 — LOW -> TX    
 static gpio_ctl_t ctl_rec;       // GP9 — LOW -> запись магнитофона  
 static gpio_ctl_t ctl_play;      // GP10 — LOW -> воспроизведение
-static gpio_ctl_t ctl_sel[2];    // GP13/GP28 — селектор сообщения, 2 бита (LOW=1)    
+static gpio_ctl_t ctl_sel[2];    // GP13/GP28 — селектор сообщения, 2 бита (LOW=1)
+
+// ---- Ямбический ключ (GP11=dit, GP12=dah, LOW=нажат) ----    
+#define KEY_DEBOUNCE_MS   1u     // 1 опрос × AF_GPIO_POLL_MS = ~10 мс устойчивого уровня    
+#define KEY_IAMBIC_A      1    
+#define KEY_IAMBIC_B      2    
+  
+static uint8_t  key_mode = 0;        // 0=off, 1=iambic A, 2=iambic B, 3=straight    
+static bool     key_tx = false;      // TX+PTT подняты ключом    
+static bool     dit_mem, dah_mem;    // память педалей на время элемента      
+static bool     key_last_dash;       // последний сыгранный элемент (для чередования)      
+static bool     key_straight_down;   // прямой ключ: текущее состояние    
+static uint8_t  dit_db, dah_db;      // счётчики антидребезга    
+static bool     dit_lvl, dah_lvl;    // устойчивые уровни (true=нажато)    
   
 static uint32_t t_next_poll = 0;      
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
@@ -62,6 +79,19 @@ uint8_t af_gpio_last_bank(void) { return last_bank; }
 uint8_t af_gpio_msg_sel(void) {    
     return (uint8_t)(ctl_sel[0].stable | (ctl_sel[1].stable << 1));    
 }    
+
+// Режим ключа: 0=off, 1=iambic A, 2=iambic B, 3=straight. Для CLI 'cw key'.    
+void af_gpio_key_mode(uint8_t m) {    
+    if (m > 3) return;    
+    if (key_tx) key_tx_off();    
+    key_mode = m;    
+    dit_mem = dah_mem = key_straight_down = false;    
+    dit_db = dah_db = 0;    
+    dit_lvl = dah_lvl = false;    
+    Serial.printf("[KEY] mode=%u (0=off 1=iambicA 2=iambicB 3=straight)\n", m);    
+}    
+  
+uint8_t af_gpio_key_mode_get(void) { return key_mode; }    
 
 // Установить код активного банка извне (CLI 'load N') — чтобы stats      
 // 'bank=' отражал последний применённый банк, а не только пины.      
@@ -262,7 +292,62 @@ static void poll_pin(gpio_ctl_t* c) {
         c->stable_cnt = 1;  
     }  
 }  
+
+// Антидребезг педали: ~5 мс устойчивого уровня    
+static bool key_read(uint8_t pin, uint8_t* db, bool* lvl) {    
+    bool raw = (gpio_get(pin) == 0);    
+    if (raw == *lvl) { *db = 0; return false; }    
+    if (++*db < KEY_DEBOUNCE_MS) return false;   // poll ~1 мс    
+    *db = 0; *lvl = raw;    
+    return true;                                 // фронт смены    
+}    
   
+static void key_tx_on(void) {      
+    if (key_tx) return;      
+    if (cwtx_busy()) return;          // не перебиваем текстовую посылку/маяк      
+    if (!af_gpio_ptt_tx_on()) return; // PTT занят (play) — не начинаем      
+    key_tx = true;        
+    cwtx_manual_begin();        
+    Serial.println("[KEY] tx on");      
+}      
+  
+static void key_tx_off(void) {      
+    if (!key_tx) return;      
+    key_tx = false;      
+    cwtx_manual_end();               // хвост доиграет, active -> false      
+    // PTT/TX НЕ отпускаем здесь — добиватель в af_gpio_ctl_poll      
+    // отпустит по !af_dsp_cwtx_busy(), когда огибающая доиграет.      
+    Serial.println("[KEY] tx off (tail pending)");      
+}      
+  
+// Ямбик: выбор следующего элемента по памяти педалей    
+static void key_iambic_poll(void) {      
+    if (dit_lvl)  dit_mem = true;      
+    if (dah_lvl)  dah_mem = true;      
+    
+    if (!key_tx) {      
+        if (dit_mem || dah_mem) key_tx_on();   // первый элемент -> TX+PTT+manual    
+        if (!key_tx) return;                   // PTT занят / посылка идёт    
+    }      
+    
+    if (cwtx_el_rem_free()) {   
+        bool dash;    
+        if (dit_mem && dah_mem)      // обе — чередуем: даём противоположную    
+            dash = !key_last_dash;   // key_last_dash — последний сыгранный    
+        else if (dit_mem)  dash = false;    
+        else if (dah_mem)  dash = true;    
+        else {    
+            if (!cwtx_busy()) key_tx_off();   // всё отпущено и доиграно    
+            return;    
+        }    
+        if (cwtx_manual_feed(dash)) {    
+            key_last_dash = dash;    
+            if (key_mode == KEY_IAMBIC_A) { dit_mem = dah_mem = false; }    
+            else { if (dash) dah_mem = false; else dit_mem = false; } // Mode B    
+        }    
+    }    
+}    
+
 // ---------------------------------------------------------------------------  
 void af_gpio_ctl_init(void) {  
     ctl_bank[0] = { AF_PIN_BANK0, false, false, 0 };  
@@ -281,7 +366,11 @@ void af_gpio_ctl_init(void) {
     pinMode(ctl_rec.pin, INPUT_PULLUP);  
     pinMode(ctl_play.pin, INPUT_PULLUP);
     pinMode(ctl_sel[0].pin, INPUT_PULLUP);    
-    pinMode(ctl_sel[1].pin, INPUT_PULLUP);    
+    pinMode(ctl_sel[1].pin, INPUT_PULLUP);
+    pinMode(AF_KEY_DIT_PIN, INPUT_PULLUP);   // ямбик dit    
+    pinMode(AF_KEY_DAH_PIN, INPUT_PULLUP);   // ямбик dah    
+    dit_lvl = dah_lvl = false;    
+    dit_db = dah_db = 0;    
     pinMode(ctl_bypass.pin, INPUT_PULLUP);  
     ctl_bypass.stable = ctl_bypass.last_raw = (digitalRead(ctl_bypass.pin) == LOW);  
   
@@ -362,7 +451,24 @@ void af_gpio_ctl_poll(void) {
     poll_pin(&ctl_play);
     poll_pin(&ctl_sel[0]);
     poll_pin(&ctl_sel[1]);
-  
+
+    // Ямбический ключ: опрос педалей и автомат элементов    
+    if (key_mode != 0) {    
+        key_read(AF_KEY_DIT_PIN, &dit_db, &dit_lvl);    
+        key_read(AF_KEY_DAH_PIN, &dah_db, &dah_lvl);    
+        if (key_mode == 3) {                     // straight key    
+            bool down = dit_lvl || dah_lvl;      // любой контакт = ключ нажат    
+            if (down != key_straight_down) {    
+                key_straight_down = down;    
+                if (down) { key_tx_on(); cwtx_manual_key(true); }    
+                else      { cwtx_manual_key(false); }    
+            }    
+            if (!key_straight_down && key_tx && !cwtx_busy()) key_tx_off();      
+        } else {    
+            key_iambic_poll();    
+        }    
+    }    
+
     // Playback закончился по буферу (GP10 или CLI play voice_14) — отпускаем PTT/TX.          
     // Для CW-вызова ждём конца посылки: cwtx_busy() держит PTT до последнего          
     // элемента + послесвечение огибающей.          

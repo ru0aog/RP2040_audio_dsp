@@ -1255,6 +1255,16 @@ static void cli_exec(char* line) {
                               af_cw_msgs[i], af_cw_msgs[i][0] ? "" : " (voice)");    
         }    
 
+        else if (strcmp(a1, "key") == 0) {    
+        if (!a2 || strcmp(a2, "off") == 0)        af_gpio_key_mode(0);    
+        else if (strcmp(a2, "iambic_a") == 0)     af_gpio_key_mode(1);    
+        else if (strcmp(a2, "iambic_b") == 0)     af_gpio_key_mode(2);    
+        else if (strcmp(a2, "straight") == 0)     af_gpio_key_mode(3);    
+        else if (strcmp(a2, "on") == 0)           af_gpio_key_mode(1);    
+        else { Serial.println("# cw key off|on|iambic_a|iambic_b|straight"); return; }    
+        Serial.println("# OK");
+        }
+
         else if (strcmp(sub, "abort") == 0) {  
             cwtx_abort();  
             Serial.println("# OK cw tx abort");  

@@ -86,7 +86,8 @@ static volatile uint8_t  cwtx_bpos;       // текущий элемент
 static volatile uint8_t  cwtx_gap;        // пауза после символа, в точках (1/3/7)  
 static volatile bool     cwtx_active;     // идёт передача    
 static volatile bool     cwtx_tail;       // хвост после последнего элемента подан    
-  
+static volatile bool     cwtx_manual;     // ручной режим: элементы от кейера    
+
 // Огибающая: позиция внутри элемента для raised-cosine  
 static volatile uint32_t cwtx_el_pos;     // отсчётов от начала элемента  
 static volatile uint32_t cwtx_el_len;     // полная длина элемента  
@@ -144,7 +145,10 @@ void cwtx_poll(void) {
         cwtx_el_rem = cwtx_gap * cwtx_dot;  
         cwtx_gap = 0;  
         return;  
-    }  
+    }
+
+    if (cwtx_manual) return;   // ручной режим: элементы подаёт кейер,    
+                               // poll только доигрывает межэлементные паузы    
   
     // следующий элемент текущего символа  
     if (cwtx_bpos < cwtx_blen) {  
@@ -261,3 +265,45 @@ void cwtx_set_tone(uint32_t tone_hz) {
 uint32_t cwtx_tone_hz(void) {    
     return (uint32_t)((((uint64_t)cwtx_nco_step * AF_FS_OUT_HZ) + (1u << 31)) >> 32);  // +0.5 — округление    
 }    
+
+// ---------------------------------------------------------------------------    
+// Ручной режим для кейера (Core 0)    
+// ---------------------------------------------------------------------------    
+void cwtx_manual_begin(void) {    
+    cwtx_tlen = cwtx_tpos = 0;    
+    cwtx_bpos = cwtx_blen = 0;    
+    cwtx_gap = 0;    
+    cwtx_el_rem = 0;    
+    cwtx_key = false;    
+    cwtx_tail = false;    
+    cwtx_manual = true;    
+    cwtx_active = true;    
+}    
+  
+bool cwtx_manual_feed(bool dash) {    
+    if (!cwtx_manual || cwtx_el_rem != 0 || cwtx_gap != 0) return false;    
+    cwtx_key = true;    
+    cwtx_el_len = (dash ? 3u : 1u) * cwtx_dot;    
+    cwtx_el_rem = cwtx_el_len;    
+    cwtx_el_pos = 0;    
+    cwtx_gap = 1;                 // межэлементная пауза — доиграет cwtx_poll    
+    return true;    
+}    
+  
+void cwtx_manual_key_down(void) {         // прямой ключ: длина неизвестна    
+    if (!cwtx_manual || cwtx_el_rem != 0) return;    
+    cwtx_key = true;    
+    cwtx_el_len = 0xFFFFFFFFu;            // "бесконечный" элемент    
+    cwtx_el_rem = cwtx_el_len;    
+    cwtx_el_pos = 0;    
+}    
+  
+void cwtx_manual_key_up(void) {           // спад rise от текущей позиции    
+    if (!cwtx_manual || !cwtx_key) return;    
+    cwtx_el_len = cwtx_el_pos + cwtx_rise;    
+    cwtx_el_rem = cwtx_rise;    
+}    
+  
+void cwtx_manual_end(void) {    
+    cwtx_manual = false;   // poll: очередь пуста -> хвост -> active=false    
+}
