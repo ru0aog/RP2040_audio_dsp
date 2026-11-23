@@ -5,6 +5,7 @@
 #include "rtty_rx.h"   // rttydec_f_mark/f_space — центр RTTY в статусе  
 #include "rtty_tx.h"   // rttytx_center_hz — центр RTTY TX в статусе  
 #include "cw_tx.h"     // cwtx_tone_hz — тон CW TX в статусе  
+#include "tt_gen.h"    // tt_gen_f1_hz/f2_hz — частоты двухтональника в статусе    
   
 // ---------------------------------------------------------------------------  
 // Шрифт 5x7, ASCII 0x20..0x7F (классический SSD1306 font, column-major)  
@@ -346,10 +347,14 @@ void af_oled_putc(char c) {                 // скролл-вывод в стр
 void af_oled_status(void) {                 // строка 0: режим + полоса + f0    
     if (!oled_ok) return;    
     char tmp[48];    
-    if (af_dsp_cwtx_busy()) {        
-        snprintf(tmp, sizeof(tmp), "ПРД CW %luHz",        
-                 (unsigned long)cwtx_tone_hz());        
-    } else if (af_dsp_rttytx_busy()) {  
+    if (af_dsp_tt_busy()) {  
+        snprintf(tmp, sizeof(tmp), "ПРД TT %lu/%lu",  
+                 (unsigned long)tt_gen_f1_hz(),  
+                 (unsigned long)tt_gen_f2_hz());  
+    } else if (af_dsp_cwtx_busy()) {          
+        snprintf(tmp, sizeof(tmp), "ПРД CW %luHz",          
+                 (unsigned long)cwtx_tone_hz());          
+    } else if (af_dsp_rttytx_busy()) {    
         snprintf(tmp, sizeof(tmp), "ПРД RTTY %luHz",  
                  (unsigned long)rttytx_center_hz());  
     } else if (af_dsp_cw_on()) {       
@@ -401,6 +406,6 @@ void af_oled_poll(void) {
 bool af_oled_present(void) { return oled_ok; }  
 
 // src/modes/af_oled.cpp  
-void af_oled_text(const char* s) {    
+void af_oled_text(const char* s) {      
     while (*s) af_oled_putc(*s++);    
 }  
