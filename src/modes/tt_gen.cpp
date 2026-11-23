@@ -13,6 +13,7 @@ static int16_t  tt_lut[TT_LUT_LEN];
 static volatile bool     tt_on = false;  
 static volatile uint32_t tt_step1, tt_step2;  
 static uint32_t tt_ph1, tt_ph2;  
+static volatile uint32_t tt_f1_hz, tt_f2_hz;  
   
 void tt_gen_init(void) {  
     for (int i = 0; i < TT_LUT_LEN; i++)  
@@ -52,8 +53,6 @@ int16_t __not_in_flash_func(tt_gen_sample)(void) {
     int32_t t = tt_nco(tt_ph1) + tt_nco(tt_ph2);    
     return (int16_t)((t * TT_AMP) >> 16);   // каждый тон ~0.2 FS    
 }    
-
-static volatile uint32_t tt_f1_hz, tt_f2_hz;  
   
 uint32_t tt_gen_f1_hz(void) { return tt_f1_hz; }  
 uint32_t tt_gen_f2_hz(void) { return tt_f2_hz; }  
