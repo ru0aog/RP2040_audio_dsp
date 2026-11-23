@@ -1,6 +1,6 @@
 // src/af_rec.cpp    
 // ============================================================================  
-// af_rec.cpp — цифровой магнитофон: 7 слотов во flash, по одному на банк.    
+// af_rec.cpp — цифровой магнитофон: 4 слота во flash
 //    
 // Запись: af_rec_push (Core 1) пишет в ram_buf каждый AF_REC_DECIM-й    
 // отсчёт (децимация ×2: 15464 -> 7732 Гц, ~7.2 с в 56000 отсчётов).    
@@ -9,9 +9,8 @@
 // -> IRQ-off -> erase+program -> restore), как в af_store_save.    
 // Воспроизведение: чтение слота напрямую из XIP с интерполяцией ×2.    
 // Пустой слот -> клип-заглушка voice_14 (1:1, без интерполяции).    
-// Активный слот = последний загруженный банк (af_gpio_last_bank):      
-// обновляется при каждом apply_bank/'load N', в manual-режиме      
-// (пины отпущены, код 0) сохраняет последнее значение.      
+// Активный слот = код селектора GP13/GP28 + 1 (af_gpio_msg_sel, 1..4).        
+// Запись GP9 и воспроизведение GP10 идут в слот по текущему коду.        
 // Пины: GP9 = запись (тракт -> TX, микрофон, без PTT),      
 //       GP10 = воспроизведение (тракт -> TX + PTT на GP8, звук в TX).      
 // ============================================================================    
@@ -19,7 +18,7 @@
 #include "af_rec.h"    
 #include "af_config.h"    
 #include "af_dsp.h"    
-#include "af_gpio_ctl.h"       // af_gpio_last_bank — активный слот      
+#include "af_gpio_ctl.h"       // af_gpio_msg_sel — активный слот 1..4   
 #include "af_store.h"          // park/unpark, af_set_clk*, af_store_write_all    
 #include "af_capture.h"        // af_capture_pause/resume    
 #include "af_pwm.h"            // af_pwm_set_enabled/is_enabled    
@@ -63,14 +62,12 @@ static int16_t  ram_buf[AF_REC_RAM_SAMP + 128];
 static uint32_t slot_len  = 0;    // отсчётов в слоте активного банка      
 static uint32_t slot_off  = 0;    // flash-offset активного слота      
     
-// Активный банк: последний загруженный (af_gpio_ctl видит каждое      
-// переключение — пины и CLI 'load N'). В manual-режиме (код 0)      
-// возвращает последний активный — локальный last_bank не нужен.      
-static uint8_t rec_bank(void) {      
-    return af_gpio_last_bank();      
-}      
+// Активный слот = код селектора GP13/GP28 + 1 (1..4).          
+static uint8_t rec_bank(void) {        
+    return af_gpio_msg_sel() + 1;        
+}        
   
-static uint32_t rec_slot_off(uint8_t bank) {          // bank = 1..7    
+static uint32_t rec_slot_off(uint8_t bank) {          // bank = 1..4      
     return AF_REC_FLASH_OFF + (uint32_t)(bank - 1) * AF_REC_SLOT_SIZE;    
 }    
   
@@ -95,12 +92,12 @@ static const int16_t* rec_slot_data(void) {
 
 // --- Экспорт слотов для af_fm (WAV-файлы на диске) ---------------------------      
 uint32_t af_rec_slot_len(uint8_t bank) {      
-    if (bank < 1 || bank > AF_STORE_BANKS) return 0;      
+    if (bank < 1 || bank > AF_REC_SLOTS) return 0;         // / nullptr / false  
     return rec_slot_len(bank);      
 }      
       
-const int16_t* af_rec_slot_data(uint8_t bank) {      
-    if (bank < 1 || bank > AF_STORE_BANKS) return nullptr;      
+const int16_t* af_rec_slot_data(uint8_t bank) {        
+    if (bank < 1 || bank > AF_REC_SLOTS) return nullptr;        
     return (const int16_t*)(XIP_BASE + rec_slot_off(bank) + AF_REC_HDR_SIZE);      
 }      
   
@@ -119,7 +116,7 @@ static bool rec_slot_write(uint8_t bank, uint32_t n_samp);  // определе�
 // Вызывается из af_fm_poll по таймауту после последнего сектора WAV.      
 bool af_rec_slot_write(uint8_t bank, uint32_t n_samp) {      
     if (state != ST_IDLE) return false;      
-    if (bank < 1 || bank > AF_STORE_BANKS) return false;      
+    if (bank < 1 || bank > AF_REC_SLOTS) return false;        
     if (n_samp == 0 || n_samp > AF_REC_RAM_SAMP) return false;      
     if (!rec_slot_write(bank, n_samp)) return false;      
     if (bank == rec_bank()) {           // активный слот — обновить кэш      
@@ -228,7 +225,7 @@ static void rec_fill_empty_slots(void) {
     uint32_t n = clip_voice_14_len / AF_REC_DECIM;      // ~42223 отсч.  
     if (n > AF_REC_RAM_SAMP) n = AF_REC_RAM_SAMP;  
     bool filled = false;  
-    for (uint8_t b = 1; b <= AF_STORE_BANKS; b++) {    
+    for (uint8_t b = 1; b <= AF_REC_SLOTS; b++) {      
         if (rec_slot_len(b) != 0) continue;             // слот занят    
         // децимация ×2 в ram_buf    
         for (uint32_t i = 0; i < n; i++)    

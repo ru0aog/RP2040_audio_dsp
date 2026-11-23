@@ -22,6 +22,8 @@
 // AF_REC_RAM_SAMP — в af_config.h (56000, ~7.2 с @ 7732 Гц)  
 #define AF_REC_DECIM      2u              // децимация ×2: запись 7732 Гц ≈ 7.8 с    
 #define AF_REC_MAX_SAMP   AF_REC_RAM_SAMP    
+// Число слотов магнитофона = число сообщений (селектор GP13/GP28, код 0..3).  
+#define AF_REC_SLOTS   4  
   
 void     af_rec_init(void);    
 void     af_rec_poll(void);        // Core 0: контроль записи (buf full -> авто-стоп)        
