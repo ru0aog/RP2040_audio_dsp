@@ -54,10 +54,10 @@
   
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
-#define AF_STORE_VER      10  // было 9: +rtty_dbg в af_bank_t      
-                            // (диагностика # scan:/# trk:). Старые банки невалидны.    
-                            // CW.TXT живёт в том же секторе по смещению 0x800    
-                            // со своим magic 'CW'+ver+crc — версию банков не меняет.    
+#define AF_STORE_VER      11  // было 10: +rxeq_*/txeq_* (3-полосный EQ) в af_bank_t.    
+                            // Старые банки невалидны.      
+                            // CW.TXT живёт в том же секторе по смещению 0x800      
+                            // со своим magic 'CW'+ver+crc — версию банков не меняет.       
   
 // Смещение сектора банков от начала flash — последний сектор чипа.  
 // Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
@@ -307,9 +307,16 @@ void af_store_snapshot(af_bank_t* out) {
     out->rx_shelf_db   = (uint16_t)af_dsp_rxshelf();      
     out->rx_shelf_freq = (uint16_t)af_dsp_rxshelff();      
     out->rx_shelf_q    = (uint16_t)af_dsp_rxshelfq();      
-    out->rx_exc_on     = af_dsp_rxexc_on() ? 1 : 0;      
-    out->rx_exc_mix    = (uint16_t)af_dsp_rxexcmix();      
-    // TX      
+    out->rx_exc_on     = af_dsp_rxexc_on() ? 1 : 0;        
+    out->rx_exc_mix    = (uint16_t)af_dsp_rxexcmix();        
+    // RX EQ (3-полосный, дБx10 + Гц)    
+    out->rxeq_lo_db  = (int16_t)af_dsp_rxeq(0);    
+    out->rxeq_mid_db = (int16_t)af_dsp_rxeq(1);    
+    out->rxeq_hi_db  = (int16_t)af_dsp_rxeq(2);    
+    out->rxeq_lo_f   = (uint16_t)af_dsp_rxeqf(0);    
+    out->rxeq_mid_f  = (uint16_t)af_dsp_rxeqf(1);    
+    out->rxeq_hi_f   = (uint16_t)af_dsp_rxeqf(2);    
+    // TX        
     out->tx_lo_hz      = (uint16_t)af_tx_lo_hz();        
     out->tx_hi_hz      = (uint16_t)af_tx_hi_hz();        
     out->tx_ratio_x10  = (uint16_t)af_tx_ratio();      
@@ -344,9 +351,16 @@ void af_store_snapshot(af_bank_t* out) {
     out->tx_exc_on     = af_tx_exc() ? 1 : 0;      
     out->tx_excmix     = (uint16_t)af_tx_excmix();      
     out->tx_notch_on   = af_tx_notch() ? 1 : 0;      
-    out->tx_notch1_hz  = (uint16_t)af_tx_notch1();      
-    out->tx_notch2_hz  = (uint16_t)af_tx_notch2();      
-}    
+    out->tx_notch1_hz  = (uint16_t)af_tx_notch1();        
+    out->tx_notch2_hz  = (uint16_t)af_tx_notch2();        
+    // TX EQ (3-полосный, дБx10 + Гц)    
+    out->txeq_lo_db  = (int16_t)af_tx_txeq(0);    
+    out->txeq_mid_db = (int16_t)af_tx_txeq(1);    
+    out->txeq_hi_db  = (int16_t)af_tx_txeq(2);    
+    out->txeq_lo_f   = (uint16_t)af_tx_txeqf(0);    
+    out->txeq_mid_f  = (uint16_t)af_tx_txeqf(1);    
+    out->txeq_hi_f   = (uint16_t)af_tx_txeqf(2);    
+}      
     
 bool af_store_save(uint8_t idx) {    
     if (idx < 1 || idx > AF_STORE_BANKS) return false;    
@@ -449,9 +463,17 @@ bool af_store_load(uint8_t idx) {
     af_dsp_set_rxshelff((uint32_t)b.rx_shelf_freq);      
     af_dsp_set_rxshelfq((uint32_t)b.rx_shelf_q);      
     af_dsp_set_rxshelf((int32_t)b.rx_shelf_db);       // после freq/q — пересчёт    
-    af_dsp_set_rxexcmix((int32_t)b.rx_exc_mix);      
-    af_dsp_set_rxexc(b.rx_exc_on != 0);      
-    // TX: весь тракт. Порядок — как в tx_apply_profile: сначала      
+    af_dsp_set_rxexcmix((int32_t)b.rx_exc_mix);        
+    af_dsp_set_rxexc(b.rx_exc_on != 0);        
+    // RX EQ: частоты до gain — пересчёт биквадов идёт в сеттерах,    
+    // блок стартует с загруженными f/db.    
+    af_dsp_set_rxeqf(0, b.rxeq_lo_f);    
+    af_dsp_set_rxeqf(1, b.rxeq_mid_f);    
+    af_dsp_set_rxeqf(2, b.rxeq_hi_f);    
+    af_dsp_set_rxeq(0, b.rxeq_lo_db);    
+    af_dsp_set_rxeq(1, b.rxeq_mid_db);    
+    af_dsp_set_rxeq(2, b.rxeq_hi_db);    
+    // TX: весь тракт. Порядок — как в tx_apply_profile: сначала         
     // параметры, от которых зависят пересчёты (split, presfreq/q,    
     // shelffreq/q, notchf), затем on/off и уровни.    
     af_tx_set_band(b.tx_lo_hz, b.tx_hi_hz);    
@@ -486,10 +508,17 @@ bool af_store_load(uint8_t idx) {
     af_tx_set_shelf(b.tx_shelf_db);       // после freq/q — пересчёт биквада    
     af_tx_set_exc(b.tx_exc_on != 0);    
     af_tx_set_excmix(b.tx_excmix);    
-    af_tx_set_notch(b.tx_notch_on != 0);    
-    af_tx_set_notchf(b.tx_notch1_hz, b.tx_notch2_hz);    
-    return true;    
-}
+    af_tx_set_notch(b.tx_notch_on != 0);      
+    af_tx_set_notchf(b.tx_notch1_hz, b.tx_notch2_hz);      
+    // TX EQ: частоты до gain — как в RX.    
+    af_tx_set_txeqf(0, b.txeq_lo_f);    
+    af_tx_set_txeqf(1, b.txeq_mid_f);    
+    af_tx_set_txeqf(2, b.txeq_hi_f);    
+    af_tx_set_txeq(0, b.txeq_lo_db);    
+    af_tx_set_txeq(1, b.txeq_mid_db);    
+    af_tx_set_txeq(2, b.txeq_hi_db);    
+    return true;      
+}  
 
 void af_store_write_all(const af_bank_t banks[AF_STORE_BANKS]) {  
     // Читаем текущий сектор, патчим все записи, пишем целиком.  
@@ -564,9 +593,14 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].rx_shelf_db   = AF_RX_SHELF_DB_X10_DEFAULT;  // 30 = +3 дБ    
         b[i].rx_shelf_freq = AF_RX_SHELF_FREQ_HZ;         // 450    
         b[i].rx_shelf_q    = AF_RX_SHELF_Q_X100;          // 70    
-        b[i].rx_exc_on     = AF_RX_EXC_ON_DEFAULT;        // 0 — выключен    
-        b[i].rx_exc_mix    = AF_RX_EXC_MIX_Q15_DEFAULT;   // 3277 = ~10%    
-        // TX — рабочая точка (как базис tx_apply_profile)      
+        b[i].rx_exc_on     = AF_RX_EXC_ON_DEFAULT;        // 0 — выключен      
+        b[i].rx_exc_mix    = AF_RX_EXC_MIX_Q15_DEFAULT;   // 3277 = ~10%      
+        // EQ: плоский по умолчанию (0 дБ), частоты стандартные    
+        b[i].rxeq_lo_db = 0;  b[i].rxeq_mid_db = 0;  b[i].rxeq_hi_db = 0;    
+        b[i].rxeq_lo_f = 300; b[i].rxeq_mid_f = 1000; b[i].rxeq_hi_f = 2500;    
+        b[i].txeq_lo_db = 0;  b[i].txeq_mid_db = 0;  b[i].txeq_hi_db = 0;    
+        b[i].txeq_lo_f = 300; b[i].txeq_mid_f = 1000; b[i].txeq_hi_f = 2500;    
+        // TX — рабочая точка (как базис tx_apply_profile)          
         b[i].tx_lo_hz = 300;  b[i].tx_hi_hz = 2700;      
         b[i].tx_ratio_x10 = 40;  b[i].tx_clip = 26000;      
         b[i].tx_agc_target = 18000;  b[i].tx_agc_max_x10 = AF_TX_AGC_MAX_X10;      

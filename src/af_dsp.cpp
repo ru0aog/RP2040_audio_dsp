@@ -458,7 +458,88 @@ static inline int32_t __not_in_flash_func(rx_shelf_push)(int32_t x) {
     rxs_y2 = rxs_y1; rxs_y1 = y;  
     return y;  
 }  
+
+// ---------------------------------------------------------------------------  
+// RX 3-band EQ: low-shelf + peaking + high-shelf каскадно, после АРУ.  
+// gain в дБx10 (-120..+120), 0 = байпас полосы. Коэффициенты Q15, Core 0.  
+// ---------------------------------------------------------------------------  
+static volatile int32_t  rxeq_lo_db_x10  = 0;  
+static volatile int32_t  rxeq_mid_db_x10 = 0;  
+static volatile int32_t  rxeq_hi_db_x10  = 0;  
+static volatile uint32_t rxeq_lo_f  = 300;    // НЧ-полка, Гц  
+static volatile uint32_t rxeq_mid_f = 1000;   // центр пика, Гц  
+static volatile uint32_t rxeq_hi_f  = 2500;   // ВЧ-полка, Гц  
+static volatile uint32_t rxeq_mid_q = 100;    // Q пика x100  
   
+typedef struct { int32_t b0,b1,b2,a1,a2, x1,x2,y1,y2; } eq_biquad_t;  
+static eq_biquad_t rxeq[3];   // 0=low-shelf 1=peaking 2=high-shelf  
+  
+// RBJ-коэффициенты -> Q15. kind: 0=lowshelf 1=peak 2=highshelf.  
+static void eq_design(eq_biquad_t* q, int kind, int32_t db_x10,  
+                      uint32_t freq_hz, uint32_t q_x100) {  
+    if (db_x10 == 0) {  // байпас  
+        q->b0 = 32768; q->b1 = q->b2 = q->a1 = q->a2 = 0;  
+        return;  
+    }  
+    const float A  = powf(10.0f, (float)db_x10 / 400.0f);  
+    const float w  = 2.0f * PI * (float)freq_hz / (float)AF_FS_OUT_HZ;  
+    const float cw = cosf(w), sw = sinf(w);  
+    const float al = sw / (2.0f * (float)q_x100 / 100.0f);  
+    const float sq = 2.0f * sqrtf(A) * al;  
+    float b0,b1,b2,a0,a1,a2;  
+    if (kind == 0) {          // low-shelf (как rx_shelf_design)  
+        a0 = (A+1) + (A-1)*cw + sq;  
+        b0 =    A*((A+1) - (A-1)*cw + sq);  
+        b1 = 2*A*((A-1) - (A+1)*cw);  
+        b2 =    A*((A+1) - (A-1)*cw - sq);  
+        a1 =   -2*((A-1) + (A+1)*cw);  
+        a2 =       (A+1) + (A-1)*cw - sq;  
+    } else if (kind == 2) {   // high-shelf (как af_tx_set_shelf)  
+        a0 = (A+1) - (A-1)*cw + sq;  
+        b0 =    A*((A+1) + (A-1)*cw + sq);  
+        b1 = -2*A*((A-1) + (A+1)*cw);  
+        b2 =    A*((A+1) + (A-1)*cw - sq);  
+        a1 =   -2*((A-1) - (A+1)*cw);  
+        a2 =       (A+1) - (A-1)*cw - sq;  
+    } else {                  // peaking (RBJ)  
+        a0 = 1.0f + al/A;  
+        b0 = 1.0f + al*A;  
+        b1 = -2.0f*cw;  
+        b2 = 1.0f - al*A;  
+        a1 = -2.0f*cw;  
+        a2 = 1.0f - al/A;  
+    }  
+    q->b0 = (int32_t)lrintf(b0/a0 * 32768.0f);  
+    q->b1 = (int32_t)lrintf(b1/a0 * 32768.0f);  
+    q->b2 = (int32_t)lrintf(b2/a0 * 32768.0f);  
+    q->a1 = (int32_t)lrintf(a1/a0 * 32768.0f);  
+    q->a2 = (int32_t)lrintf(a2/a0 * 32768.0f);  
+    __dmb();  
+}  
+  
+static void rxeq_design(void) {  
+    eq_design(&rxeq[0], 0, rxeq_lo_db_x10,  rxeq_lo_f,  71);   // Q~0.71  
+    eq_design(&rxeq[1], 1, rxeq_mid_db_x10, rxeq_mid_f, rxeq_mid_q);  
+    eq_design(&rxeq[2], 2, rxeq_hi_db_x10,  rxeq_hi_f,  71);  
+}  
+  
+static inline int32_t __not_in_flash_func(eq_push)(eq_biquad_t* q, int32_t x) {  
+    int64_t acc = (int64_t)q->b0*x + (int64_t)q->b1*q->x1 + (int64_t)q->b2*q->x2  
+                - (int64_t)q->a1*q->y1 - (int64_t)q->a2*q->y2;  
+    int32_t y = (int32_t)(acc >> 15);  
+    q->x2 = q->x1; q->x1 = x;  
+    q->y2 = q->y1; q->y1 = y;  
+    return y;  
+}  
+  
+static inline int32_t __not_in_flash_func(rxeq_push)(int32_t x) {  
+    if (rxeq_lo_db_x10)  x = eq_push(&rxeq[0], x);  
+    if (rxeq_mid_db_x10) x = eq_push(&rxeq[1], x);  
+    if (rxeq_hi_db_x10)  x = eq_push(&rxeq[2], x);  
+    return x;  
+}  
+
+
 // ---------------------------------------------------------------------------  
 // RX harmonic exciter — полином Чебышёва T2(x) = 2x² − 1.  
 // Pre-HP ~1.5 кГц выделяет полосу речи; T2 даёт чистую 2-ю гармонику  
@@ -1093,7 +1174,24 @@ void af_dsp_set_rxshelfq(uint32_t q_x100) {
 int32_t  af_dsp_rxshelf(void)  { return rx_shelf_db_x10; }  
 uint32_t af_dsp_rxshelff(void) { return rx_shelf_freq_hz; }  
 uint32_t af_dsp_rxshelfq(void) { return rx_shelf_q_x100; }  
-  
+
+void af_dsp_set_rxeq(uint8_t band, int32_t db_x10) {   // band 0=lo 1=mid 2=hi  
+    if (db_x10 < -120) db_x10 = -120;  
+    if (db_x10 >  120) db_x10 =  120;  
+    if      (band == 0) rxeq_lo_db_x10  = db_x10;  
+    else if (band == 1) rxeq_mid_db_x10 = db_x10;  
+    else                rxeq_hi_db_x10  = db_x10;  
+    rxeq_design();  
+}  
+void af_dsp_set_rxeqf(uint8_t band, uint32_t hz) {     // частоты полос  
+    if      (band == 0) { if (hz<100) hz=100; if (hz>800)  hz=800;  rxeq_lo_f=hz; }  
+    else if (band == 1) { if (hz<300) hz=300; if (hz>3000) hz=3000; rxeq_mid_f=hz; }  
+    else                { if (hz<1500) hz=1500; if (hz>5000) hz=5000; rxeq_hi_f=hz; }  
+    rxeq_design();  
+}  
+int32_t  af_dsp_rxeq(uint8_t band)  { return band==0?rxeq_lo_db_x10:band==1?rxeq_mid_db_x10:rxeq_hi_db_x10; }  
+uint32_t af_dsp_rxeqf(uint8_t band) { return band==0?rxeq_lo_f:band==1?rxeq_mid_f:rxeq_hi_f; }  
+
 void af_dsp_set_rxexc(bool on) {  
     if (on && !rx_exc_on) {              // чистый старт — без щелчка  
         rxe_hp1_x1 = rxe_hp1_x2 = rxe_hp1_y1 = rxe_hp1_y2 = 0;  
@@ -1383,7 +1481,8 @@ void af_dsp_init(void) {
     rx_notch_design();    // коэффициенты фиксированных нотчей RX
     rx_pres_hp_design();      // HP-детектор presence    
     rx_pres_pk_design(32768); // peaking = байпас при старте      
-    rx_shelf_design();        // коэффициенты RX low-shelf  
+    rx_shelf_design();        // коэффициенты RX low-shelf    
+    rxeq_design();            // коэффициенты 3-полосного EQ (старт = байпас)    
     rx_exc_design();          // ФВЧ-биквады эксайтера  
     af_snr_init();            // таблицы окна/twiddles/bit-reverse спектрального NR    
     af_tx_init();         // TX: FIR-компрессор-клиппер          
@@ -1464,7 +1563,9 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rxp_pk_x1 = rxp_pk_x2 = rxp_pk_y1 = rxp_pk_y2 = 0;  
         rxp_env_q16 = rxp_nf_q16 = (int64_t)256 << 16;    
         rxp_k_q15 = rxp_k_tgt_q15 = 0;  
-        rxs_x1 = rxs_x2 = rxs_y1 = rxs_y2 = 0;  
+        rxs_x1 = rxs_x2 = rxs_y1 = rxs_y2 = 0;    
+        for (int i = 0; i < 3; i++)    
+            rxeq[i].x1 = rxeq[i].x2 = rxeq[i].y1 = rxeq[i].y2 = 0;    
         rxe_hp1_x1 = rxe_hp1_x2 = rxe_hp1_y1 = rxe_hp1_y2 = 0;  
         rxe_hp2_x1 = rxe_hp2_x2 = rxe_hp2_y1 = rxe_hp2_y2 = 0;  
         rxe_harm_lvl = 0;  rxe_harm_peak = 0;  
@@ -1602,12 +1703,17 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // не контролируется контуром B. Вместо жёсткого sat16 на каждом  
             // каскаде — один мягкий клиппер в конце: пики плавно прижимаются  
             // к ~−3.5 dBFS, clip_count не растёт, щелчков нет.  
-            if (rx_shelf_db_x10 || (rx_exc_on && !cw_on)) {  
-                int32_t s32 = s;  
-                if (rx_shelf_db_x10)       s32 = rx_shelf_push(s32); // low-shelf: «бас»  
-                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);   // эксайтер: только речь  
-                s = rx_soft_clip(s32);  
-            }  
+            if (rx_shelf_db_x10 || (rx_exc_on && !cw_on)) {    
+                int32_t s32 = s;    
+                if (rx_shelf_db_x10)       s32 = rx_shelf_push(s32); // low-shelf: «бас»    
+                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);   // эксайтер: только речь    
+                s = rx_soft_clip(s32);    
+            }    
+            // 3-полосный EQ — последним в RX-цепочке, после лимитера и    
+            // soft-clip: его подъём до +12 дБ тоже может превысить int16,    
+            // поэтому свой мягкий клиппер на выходе.    
+            if (rxeq_lo_db_x10 || rxeq_mid_db_x10 || rxeq_hi_db_x10)    
+                s = rx_soft_clip(rxeq_push(s));    
             if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса      
             s = af_voice_mix(s);                       // голосовые сообщения          
             if (af_rec_active == 2) s = af_rec_mix(s); // подмес воспроизведения слота

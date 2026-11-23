@@ -75,7 +75,7 @@ static tx_fir_t tx_rtty_fir1, tx_rtty_fir2;   // каскад: два одина
   
 // --- Двухтональный генератор: свой FIR 400..3200 Гц ---  
 // Классический IMD-тест 700/1900: верхний тон и продукт IMD3 на 3100 Гц  
-// должны пройти — речевой 700..1400 их срезал бы. Свой каскад 2x127.  
+// Свой каскад 2x127
 #define TX_TT_FIR_N    127  
 static int16_t tx_tt_taps[TX_TT_FIR_N];  
 static tx_fir_t tx_tt_fir1, tx_tt_fir2;    
@@ -241,8 +241,70 @@ static uint8_t intel_blk_cnt  = 0;       // счётчик пересчёта
 static uint32_t tx_shelf_db_x10 = AF_TX_SHELF_DB_X10_DEFAULT;  // 0 = off    
 static volatile uint32_t tx_shelf_freq_hz = AF_TX_SHELF_FREQ_HZ;  // частота полки    
 static volatile uint32_t tx_shelf_q_x100  = AF_TX_SHELF_Q_X100;   // добротность x100    
-static int32_t sh_x1 = 0, sh_x2 = 0, sh_y1 = 0, sh_y2 = 0;    
-static int32_t sh_b0 = 0, sh_b1 = 0, sh_b2 = 0, sh_a1 = 0, sh_a2 = 0;       
+static int32_t sh_x1 = 0, sh_x2 = 0, sh_y1 = 0, sh_y2 = 0;      
+static int32_t sh_b0 = 0, sh_b1 = 0, sh_b2 = 0, sh_a1 = 0, sh_a2 = 0;         
+  
+// --- 3-полосный TX EQ (low-shelf / peaking / high-shelf) ---  
+// Стоит после tx_pre, до АРУ: формирует тембр микрофона до компрессии.  
+// gain в дБ x10, диапазон -120..+120 (отрицательные = срез).  
+static volatile int32_t  txeq_db_x10[3]  = {0, 0, 0};  
+static volatile uint32_t txeq_freq_hz[3] = {300, 1000, 2500};  
+  
+typedef struct {  
+    int32_t b0, b1, b2, a1, a2;  
+    int32_t x1, x2, y1, y2;  
+} txeq_biquad_t;  
+  
+static txeq_biquad_t txeq_bq[3];  
+  
+// RBJ: type 0 = low-shelf, 1 = peaking, 2 = high-shelf. A = 10^(dB/40).  
+// Отрицательный gain (A<1) — срез, считается корректно.  
+static void txeq_design(uint8_t i) {  
+    const int32_t db = txeq_db_x10[i];  
+    if (db == 0) return;                       // байпас, коэффициенты не нужны  
+    const float A  = powf(10.0f, (float)db / 400.0f);  
+    const float w  = 2.0f * PI * (float)txeq_freq_hz[i] / AF_FS_OUT_HZ;  
+    const float cw = cosf(w), sw = sinf(w);  
+    const float al = sw / (2.0f * 0.7071f);    // Q = 0.7071 фиксирован  
+    const float sq = 2.0f * sqrtf(A) * al;  
+    float b0, b1, b2, a0, a1, a2;  
+    if (i == 1) {                              // peaking  
+        a0 = 1.0f + al / A;  
+        b0 = 1.0f + al * A;  b1 = -2.0f * cw;  b2 = 1.0f - al * A;  
+        a1 = -2.0f * cw;     a2 = 1.0f - al / A;  
+    } else if (i == 0) {                       // low-shelf  
+        a0 = (A + 1.0f) + (A - 1.0f) * cw + sq;  
+        b0 = A * ((A + 1.0f) - (A - 1.0f) * cw + sq);  
+        b1 = 2.0f * A * ((A - 1.0f) - (A + 1.0f) * cw);  
+        b2 = A * ((A + 1.0f) - (A - 1.0f) * cw - sq);  
+        a1 = -2.0f * ((A - 1.0f) + (A + 1.0f) * cw);  
+        a2 = (A + 1.0f) + (A - 1.0f) * cw - sq;  
+    } else {                                   // high-shelf  
+        a0 = (A + 1.0f) - (A - 1.0f) * cw + sq;  
+        b0 = A * ((A + 1.0f) + (A - 1.0f) * cw + sq);  
+        b1 = -2.0f * A * ((A - 1.0f) + (A + 1.0f) * cw);  
+        b2 = A * ((A + 1.0f) + (A - 1.0f) * cw - sq);  
+        a1 = -2.0f * ((A - 1.0f) - (A + 1.0f) * cw);  
+        a2 = (A + 1.0f) - (A - 1.0f) * cw - sq;  
+    }  
+    txeq_bq[i].b0 = (int32_t)lroundf(b0 / a0 * 32768.0f);  
+    txeq_bq[i].b1 = (int32_t)lroundf(b1 / a0 * 32768.0f);  
+    txeq_bq[i].b2 = (int32_t)lroundf(b2 / a0 * 32768.0f);  
+    txeq_bq[i].a1 = (int32_t)lroundf(a1 / a0 * 32768.0f);  
+    txeq_bq[i].a2 = (int32_t)lroundf(a2 / a0 * 32768.0f);  
+}  
+  
+static inline int32_t __not_in_flash_func(txeq_push)(txeq_biquad_t* q, int32_t x) {  
+    int64_t acc = (int64_t)q->b0 * x + (int64_t)q->b1 * q->x1  
+                + (int64_t)q->b2 * q->x2  
+                - (int64_t)q->a1 * q->y1 - (int64_t)q->a2 * q->y2;  
+    int32_t y = (int32_t)(acc >> 15);  
+    if (y >  32767) y =  32767;  
+    if (y < -32768) y = -32768;  
+    q->x2 = q->x1; q->x1 = x;  
+    q->y2 = q->y1; q->y1 = y;  
+    return y;  
+}  
   
 // Пороги компрессора — runtime (дефайны = значения по умолчанию).    
 static volatile int32_t tx_comp_thr    = 8192;               // 1-полосный, ~25% шкалы    
@@ -724,9 +786,13 @@ int16_t __not_in_flash_func(af_tx_tt_fir_push)(int32_t x) {
     return (int16_t)d;  
 }  
   
-int16_t __not_in_flash_func(af_tx_process)(int32_t y) {        
-    y = tx_fir_push(&tx_pre, y);      // речевая полоса        
-    if (tx_ap_on) y = tx_allpass(y);  // симметризатор пиков речи  
+int16_t __not_in_flash_func(af_tx_process)(int32_t y) {          
+    y = tx_fir_push(&tx_pre, y);      // речевая полоса          
+    // 3-полосный EQ — тембр микрофона до АРУ/компрессии  
+    if (txeq_db_x10[0]) y = txeq_push(&txeq_bq[0], y);  
+    if (txeq_db_x10[1]) y = txeq_push(&txeq_bq[1], y);  
+    if (txeq_db_x10[2]) y = txeq_push(&txeq_bq[2], y);  
+    if (tx_ap_on) y = tx_allpass(y);  // симметризатор пиков речи    
     y = tx_agc(y);                    // АРУ: выравнивание уровня к target      
     tx_pres_sidechain(y);             // env_hi_pre/nf/k_dyn — ДО гейта  
     y = tx_gate(y);                   // шумовой гейт: паузы -> тишина      
@@ -888,12 +954,17 @@ void af_tx_init(void) {
     pres_nf_q16    = (int64_t)256 << 16;    
     k_dyn_q15      = 0;    
     k_dyn_tgt_q15  = 0;
-    // High-shelf: коэффициенты и состояния    
-    af_tx_set_shelf(tx_shelf_db_x10);    
-    sh_x1 = sh_x2 = sh_y1 = sh_y2 = 0;    
-    dc_x1 = 0;    
-    dc_y1 = 0;    
-}        
+    // High-shelf: коэффициенты и состояния      
+    af_tx_set_shelf(tx_shelf_db_x10);      
+    sh_x1 = sh_x2 = sh_y1 = sh_y2 = 0;      
+    // Этап 8: TX EQ — коэффициенты и состояния  
+    for (uint8_t i = 0; i < 3; i++) {  
+        txeq_design(i);  
+        txeq_bq[i].x1 = txeq_bq[i].x2 = txeq_bq[i].y1 = txeq_bq[i].y2 = 0;  
+    }  
+    dc_x1 = 0;      
+    dc_y1 = 0;      
+}          
     
 void af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz) {    
     const uint32_t FS2 = AF_FS_OUT_HZ / 2;    
@@ -1142,3 +1213,27 @@ void af_tx_set_notchf(uint32_t f1, uint32_t f2) {
 }    
 uint32_t af_tx_notch1(void) { return tx_notch1_hz; }    
 uint32_t af_tx_notch2(void) { return tx_notch2_hz; }    
+
+// --- 3-полосный TX EQ ---  
+// band: 0=lo (low-shelf), 1=mid (peaking), 2=hi (high-shelf).  
+void af_tx_set_txeq(uint8_t band, int32_t db_x10) {  
+    if (band > 2) return;  
+    if (db_x10 < -120) db_x10 = -120;  
+    if (db_x10 >  120) db_x10 =  120;  
+    txeq_db_x10[band] = db_x10;  
+    txeq_design(band);  
+}  
+int32_t af_tx_txeq(uint8_t band) {  
+    return (band <= 2) ? txeq_db_x10[band] : 0;  
+}  
+  
+void af_tx_set_txeqf(uint8_t band, uint32_t hz) {  
+    if (band > 2) return;  
+    if (hz < 100)  hz = 100;  
+    if (hz > 6000) hz = 6000;  
+    txeq_freq_hz[band] = hz;  
+    if (txeq_db_x10[band] != 0) txeq_design(band);   // пересчёт при активной полосе  
+}  
+uint32_t af_tx_txeqf(uint8_t band) {  
+    return (band <= 2) ? txeq_freq_hz[band] : 0;  
+}  

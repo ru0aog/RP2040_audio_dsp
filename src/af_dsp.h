@@ -177,3 +177,8 @@ bool af_dsp_tt_start(uint32_t f1, uint32_t f2);
 void af_dsp_tt_stop(void);    
 bool af_dsp_tt_busy(void);    
 
+// 3-полосный EQ RX: band 0=lo(shelf) 1=mid(peak) 2=hi(shelf), дБx10 (-120..+120)  
+void     af_dsp_set_rxeq(uint8_t band, int32_t db_x10);  
+void     af_dsp_set_rxeqf(uint8_t band, uint32_t hz);  
+int32_t  af_dsp_rxeq(uint8_t band);  
+uint32_t af_dsp_rxeqf(uint8_t band);  

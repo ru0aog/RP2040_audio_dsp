@@ -133,3 +133,9 @@ uint32_t af_tx_notch2(void);
 int16_t af_tx_rtty_fir_push(int32_t x);   // полосовой 200..1800 для RTTY TX
 
 int16_t af_tx_tt_fir_push(int32_t x);     // двухтон: каскад FIR 400..3200 + DC-block  
+
+// --- Этап 8: 3-полосный TX EQ (после tx_pre, до АРУ) ---  
+void     af_tx_set_txeq (uint8_t band, int32_t db_x10);  // -120..+120, 0=off  
+int32_t  af_tx_txeq     (uint8_t band);  
+void     af_tx_set_txeqf(uint8_t band, uint32_t hz);  
+uint32_t af_tx_txeqf    (uint8_t band);  

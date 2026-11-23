@@ -73,7 +73,9 @@ static void cli_help(void) {
     Serial.println("#   rx exc on|off     — гармонический эксайтер (Чебышёв T2, +3..6 кГц)");  
     Serial.println("#   rx excmix <0..16384> — подмес эксайтера Q15 (3277 = ~10%)");  
     Serial.println("#   nb on|off         — noise blanker: подавитель импульсных помех RX");    
-    Serial.println("#   nb thr <15..100>  — порог NB x10 над огибающей (30 = x3.0)");  
+    Serial.println("#   nb thr <15..100>  — порог NB x10 над огибающей (30 = x3.0)");
+    Serial.println("#   rxeq lo|mid|hi <-120..120> — 3-полосный EQ RX, дБx10 (60=+6дБ, -60=-6дБ)");    
+    Serial.println("#   rxeq lo|mid|hi f <Гц>      — частоты полос EQ RX");    
     Serial.println("#   cw on|off         — телеграфный фильтр");    
     Serial.println("#   cw freq <hz>      — центральная частота CW (300..3000)");    
     Serial.println("#   cw bw <hz>        — полоса CW (80..500)");    
@@ -138,6 +140,8 @@ static void cli_help(void) {
     Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");      
     Serial.println("#   txnotch on|off    — узкие нотчи против тонов-наводок");  
     Serial.println("#   txnotchf <f1> <f2> — частоты TX-нотчей, Гц (200..7000)");    
+    Serial.println("#   txeq lo|mid|hi <-120..120> — 3-полосный EQ TX, дБx10");    
+    Serial.println("#   txeq lo|mid|hi f <Гц>      — частоты полос EQ TX");    
     Serial.println("#   txprof <1..7|имя> — профиль передачи: 1 flat, 2 natural, 3 dx, 4 bass, 5 whisper, 6 loud, 7 max");  
     Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам"); 
     Serial.println("# === СИСТЕМА ===");
@@ -239,7 +243,11 @@ static void cli_stats(void) {
                   (unsigned long)af_dsp_rxshelff(),  
                   (unsigned long)af_dsp_rxshelfq(),  
                   af_dsp_rxexc_on() ? "on" : "off",  
-                  (long)af_dsp_rxexcmix());  
+                  (long)af_dsp_rxexcmix());
+    Serial.printf("#   rxeq    = lo %ld@%lu mid %ld@%lu hi %ld@%lu (дБx10@Гц)\n",    
+                  (long)af_dsp_rxeq(0),  (unsigned long)af_dsp_rxeqf(0),    
+                  (long)af_dsp_rxeq(1),  (unsigned long)af_dsp_rxeqf(1),    
+                  (long)af_dsp_rxeq(2),  (unsigned long)af_dsp_rxeqf(2));    
     {   // Эксайтер: уровень гармоник и реальный вклад в выходной сигнал.  
         // %f в printf не работает — dBFS печатаем как целое дБx10.  
         int32_t hl = af_dsp_rxexc_harm();  
@@ -307,7 +315,11 @@ static void cli_stats(void) {
     Serial.printf("#   notch   = %s   f=%lu/%lu Hz\n",      
                   af_tx_notch() ? "on" : "off",      
                   (unsigned long)af_tx_notch1(),      
-                  (unsigned long)af_tx_notch2());      
+                  (unsigned long)af_tx_notch2());
+    Serial.printf("#   txeq    = lo %ld@%lu mid %ld@%lu hi %ld@%lu (дБx10@Гц)\n",    
+                  (long)af_tx_txeq(0),  (unsigned long)af_tx_txeqf(0),    
+                  (long)af_tx_txeq(1),  (unsigned long)af_tx_txeqf(1),    
+                  (long)af_tx_txeq(2),  (unsigned long)af_tx_txeqf(2));     
     Serial.printf("#   txenv   : agc_env=%lu agc_gain=%lu env_lo=%lu env_hi=%lu\n",      
                   (unsigned long)af_tx_agc_env(),      
                   (unsigned long)af_tx_agc_gain(),      
@@ -753,7 +765,20 @@ static void p_set_agcmax(int32_t v)   { af_dsp_set_agcmax((float)v / 100.0f); } 
 static void p_set_agcmin(int32_t v)   { af_dsp_set_agcmin((float)v / 100.0f); }      // x100  
 static void p_set_cw_sql(int32_t v)   { cwdec_set_sql((float)v / 100.0f); }      // x100  
 static void p_set_rtty_sql(int32_t v) { rttydec_set_sql((float)v / 100.0f); }  
-static void p_set_rtty_ctr(int32_t v) { rttydec_set_center((float)v); } 
+static void p_set_rtty_ctr(int32_t v) { rttydec_set_center((float)v); }   
+// 3-полосный EQ — обёртки по полосам (0=lo 1=mid 2=hi).  
+static void p_set_rxeq_lo (int32_t v) { af_dsp_set_rxeq (0, v); }  
+static void p_set_rxeq_mid(int32_t v) { af_dsp_set_rxeq (1, v); }  
+static void p_set_rxeq_hi (int32_t v) { af_dsp_set_rxeq (2, v); }  
+static void p_set_rxeqf_lo (int32_t v){ af_dsp_set_rxeqf(0, (uint32_t)v); }  
+static void p_set_rxeqf_mid(int32_t v){ af_dsp_set_rxeqf(1, (uint32_t)v); }  
+static void p_set_rxeqf_hi (int32_t v){ af_dsp_set_rxeqf(2, (uint32_t)v); }  
+static void p_set_txeq_lo (int32_t v) { af_tx_set_txeq  (0, v); }  
+static void p_set_txeq_mid(int32_t v) { af_tx_set_txeq  (1, v); }  
+static void p_set_txeq_hi (int32_t v) { af_tx_set_txeq  (2, v); }  
+static void p_set_txeqf_lo (int32_t v){ af_tx_set_txeqf (0, (uint32_t)v); }  
+static void p_set_txeqf_mid(int32_t v){ af_tx_set_txeqf (1, (uint32_t)v); }  
+static void p_set_txeqf_hi (int32_t v){ af_tx_set_txeqf (2, (uint32_t)v); }  
 
 #define P_SET(fn)  ((void(*)(int32_t))(fn))   // сеттеры u32/bool — совместимы по ABI  
   
@@ -796,8 +821,14 @@ static const af_param_t AF_PARAMS[] = {
     { "rx exc",      PT_ONOFF, offsetof(af_bank_t, rx_exc_on),      P_SET(af_dsp_set_rxexc) },  
     { "rx excmix",   PT_U16,   offsetof(af_bank_t, rx_exc_mix),     P_SET(af_dsp_set_rxexcmix) },  
     { "nb",          PT_ONOFF, offsetof(af_bank_t, nb_on),          P_SET(af_dsp_set_nb) },      
-    { "nb thr",      PT_U16,   offsetof(af_bank_t, nb_thr_x10),     P_SET(af_dsp_set_nbthr) },    
-    { "--- TX ---",  PT_SEP,   0, NULL },    
+    { "nb thr",      PT_U16,   offsetof(af_bank_t, nb_thr_x10),     P_SET(af_dsp_set_nbthr) },      
+    { "rxeq lo",     PT_I16,   offsetof(af_bank_t, rxeq_lo_db),     p_set_rxeq_lo },    
+    { "rxeq mid",    PT_I16,   offsetof(af_bank_t, rxeq_mid_db),    p_set_rxeq_mid },    
+    { "rxeq hi",     PT_I16,   offsetof(af_bank_t, rxeq_hi_db),     p_set_rxeq_hi },    
+    { "rxeq lo f",   PT_U16,   offsetof(af_bank_t, rxeq_lo_f),      p_set_rxeqf_lo },    
+    { "rxeq mid f",  PT_U16,   offsetof(af_bank_t, rxeq_mid_f),     p_set_rxeqf_mid },    
+    { "rxeq hi f",   PT_U16,   offsetof(af_bank_t, rxeq_hi_f),      p_set_rxeqf_hi },    
+    { "--- TX ---",  PT_SEP,   0, NULL },      
     // --- TX ---  
     { "tx band lo",  PT_U16,   offsetof(af_bank_t, tx_lo_hz),       p_set_txband_lo },  
     { "tx band hi",  PT_U16,   offsetof(af_bank_t, tx_hi_hz),       p_set_txband_hi },  
@@ -834,8 +865,14 @@ static const af_param_t AF_PARAMS[] = {
     { "tx excmix",   PT_U16,   offsetof(af_bank_t, tx_excmix),      P_SET(af_tx_set_excmix) },  
     { "tx notch",    PT_ONOFF, offsetof(af_bank_t, tx_notch_on),    P_SET(af_tx_set_notch) },  
     { "tx notch f1", PT_U16,   offsetof(af_bank_t, tx_notch1_hz),   p_set_notch1 },  
-    { "tx notch f2", PT_U16,   offsetof(af_bank_t, tx_notch2_hz),   p_set_notch2 },  
-};  
+    { "tx notch f2", PT_U16,   offsetof(af_bank_t, tx_notch2_hz),   p_set_notch2 },    
+    { "txeq lo",     PT_I16,   offsetof(af_bank_t, txeq_lo_db),     p_set_txeq_lo },    
+    { "txeq mid",    PT_I16,   offsetof(af_bank_t, txeq_mid_db),    p_set_txeq_mid },    
+    { "txeq hi",     PT_I16,   offsetof(af_bank_t, txeq_hi_db),     p_set_txeq_hi },    
+    { "txeq lo f",   PT_U16,   offsetof(af_bank_t, txeq_lo_f),      p_set_txeqf_lo },    
+    { "txeq mid f",  PT_U16,   offsetof(af_bank_t, txeq_mid_f),     p_set_txeqf_mid },    
+    { "txeq hi f",   PT_U16,   offsetof(af_bank_t, txeq_hi_f),      p_set_txeqf_hi },    
+};    
 #define AF_PARAMS_COUNT  (sizeof(AF_PARAMS) / sizeof(AF_PARAMS[0]))  
   
 // Чтение поля банка по смещению (тип задаёт размер: u8/i16/u16).  

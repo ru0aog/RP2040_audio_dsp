@@ -146,3 +146,9 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]);
 // FLASH-TEST: N циклов erase/program/verify в тестовый сектор 0x100000.  
 // mode: 0=чистое окно, 1=+park, 2=+downclock, 3=park+downclock.  
 void af_store_test(uint8_t mode, uint32_t iters);  
+
+// 3-полосный EQ (дБx10, -120..+120, 0=off; частоты Гц)    
+int16_t  rxeq_lo_db, rxeq_mid_db, rxeq_hi_db;    
+uint16_t rxeq_lo_f,  rxeq_mid_f,  rxeq_hi_f;    
+int16_t  txeq_lo_db, txeq_mid_db, txeq_hi_db;    
+uint16_t txeq_lo_f,  txeq_mid_f,  txeq_hi_f;    
