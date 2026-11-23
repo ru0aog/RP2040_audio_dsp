@@ -31,6 +31,7 @@
 #include "modes/cw_tx.h"    // CW-передатчик: cwtx_sample (Core 1) / cwtx_* (Core 0)
 #include "modes/rtty_rx.h"  // RTTY-декодер: rttydec_push (Core 1) / rttydec_poll (Core 0)
 #include "modes/rtty_tx.h"  // RTTY-передатчик: rttytx_sample (Core 1) / rttytx_* (Core 0)  
+#include "modes/tt_gen.h"
 
 static uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
 static volatile bool snr_reset_req = false;  // запрос сброса spec-NR (Core 0 -> Core 1)  
@@ -1551,7 +1552,12 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                     // Полосовой FIR 700..1400 (общий с RTTY TX) срезает      
                     // шумовой пол и гармоники LUT — тон 1000 Гц в центре.      
                     t = sat16(af_tx_rtty_fir_push(cwtx_sample()));      
-                } else if (rttytx_busy()) {        
+                } else if (tt_gen_busy()) {  
+                    // Двухтональный IMD-тест: в обход af_tx_process,  
+                    // свой каскад FIR 400..3200 (тон 1900 и IMD3 3100  
+                    // должны пройти — речевой 700..1400 их срезал бы).  
+                    t = sat16(af_tx_tt_fir_push(tt_gen_sample()));  
+                } else if (rttytx_busy()) {          
                     // RTTY-посылка: FSK mark/space, непрерывная фаза —      
                     // тоже в обход af_tx_process (клиппер исказил бы тоны).      
                     // Полосовой FIR 200..1800 срезает шумовой пол и      
@@ -1628,7 +1634,17 @@ void __not_in_flash_func(af_dsp_poll)(void) {
     
     core1_update_load(time_us_32());    
 }    
-  
+
+bool af_dsp_tt_start(uint32_t f1, uint32_t f2) {  
+    if (cwtx_busy() || rttytx_busy() || af_rec_is_playing()) return false;  
+    tt_gen_set(f1, f2);  
+    tt_gen_on(true);  
+    af_dsp_set_tx(true);  
+    return true;  
+}  
+void af_dsp_tt_stop(void) { tt_gen_on(false); af_dsp_set_tx(false); }  
+bool af_dsp_tt_busy(void) { return tt_gen_busy(); }  
+
 // ---------------------------------------------------------------------------  
 // Диагностика  
 // ---------------------------------------------------------------------------  

@@ -368,6 +368,10 @@
 #define AF_PIN_REC              9           // GP9 — LOW -> запись в слот    
 #define AF_PIN_PLAY             10          // GP10 — LOW -> воспроизведение слота    
 
+// Телеграфный ключ (ямбик): замыкание на GND.  
+#define AF_KEY_DIT_PIN          11          // GP11 — точки  
+#define AF_KEY_DAH_PIN          12          // GP12 — тире  
+
 // Периферия: OLED (bit-bang I2C), RGB-LED, селектор сообщений, ключ.  
 #define AF_OLED_SDA_PIN         14          // GP14 — OLED SDA  
 #define AF_OLED_SCL_PIN         15          // GP15 — OLED SCL  
@@ -379,10 +383,7 @@
 // Селектор сообщений магнитофона/CW.TXT: 2 бита -> слот 0..3.  
 #define AF_MSG_SEL0_PIN         13          // GP13 — младший бит  
 #define AF_MSG_SEL1_PIN         28          // GP28 — старший бит  
-  
-// Телеграфный ключ (ямбик): замыкание на GND.  
-#define AF_KEY_DIT_PIN          11          // GP11 — точки  
-#define AF_KEY_DAH_PIN          12          // GP12 — тире  
+
 
 #define AF_BANK_COUNT           7           // ячеек настроек во flash    
   

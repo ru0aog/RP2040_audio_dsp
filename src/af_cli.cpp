@@ -1312,6 +1312,25 @@ static void cli_exec(char* line) {
         }  
     }  
 
+    else if (strcmp(cmd, "tt") == 0) {  
+        char* a1 = strtok(NULL, " \t");  
+        if (a1 && strcmp(a1, "off") == 0) {  
+            af_dsp_tt_stop();  
+            Serial.println("# OK tt=off");  
+        } else if (a1 && strcmp(a1, "on") == 0) {  
+            char* s1 = strtok(NULL, " \t");  
+            char* s2 = strtok(NULL, " \t");  
+            uint32_t f1 = s1 ? (uint32_t)strtoul(s1, NULL, 10) : 700;  
+            uint32_t f2 = s2 ? (uint32_t)strtoul(s2, NULL, 10) : 1900;  
+            if (af_dsp_tt_start(f1, f2))  
+                Serial.printf("# OK tt on %lu/%lu Hz\n", (unsigned long)f1, (unsigned long)f2);  
+            else  
+                Serial.println("# ERR: tx busy (cw/rtty/play)");  
+        } else {  
+            Serial.println("# ERR: tt on [f1 f2]|off");  
+        }  
+    }  
+
     else if (strcmp(cmd, "rtty") == 0) {    
         // on|off|scan|rsid|rev|ctr|sql|dbg — метки AF_PARAMS, сюда не доходят.    
         // Здесь только подкоманды с аргументом-строкой: tx, abort.    

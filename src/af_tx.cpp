@@ -70,8 +70,17 @@ static tx_fir_t tx_pre, tx_post;
 #define TX_RTTY_FIR_N    127     // скаты ~±100 Гц, подавление ~-90 дБ 
 #define TX_RTTY_LO_HZ    700u    // нижний срез фильтра
 #define TX_RTTY_HI_HZ    1400u   // верхний срез фильтра
-static int16_t tx_rtty_taps[TX_RTTY_FIR_N];    
-static tx_fir_t tx_rtty_fir1, tx_rtty_fir2;   // каскад: два одинаковых FIR подряд    
+static int16_t tx_rtty_taps[TX_RTTY_FIR_N];      
+static tx_fir_t tx_rtty_fir1, tx_rtty_fir2;   // каскад: два одинаковых FIR подряд      
+  
+// --- Двухтональный генератор: свой FIR 400..3200 Гц ---  
+// Классический IMD-тест 700/1900: верхний тон и продукт IMD3 на 3100 Гц  
+// должны пройти — речевой 700..1400 их срезал бы. Свой каскад 2x127.  
+#define TX_TT_FIR_N    127  
+#define TX_TT_LO_HZ    400u  
+#define TX_TT_HI_HZ    3200u  
+static int16_t tx_tt_taps[TX_TT_FIR_N];  
+static tx_fir_t tx_tt_fir1, tx_tt_fir2;    
       
 static void tx_fir_design(void) {        
     tx_fir_design_n(tx_fir_taps,  TX_FIR_N);       // пред-фильтр, 127      
@@ -85,6 +94,16 @@ static void tx_rtty_fir_design(void) {
     tx_lo_hz = TX_RTTY_LO_HZ;  
     tx_hi_hz = TX_RTTY_HI_HZ;  
     tx_fir_design_n(tx_rtty_taps, TX_RTTY_FIR_N);  
+    tx_lo_hz = save_lo;  
+    tx_hi_hz = save_hi;  
+}
+
+// Дизайн TT-фильтра: та же sinc+Блэкман-Харрис, полоса 400..3200.  
+static void tx_tt_fir_design(void) {  
+    const uint32_t save_lo = tx_lo_hz, save_hi = tx_hi_hz;  
+    tx_lo_hz = TX_TT_LO_HZ;  
+    tx_hi_hz = TX_TT_HI_HZ;  
+    tx_fir_design_n(tx_tt_taps, TX_TT_FIR_N);  
     tx_lo_hz = save_lo;  
     tx_hi_hz = save_hi;  
 }  
@@ -190,6 +209,9 @@ static int32_t xo_lp_x1 = 0, xo_lp_x2 = 0, xo_lp_y1 = 0, xo_lp_y2 = 0;
 static int32_t xo_hp_x1 = 0, xo_hp_x2 = 0, xo_hp_y1 = 0, xo_hp_y2 = 0;    
 static int64_t tx_env_lo_q16 = (int64_t)256 << 16;  // EMA огибающей НЧ-полосы  
 static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей ВЧ-полосы  
+
+// Двухтональный генератор: прогон через каскадный 400..3200 + DC-blocker.  
+static int32_t tx_tt_dc_x1 = 0, tx_tt_dc_y1 = 0;  
 
 // --- Этап 5: HF ducking ---    
 static volatile uint8_t  tx_duck_on     = AF_TX_DUCK_ON_DEFAULT;    
@@ -691,7 +713,18 @@ int16_t __not_in_flash_func(af_tx_rtty_fir_push)(int32_t x) {
     if (d >  32767) d =  32767;        
     if (d < -32768) d = -32768;        
     return (int16_t)d;        
-}        
+}
+  
+int16_t __not_in_flash_func(af_tx_tt_fir_push)(int32_t x) {  
+    int32_t y = tx_fir_push(&tx_tt_fir1, x);  
+    y = tx_fir_push(&tx_tt_fir2, y);  
+    int32_t d = y - tx_tt_dc_x1 + (int32_t)(((int64_t)32510 * tx_tt_dc_y1) >> 15);  
+    if (d >  32767) d =  32767;  
+    if (d < -32768) d = -32768;  
+    tx_tt_dc_x1 = y;  
+    tx_tt_dc_y1 = d;  
+    return (int16_t)d;  
+}  
   
 int16_t __not_in_flash_func(af_tx_process)(int32_t y) {        
     y = tx_fir_push(&tx_pre, y);      // речевая полоса        
@@ -816,7 +849,14 @@ void af_tx_init(void) {
     tx_rtty_fir1.taps = tx_rtty_taps;    
     tx_rtty_fir1.n    = TX_RTTY_FIR_N;    
     tx_rtty_fir2.taps = tx_rtty_taps;    
-    tx_rtty_fir2.n    = TX_RTTY_FIR_N;    
+    tx_rtty_fir2.n    = TX_RTTY_FIR_N;
+    tx_tt_fir_design();  
+    memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));  
+    memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));  
+    tx_tt_fir1.taps = tx_tt_taps;  tx_tt_fir1.n = TX_TT_FIR_N;  
+    tx_tt_fir2.taps = tx_tt_taps;  tx_tt_fir2.n = TX_TT_FIR_N;  
+    tx_tt_dc_x1 = 0;  
+    tx_tt_dc_y1 = 0;  
     tx_env_q16    = (int64_t)256 << 16;  
     tx_env_lo_q16 = (int64_t)256 << 16;  
     tx_env_hi_q16 = (int64_t)256 << 16;  

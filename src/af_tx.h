@@ -131,3 +131,5 @@ uint32_t af_tx_notch1(void);
 uint32_t af_tx_notch2(void);    
 
 int16_t af_tx_rtty_fir_push(int32_t x);   // полосовой 200..1800 для RTTY TX
+
+int16_t af_tx_tt_fir_push(int32_t x);     // двухтон: каскад FIR 400..3200 + DC-block  
