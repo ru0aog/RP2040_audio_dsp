@@ -3,11 +3,10 @@
 // FAT12-диск ~1.6 МБ, RAM-образ ~14 КБ (метаданные + SET.TXT). Раскладка:    
 //   LBA 0      boot sector    
 //   LBA 1..10  FAT (10 секторов, кластер = 1 сектор)    
-//   LBA 11     root dir (SET.TXT + CW.TXT + REC1..REC7.WAV)      
-//   LBA 12..27 data: SET.TXT (RAM)      
-//   LBA 28     data: CW.TXT (RAM, 4 строки сообщений магнитофона)    
-//   LBA 29..   REC1..REC7.WAV — виртуальные, синтез в af_fm_msc_read      
-//              (WAV 16000 Гц mono, ресемплинг из слота 7732 Гц)    
+//   LBA 11     root dir (SET.TXT + CW.TXT + REC1..REC4.WAV)        
+//   LBA 12..27 data: SET.TXT (RAM)        
+//   LBA 28     data: CW.TXT (RAM, 4 строки сообщений магнитофона)      
+//   LBA 29..   REC1..REC4.WAV — виртуальные, синтез в af_fm_msc_read        
 //  
 // SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.      
 // Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.      
@@ -74,9 +73,8 @@ static uint16_t rd16(const uint8_t* p);
 
 // Разбор записанного сектора root dir: обновить dir_first_cl[].  
 static void dir_track(const uint8_t* d) {  
-    static const char wav_names[AF_FM_WAV_FILES][12] = {  
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV",  
-        "REC5    WAV", "REC6    WAV", "REC7    WAV" };  
+    static const char wav_names[AF_FM_WAV_FILES][12] = {    
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };    
     for (uint8_t e = 0; e < 16; e++) {               // 16 записей по 32 Б    
         const uint8_t* p = d + e * 32;    
         if (p[0] == 0xE5 || p[0] == 0x00) continue;  // удалённая/пустая запись    
@@ -178,8 +176,7 @@ static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,
               AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);   // размер = кластер,    
                                                         // хвост — пробелы    
     static const char wav_names[AF_FM_WAV_FILES][12] = {    
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV",    
-        "REC5    WAV", "REC6    WAV", "REC7    WAV" };     
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" }; 
     for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {      
         uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS    
                                     + i * AF_FM_WAV_CLUSTERS);      
@@ -195,10 +192,10 @@ void af_fm_init(void) {
     memset(dir_first_cl, 0, sizeof(dir_first_cl));  
     memset(fm_disk, 0, sizeof(fm_disk));  
     fm_build_boot();    
-    static const uint16_t zero7[7] = {0};    
-    static const uint32_t zsz7[7]  = {0};    
-    fm_build_fat(0, zero7);    
-    fm_build_dir(0, 0, zsz7);    
+    static const uint16_t zero4[AF_FM_WAV_FILES] = {0};      
+    static const uint32_t zsz4[AF_FM_WAV_FILES]  = {0};      
+    fm_build_fat(0, zero4);      
+    fm_build_dir(0, 0, zsz4);      
     fm_set_len = 0;  
     fm_dirty   = false;  
     fm_stale   = true;                 // первый sync — после af_store_init  

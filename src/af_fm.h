@@ -33,7 +33,7 @@
 #define AF_FM_WAV_MAX_SAMP  ((AF_REC_RAM_SAMP * AF_FM_WAV_RATE) / AF_FM_REC_RATE + 2u)    
 #define AF_FM_WAV_MAX_BYTES (44u + AF_FM_WAV_MAX_SAMP * 2u)    
 #define AF_FM_WAV_CLUSTERS  ((AF_FM_WAV_MAX_BYTES + 511u) / 512u)   // ~453    
-#define AF_FM_WAV_FILES     7u
+#define AF_FM_WAV_FILES     4    // 4 слота магнитофона = 4 сообщения (селектор GP13/GP28)  
 //   LBA 28       CW.TXT (1 кластер, 4 строки сообщений магнитофона)    
 //   LBA 29..     REC1..REC7.WAV    
 #define AF_FM_CW_CLUSTERS   1u    
