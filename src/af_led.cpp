@@ -1,10 +1,8 @@
 // src/af_led.cpp  
 // ============================================================================  
-// af_led.cpp — heartbeat-индикация: параллельный bit-bang WS2812B (GP16+GP23)  
-// и монохромный LED (GP25). Порт led_blink.cpp v2.12 из RP2040_beacon.  
-//  
-// Тайминги бита пересчитаны под clk_sys=220 МГц (исходные были под ~125 МГц,  
-// счётчики умножены на 1.76).  
+// af_led.cpp — heartbeat-индикация: параллельный bit-bang WS2812B    
+// (AF_LED_ZERO_PIN + AF_LED_YD_PIN) и монохромный LED (AF_LED_PICO_PIN).    
+// Пины — в af_config.h. Порт led_blink.cpp v2.12 из RP2040_beacon.  
 //  
 // Heartbeat (период 1000 мс):  
 //   0..200 мс    — плавный набор 0 -> 15% (еле-еле тлеет)  
@@ -14,15 +12,14 @@
 // ============================================================================  
 #include <Arduino.h>  
 #include <hardware/gpio.h>
-#include <hardware/gpio.h>    
 #include <hardware/timer.h>    
 #include <hardware/sync.h>  
 #include "af_led.h"
 #include "af_dsp.h"     // af_dsp_nr_on(), af_dsp_notch_on()  
+#include "af_config.h"
   
-#define PIN_ZERO   16   // WS2812B на RP2040-Zero  
-#define PIN_YD     23   // WS2812B на YD-RP2040  
-#define PIN_PICO   25   // LED_BUILTIN на обычной Pico  
+static const uint32_t RGB_PINS_MASK = (1u << AF_LED_ZERO_PIN) | (1u << AF_LED_YD_PIN);    
+static const uint32_t ALL_PINS_MASK = RGB_PINS_MASK | (1u << AF_LED_PICO_PIN);    
 
 static uint8_t s_bank = 0;      // текущий банк, задаёт af_led_set_bank()  
 static bool    s_enabled = false; // heartbeat заглушен при старте, включается 'led on'    
@@ -47,11 +44,8 @@ static const uint8_t BANK_RGB[8][3] = {
     {255, 255, 255},   // 6 — белый  
     {128,   0, 255},   // 7 — фиолетовый  
 };
-
-static const uint32_t RGB_PINS_MASK = (1u << PIN_ZERO) | (1u << PIN_YD);  
-static const uint32_t ALL_PINS_MASK = RGB_PINS_MASK | (1u << PIN_PICO);  
   
-// Параллельная отправка байта на GP16 и GP23.  
+// Параллельная отправка байта на AF_LED_ZERO_PIN и AF_LED_YD_PIN
 // Тайминги WS2812B под 220 МГц: T1H~40, T1L~15, T0H~4, T0L~80 циклов.  
 static void __time_critical_func(send_raw_byte_parallel)(uint8_t v) {  
     for (int i = 7; i >= 0; i--) {  
@@ -87,9 +81,9 @@ void __not_in_flash_func(af_led_set)(uint8_t r, uint8_t g, uint8_t b) {
 void __not_in_flash_func(af_led_off)(void) { af_led_set(0, 0, 0); } 
   
 void af_led_init(void) {  
-    gpio_init(PIN_ZERO); gpio_set_dir(PIN_ZERO, GPIO_OUT);  
-    gpio_init(PIN_YD);   gpio_set_dir(PIN_YD,   GPIO_OUT);  
-    gpio_init(PIN_PICO); gpio_set_dir(PIN_PICO, GPIO_OUT);  
+    gpio_init(AF_LED_ZERO_PIN); gpio_set_dir(AF_LED_ZERO_PIN, GPIO_OUT);    
+    gpio_init(AF_LED_YD_PIN);   gpio_set_dir(AF_LED_YD_PIN,   GPIO_OUT);    
+    gpio_init(AF_LED_PICO_PIN); gpio_set_dir(AF_LED_PICO_PIN, GPIO_OUT);    
     sio_hw->gpio_clr = ALL_PINS_MASK;
     af_led_set(0, 0, 10);
 }  
