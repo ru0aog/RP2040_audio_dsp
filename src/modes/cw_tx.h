@@ -16,7 +16,8 @@ bool     cwtx_manual_feed(bool dash);    // подать элемент (false =
 void     cwtx_manual_key_down(void);     // прямой ключ: открыть (элемент "бесконечный")    
 void     cwtx_manual_key_up(void);       // прямой ключ: закрыть (спад rise)    
 void     cwtx_manual_end(void);          // выход: хвост-тишина -> active=false    
-  
+bool     cwtx_el_rem_free(void);       // true = элемент и пауза доиграны, можно feed    
+
 // ---- Core 0 ----    
 void     cwtx_init(uint32_t tone_hz);        // построить LUT + NCO-шаг    
 bool     cwtx_send(const char* text);        // поставить текст в очередь (false = занято)    

@@ -307,3 +307,7 @@ void cwtx_manual_key_up(void) {           // спад rise от текущей �
 void cwtx_manual_end(void) {    
     cwtx_manual = false;   // poll: очередь пуста -> хвост -> active=false    
 }
+
+bool cwtx_el_rem_free(void) {      
+    return cwtx_manual && cwtx_el_rem == 0 && cwtx_gap == 0;      
+}      

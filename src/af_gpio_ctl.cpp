@@ -50,7 +50,7 @@ static gpio_ctl_t ctl_play;      // GP10 — LOW -> воспроизведени
 static gpio_ctl_t ctl_sel[2];    // GP13/GP28 — селектор сообщения, 2 бита (LOW=1)
 
 // ---- Ямбический ключ (GP11=dit, GP12=dah, LOW=нажат) ----    
-#define KEY_DEBOUNCE_MS   1u     // 1 опрос × AF_GPIO_POLL_MS = ~10 мс устойчивого уровня    
+#define KEY_DEBOUNCE_MS   2u     // 2 опроса × 10 мс    
 #define KEY_IAMBIC_A      1    
 #define KEY_IAMBIC_B      2    
   
@@ -80,6 +80,7 @@ uint8_t af_gpio_msg_sel(void) {
     return (uint8_t)(ctl_sel[0].stable | (ctl_sel[1].stable << 1));    
 }    
 
+static void key_tx_off(void);   // forward: определена ниже    
 // Режим ключа: 0=off, 1=iambic A, 2=iambic B, 3=straight. Для CLI 'cw key'.    
 void af_gpio_key_mode(uint8_t m) {    
     if (m > 3) return;    
@@ -460,8 +461,8 @@ void af_gpio_ctl_poll(void) {
             bool down = dit_lvl || dah_lvl;      // любой контакт = ключ нажат    
             if (down != key_straight_down) {    
                 key_straight_down = down;    
-                if (down) { key_tx_on(); cwtx_manual_key(true); }    
-                else      { cwtx_manual_key(false); }    
+                    if (down) { key_tx_on(); cwtx_manual_key_down(); }      
+                    else      { cwtx_manual_key_up(); }      
             }    
             if (!key_straight_down && key_tx && !cwtx_busy()) key_tx_off();      
         } else {    
