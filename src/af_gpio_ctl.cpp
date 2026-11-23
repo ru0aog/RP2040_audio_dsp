@@ -7,7 +7,9 @@
 //   GP5 — LOW -> NR on,  GP6 — LOW -> NT on.  GP7 — LOW -> bypass on  
 //   GP8 — LOW -> TX (PTT); при playback магнитофона — выход PTT (LOW).    
 //   GP9 — LOW -> запись: тракт -> TX (микрофон), без PTT.    
-//   GP10 — LOW -> воспроизведение: тракт -> TX + PTT на GP8, звук в TX.    
+//   GP10 — LOW -> передача сообщения: селектор GP13/GP28 выбирает 0..3.      
+//     Строка CW.TXT непустая -> CW-посылка (cwtx), пустая -> голосовой слот.      
+//     Тракт -> TX + PTT на GP8; CW добивается по cwtx_busy после отпускания.      
 //   GP13/GP28 — селектор сообщения магнитофона/CW.TXT, 2 бита (LOW=1):    
 //     код 0..3 = строка CW.TXT или голосовой слот 1..4 (этапы 3-4).    
 //   Уровневая логика: LOW = активно, open = стоп.    
@@ -135,32 +137,55 @@ static void apply_rec(bool grounded) {
     }    
 }    
   
-static void apply_play(bool grounded) {    
-    if (grounded) {    
-        if (af_rec_is_recording()) af_rec_stop();  // play приоритетнее записи    
-        af_dsp_set_tx(1);                           // тракт -> TX    
-        sw_ptt_active = true;                       // GP8 -> выход PTT    
-        pinMode(ctl_ptt.pin, OUTPUT);    
-        digitalWrite(ctl_ptt.pin, LOW);             // PTT активен (LOW)    
-        if (af_rec_play())    
-            Serial.printf("[GPIO] GP%u GND -> play on (tx+ptt)\n", ctl_play.pin);    
-        else {                                      // нечего играть — всё вернуть    
-            digitalWrite(ctl_ptt.pin, HIGH);    
-            pinMode(ctl_ptt.pin, INPUT_PULLUP);    
-            sw_ptt_active = false;    
-            af_dsp_set_tx(0);    
-        }    
-    } else {    
-        if (af_rec_is_playing()) {    
-            af_rec_play_stop();    
-            digitalWrite(ctl_ptt.pin, HIGH);    
-            pinMode(ctl_ptt.pin, INPUT_PULLUP);     // GP8 обратно на вход PTT    
-            sw_ptt_active = false;    
-            af_dsp_set_tx(0);                       // тракт -> RX    
-            Serial.printf("[GPIO] GP%u open -> play off\n", ctl_play.pin);    
-        }    
-    }    
-} 
+static void apply_play(bool grounded) {      
+    if (grounded) {      
+        if (af_rec_is_recording()) af_rec_stop();  // play приоритетнее записи      
+        if (af_dsp_cwtx_busy()) return;            // CW-посылка ещё идёт — ждём      
+  
+        const uint8_t idx = af_gpio_msg_sel();     // GP13/GP28 -> 0..3      
+  
+        if (af_cw_msgs[idx][0] != '\0') {      
+            // --- CW-вызов: строка CW.TXT -> посылка через cwtx ---      
+            // af_dsp_cwtx_start сам ставит текст в очередь и поднимает TX.      
+            if (!af_dsp_cwtx_start(af_cw_msgs[idx])) {      
+                Serial.printf("[GPIO] GP%u -> cw msg %u: queue busy\n",      
+                              ctl_play.pin, idx + 1);      
+                return;      
+            }      
+            sw_ptt_active = true;                   // GP8 -> выход PTT      
+            pinMode(ctl_ptt.pin, OUTPUT);      
+            digitalWrite(ctl_ptt.pin, LOW);         // PTT активен (LOW)      
+            Serial.printf("[GPIO] GP%u GND -> cw msg %u (tx+ptt)\n",      
+                          ctl_play.pin, idx + 1);      
+        } else {      
+            // --- Голосовой слот: как раньше ---      
+            af_dsp_set_tx(1);                       // тракт -> TX      
+            sw_ptt_active = true;                   // GP8 -> выход PTT      
+            pinMode(ctl_ptt.pin, OUTPUT);      
+            digitalWrite(ctl_ptt.pin, LOW);         // PTT активен (LOW)      
+            if (af_rec_play())      
+                Serial.printf("[GPIO] GP%u GND -> play on (tx+ptt)\n", ctl_play.pin);      
+            else {                                  // нечего играть — всё вернуть      
+                digitalWrite(ctl_ptt.pin, HIGH);      
+                pinMode(ctl_ptt.pin, INPUT_PULLUP);      
+                sw_ptt_active = false;      
+                af_dsp_set_tx(0);      
+            }      
+        }      
+    } else {      
+        // Отпускание: голос стопаем сразу; CW-посылку не обрываем —      
+        // она добивается до конца, PTT/TX отпустит добиватель в poll      
+        // по !af_dsp_cwtx_busy().      
+        if (af_rec_is_playing()) {      
+            af_rec_play_stop();      
+            digitalWrite(ctl_ptt.pin, HIGH);      
+            pinMode(ctl_ptt.pin, INPUT_PULLUP);     // GP8 обратно на вход PTT      
+            sw_ptt_active = false;      
+            af_dsp_set_tx(0);                       // тракт -> RX      
+            Serial.printf("[GPIO] GP%u open -> play off\n", ctl_play.pin);      
+        }      
+    }      
+}   
 
 // --- API для CLI: play voice_14 в TX с PTT (аналог GP10) -------------------    
 // Включает тракт TX + GP8 как выход PTT (LOW). Возвращает false,    
@@ -338,11 +363,13 @@ void af_gpio_ctl_poll(void) {
     poll_pin(&ctl_sel[0]);
     poll_pin(&ctl_sel[1]);
   
-    // Playback закончился по буферу (GP10 или CLI play voice_14) — отпускаем PTT/TX        
-    if (sw_ptt_active && !af_rec_is_playing()) {        
-        af_gpio_ptt_tx_off();        
-        Serial.println("[GPIO] play end -> ptt/tx released");        
-    }        
+    // Playback закончился по буферу (GP10 или CLI play voice_14) — отпускаем PTT/TX.          
+    // Для CW-вызова ждём конца посылки: cwtx_busy() держит PTT до последнего          
+    // элемента + послесвечение огибающей.          
+    if (sw_ptt_active && !af_rec_is_playing() && !af_dsp_cwtx_busy()) {          
+        af_gpio_ptt_tx_off();          
+        Serial.println("[GPIO] play end -> ptt/tx released");          
+    }          
     // Запись закончилась по буферу (авто-стоп), а GP9 ещё нажат — тракт в RX      
     if (ctl_rec.stable && !af_rec_is_recording() && !sw_ptt_active && af_dsp_tx_on()) {      
         af_dsp_set_tx(0);      
