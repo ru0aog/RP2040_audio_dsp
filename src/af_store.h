@@ -98,8 +98,6 @@ struct af_bank_t {
     uint8_t  tx_notch_on;   // TX-нотчи    
     uint16_t tx_notch1_hz;    
     uint16_t tx_notch2_hz;    
-    uint16_t tx_notch1_hz;      
-    uint16_t tx_notch2_hz;      
     // Этап 8: 3-полосный EQ (дБx10, -120..+120, 0=off; частоты Гц)    
     int16_t  rxeq_lo_db, rxeq_mid_db, rxeq_hi_db;    
     uint16_t rxeq_lo_f,  rxeq_mid_f,  rxeq_hi_f;    
