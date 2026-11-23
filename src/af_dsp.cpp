@@ -1387,8 +1387,9 @@ void af_dsp_init(void) {
     rx_exc_design();          // ФВЧ-биквады эксайтера  
     af_snr_init();            // таблицы окна/twiddles/bit-reverse спектрального NR    
     af_tx_init();         // TX: FIR-компрессор-клиппер          
-    cwtx_init((float)cw_f0);  // NCO + LUT синуса CW-передатчика (Core 0, float)      
-    rttytx_init();            // NCO + LUT синуса RTTY-передатчика (mark=1085, space=915)      
+    cwtx_init((float)cw_f0);  // NCO + LUT синуса CW-передатчика (Core 0, float)        
+    rttytx_init();            // NCO + LUT синуса RTTY-передатчика (mark=1085, space=915)        
+    tt_gen_init();            // LUT синуса двухтонального генератора (700/1900)        
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
     memset(&out_usb, 0, sizeof(out_usb));    
