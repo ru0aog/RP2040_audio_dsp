@@ -1272,6 +1272,21 @@ static void cli_exec(char* line) {
             Serial.println("# OK cw key");      
         }  
 
+        else if (strcmp(sub, "beacon") == 0) {  
+            char* per = strtok(NULL, " \t");  
+            if (per && strcmp(per, "off") == 0) { af_gpio_beacon_set(NULL, 0); Serial.println("# OK beacon=off"); }  
+            else {  
+                if (per == NULL) { Serial.println("# ERR: cw beacon <period_s> <текст>|off"); return; }  
+                uint32_t s = (uint32_t)strtoul(per, NULL, 10);  
+                if (s < 5 || s > 3600) { Serial.println("# ERR: period 5..3600 s"); return; }  
+                char* txt = strtok(NULL, "");  
+                if (txt) while (*txt == ' ' || *txt == '\t') txt++;  
+                if (!txt || !*txt) { Serial.println("# ERR: cw beacon <period_s> <текст>"); return; }  
+                af_gpio_beacon_set(txt, s);  
+                Serial.println("# OK beacon");  
+            }  
+        }  
+
         else if (strcmp(sub, "abort") == 0) {  
             cwtx_abort();  
             Serial.println("# OK cw tx abort");  

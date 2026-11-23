@@ -26,3 +26,5 @@ uint8_t af_gpio_msg_sel(void);        // код селектора сообще�
 
 void    af_gpio_key_mode(uint8_t m);     // 0=off 1=iambicA 2=iambicB 3=straight    
 uint8_t af_gpio_key_mode_get(void);    
+void    af_gpio_beacon_set(const char* text, uint32_t period_s);  // 0/пусто = выкл  
+bool    af_gpio_beacon_on(void);  

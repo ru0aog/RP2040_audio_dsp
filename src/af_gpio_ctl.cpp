@@ -61,6 +61,12 @@ static bool     key_last_dash;       // последний сыгранный э
 static bool     key_straight_down;   // прямой ключ: текущее состояние    
 static uint8_t  dit_db, dah_db;      // счётчики антидребезга    
 static bool     dit_lvl, dah_lvl;    // устойчивые уровни (true=нажато)    
+
+// --- CW-маяк: циклическая посылка по таймеру (Core 0) ---  
+static bool     beacon_on      = false;  
+static uint32_t beacon_period  = 0;      // мс, 0 = выкл  
+static uint32_t beacon_next_ms = 0;  
+static char     beacon_text[AF_CW_MSG_LEN];   // текст посылки (как строка CW.TXT)  
   
 static uint32_t t_next_poll = 0;      
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
@@ -437,6 +443,22 @@ void af_gpio_ctl_init(void) {
   
     t_next_poll = millis() + AF_GPIO_POLL_MS;  
 }  
+
+void af_gpio_beacon_set(const char* text, uint32_t period_s) {  
+    if (!text || !*text || period_s == 0) {  
+        beacon_on = false;  
+        Serial.println("[BEACON] off");  
+        return;  
+    }  
+    strncpy(beacon_text, text, AF_CW_MSG_LEN - 1);  
+    beacon_text[AF_CW_MSG_LEN - 1] = '\0';  
+    beacon_period  = period_s * 1000u;  
+    beacon_next_ms = millis();            // первая посылка сразу  
+    beacon_on      = true;  
+    Serial.printf("[BEACON] on: \"%s\" every %lu s\n", beacon_text, (unsigned long)period_s);  
+}  
+  
+bool af_gpio_beacon_on(void) { return beacon_on; }  
   
 void af_gpio_ctl_poll(void) {    
     const uint32_t now = millis();    
@@ -482,4 +504,20 @@ void af_gpio_ctl_poll(void) {
         af_dsp_set_tx(0);      
         Serial.println("[GPIO] rec end (buf full) -> tx released");      
     }      
+
+    // CW-маяк: время пришло и тракт свободен -> очередная посылка  
+    if (beacon_on && (int32_t)(millis() - beacon_next_ms) >= 0) {  
+        if (!af_dsp_cwtx_busy() && !af_rec_is_playing() && !key_tx) {  
+            if (af_dsp_cwtx_start(beacon_text)) {  
+                af_gpio_ptt_tx_on();      // PTT на время посылки  
+                beacon_next_ms = millis() + beacon_period;  
+            } else {  
+                beacon_next_ms = millis() + 1000u;   // очередь занята — повтор через 1 с  
+            }  
+        } else {  
+            beacon_next_ms = millis() + 500u;        // тракт занят — отложить  
+        }  
+    }  
+
 }  
+
