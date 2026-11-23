@@ -82,7 +82,10 @@ static void cli_help(void) {
     Serial.println("#   cw wpm <5..60>    — стартовая скорость декодера, WPM");      
     Serial.println("#   cw sql <0..1>     — сквелч декодера (0 = off, 0.25 = дефолт)");
     Serial.println("#   cw tx <текст>     — передать посылку CW (тон = cw f0, авто-возврат в RX)");    
-    Serial.println("#   cw txwpm <5..60>  — скорость передачи;  cw abort — оборвать посылку");    
+    Serial.println("#   cw txwpm <5..60>  — скорость передачи;  cw abort — оборвать посылку");
+    Serial.println("#   cw msg <1..4> <текст> — строка CW.TXT (пусто = голосовой слот)");      
+    Serial.println("#   cw msgs           — показать 4 сообщения магнитофона");      
+    Serial.println("#   cw key off|on|iambic_a|iambic_b|straight — ключ на GP11/GP12");      
     Serial.println("#   rtty on|off       — RTTY-декодер 45.45/170: текст в Serial (взаимоискл. с cw)");  
     Serial.println("#   rtty rsid on|off  — захват центра по RSID-метке (дефолт on)");  
     Serial.println("#   rtty scan on|off  — сканер тонов как fallback без RSID (дефолт on)");  
@@ -156,7 +159,8 @@ static void cli_help(void) {
     Serial.println("#   recs              — состояние слота");    
     Serial.println("#   help / h / ?      — эта справка");      
     Serial.println("# === GPIO ===");    
-    Serial.println("# GP2,3,4=банк (двоичный код, 000=ручной), GP5=NR, GP6=NT, GP7=bypass, GP8=PTT, GP9=rec, GP10=play (LOW=on)");
+    Serial.println("# GPIO: GP2-4=банк GP5=NR GP6=NT GP7=bypass GP8=PTT GP9=rec GP10=play");  
+    Serial.println("#       GP11/GP12=ключ dit/dah  GP13/GP28=селектор сообщений 0..3");  
 }
 
 // ---------------------------------------------------------------------------  
@@ -1180,7 +1184,7 @@ static void cli_exec(char* line) {
     }
     else if (strcmp(cmd, "cw") == 0) {  
         char* sub = strtok(NULL, " \t");  
-        if (sub == NULL) { Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..2000>|dec on|off|wpm <5..60>|sql <0..1>|tx <текст>|txwpm <5..60>|abort");   return; }      
+        if (sub == NULL) { Serial.println("# ERR: cw on|off|freq|bw|noise|dec|wpm|sql|tx|txwpm|abort|msg <1..4>|msgs|key <mode>");   return; }  
   
         if (strcmp(sub, "on") == 0) {  
             af_dsp_set_cw(true);
@@ -1220,8 +1224,8 @@ static void cli_exec(char* line) {
             if (v == NULL || *v == '\0') { Serial.println("# ERR: cw tx <текст>"); return; }  
             while (*v == ' ' || *v == '\t') ++v; // пропустить ведущие пробелы  
             if (*v == '\0') { Serial.println("# ERR: cw tx <текст>"); return; }  
-            if (af_dsp_cwtx_start(v)) {  
-                // '>' печатает сам rttytx_send — здесь не дублируем
+            if (af_dsp_cwtx_start(v)) {    
+                // '>' печатает сам cwtx_send — здесь не дублируем  
                 Serial.printf("# OK cw tx: %s\n", v);  
             } else {  
                 Serial.println("# ERR cw tx: busy или пустая посылка");  
@@ -1247,7 +1251,9 @@ static void cli_exec(char* line) {
             strncpy(af_cw_msgs[idx - 1], v, AF_CW_MSG_LEN - 1);    
             af_cw_msgs[idx - 1][AF_CW_MSG_LEN - 1] = '\0';    
             if (af_store_cw_save())    
-                Serial.printf("# OK cw msg %d: \"%s\"\n", idx, af_cw_msgs[idx - 1]);    
+                Serial.printf("# OK cw msg %d: \"%s\"\n", idx, af_cw_msgs[idx - 1]);
+            else      
+                Serial.println("# ERR cw msg: flash write failed"); 
         }    
         else if (strcmp(sub, "msgs") == 0) {    
             for (uint8_t i = 0; i < AF_CW_MSGS; i++)    
@@ -1255,15 +1261,16 @@ static void cli_exec(char* line) {
                               af_cw_msgs[i], af_cw_msgs[i][0] ? "" : " (voice)");    
         }    
 
-        else if (strcmp(a1, "key") == 0) {    
-        if (!a2 || strcmp(a2, "off") == 0)        af_gpio_key_mode(0);    
-        else if (strcmp(a2, "iambic_a") == 0)     af_gpio_key_mode(1);    
-        else if (strcmp(a2, "iambic_b") == 0)     af_gpio_key_mode(2);    
-        else if (strcmp(a2, "straight") == 0)     af_gpio_key_mode(3);    
-        else if (strcmp(a2, "on") == 0)           af_gpio_key_mode(1);    
-        else { Serial.println("# cw key off|on|iambic_a|iambic_b|straight"); return; }    
-        Serial.println("# OK");
-        }
+        else if (strcmp(sub, "key") == 0) {      
+            char* a2 = strtok(NULL, " \t");      
+            if (!a2 || strcmp(a2, "off") == 0)        af_gpio_key_mode(0);      
+            else if (strcmp(a2, "iambic_a") == 0)     af_gpio_key_mode(1);      
+            else if (strcmp(a2, "iambic_b") == 0)     af_gpio_key_mode(2);      
+            else if (strcmp(a2, "straight") == 0)     af_gpio_key_mode(3);      
+            else if (strcmp(a2, "on") == 0)           af_gpio_key_mode(1);      
+            else { Serial.println("# cw key off|on|iambic_a|iambic_b|straight"); return; }      
+            Serial.println("# OK cw key");      
+        }  
 
         else if (strcmp(sub, "abort") == 0) {  
             cwtx_abort();  
@@ -1285,9 +1292,9 @@ static void cli_exec(char* line) {
             cwdec_set_sql(f);      
             Serial.printf("# OK cw sql=%d.%02d\n", (int)f, (int)(f * 100.0f + 0.5f) % 100);      
         }  
-        else {      
-            Serial.println("# ERR: cw on|off|freq <hz>|bw <hz>|noise <0..100>|dec on|off|wpm <5..60>|sql <0..1>");      
-        }      
+        else {        
+            Serial.println("# ERR: cw on|off|freq|bw|noise|dec|wpm|sql|tx|txwpm|abort|msg <1..4>|msgs|key <mode>");        
+        }  
     }  
 
     else if (strcmp(cmd, "rtty") == 0) {    
