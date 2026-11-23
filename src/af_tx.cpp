@@ -77,8 +77,6 @@ static tx_fir_t tx_rtty_fir1, tx_rtty_fir2;   // каскад: два одина
 // Классический IMD-тест 700/1900: верхний тон и продукт IMD3 на 3100 Гц  
 // должны пройти — речевой 700..1400 их срезал бы. Свой каскад 2x127.  
 #define TX_TT_FIR_N    127  
-#define TX_TT_LO_HZ    400u  
-#define TX_TT_HI_HZ    3200u  
 static int16_t tx_tt_taps[TX_TT_FIR_N];  
 static tx_fir_t tx_tt_fir1, tx_tt_fir2;    
       

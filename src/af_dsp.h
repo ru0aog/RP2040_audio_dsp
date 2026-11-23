@@ -171,3 +171,9 @@ bool af_dsp_rttytx_start(const char* text);
 bool af_dsp_rttytx_started(void);    
 void af_dsp_rttytx_clear_started(void);    
 bool af_dsp_rttytx_busy(void);    
+
+// двухтоновый генератор
+bool af_dsp_tt_start(uint32_t f1, uint32_t f2);    
+void af_dsp_tt_stop(void);    
+bool af_dsp_tt_busy(void);    
+
