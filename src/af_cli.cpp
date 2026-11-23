@@ -1234,7 +1234,27 @@ static void cli_exec(char* line) {
             if (w < 5) w = 5; if (w > 60) w = 60;        
             cwtx_set_wpm((uint8_t)w);        
             Serial.printf("# OK cw txwpm=%d\n", w);        
-        }  
+        }
+
+        else if (strcmp(sub, "msg") == 0) {    
+            char* n = strtok(NULL, " \t");    
+            char* v = strtok(NULL, "");    
+            if (n == NULL) { Serial.println("# ERR: cw msg <1..4> <текст>"); return; }    
+            int idx = (int)strtoul(n, NULL, 10);    
+            if (idx < 1 || idx > AF_CW_MSGS) { Serial.println("# ERR: cw msg <1..4>"); return; }    
+            if (v == NULL) v = (char*)"";    
+            while (*v == ' ' || *v == '\t') ++v;    
+            strncpy(af_cw_msgs[idx - 1], v, AF_CW_MSG_LEN - 1);    
+            af_cw_msgs[idx - 1][AF_CW_MSG_LEN - 1] = '\0';    
+            if (af_store_cw_save())    
+                Serial.printf("# OK cw msg %d: \"%s\"\n", idx, af_cw_msgs[idx - 1]);    
+        }    
+        else if (strcmp(sub, "msgs") == 0) {    
+            for (uint8_t i = 0; i < AF_CW_MSGS; i++)    
+                Serial.printf("# msg %u: \"%s\"%s\n", (unsigned)(i + 1),    
+                              af_cw_msgs[i], af_cw_msgs[i][0] ? "" : " (voice)");    
+        }    
+
         else if (strcmp(sub, "abort") == 0) {  
             cwtx_abort();  
             Serial.println("# OK cw tx abort");  

@@ -22,7 +22,8 @@
 //   [2]      версия формата    
 //   [3]      last-bank: номер последнего 'save N' (1..7), 0xFF = нет.  
 //            При boot af_store_init применяет его через af_store_load.  
-//   [4..]    7 записей по sizeof(af_bank_rec_t)    
+//   [4..]    7 записей по sizeof(af_bank_rec_t)      
+//   [0x800]  CW.TXT: 'C','W',ver,crc + 4 строки по 64 Б (сообщения магнитофона)    
 //  
 // Запись — по 'save x' / 'banks clr' и один раз при старте, если сектор    
 // пустой/чужой: af_store_init заполняет образ дефолтами и ставит флаг,    
@@ -53,8 +54,10 @@
   
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
-#define AF_STORE_VER      10  // было 9: +rtty_dbg в af_bank_t    
+#define AF_STORE_VER      10  // было 9: +rtty_dbg в af_bank_t      
                             // (диагностика # scan:/# trk:). Старые банки невалидны.    
+                            // CW.TXT живёт в том же секторе по смещению 0x800    
+                            // со своим magic 'CW'+ver+crc — версию банков не меняет.    
   
 // Смещение сектора банков от начала flash — последний сектор чипа.  
 // Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
@@ -126,6 +129,56 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
     return 4 + (idx - 1) * (int)sizeof(af_bank_rec_t);  
 }  
 
+#define AF_CW_OFF   0x800u          // область CW.TXT в секторе банков    
+#define AF_CW_VER   1    
+  
+char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];    
+
+// Forward: RAM-функция записи сектора, определена ниже.  
+static void __not_in_flash_func(do_flash_write)(void* param);  
+
+void af_store_cw_init(void) {    
+    const uint8_t* m = &s_sector_img[AF_CW_OFF];    
+    if (m[0] == 'C' && m[1] == 'W' && m[2] == AF_CW_VER &&    
+        m[3] == crc8(m + 4, AF_CW_MSGS * AF_CW_MSG_LEN)) {    
+        memcpy(af_cw_msgs, m + 4, AF_CW_MSGS * AF_CW_MSG_LEN);    
+    } else {    
+        memset(af_cw_msgs, 0, sizeof(af_cw_msgs));   // пустые = голосовые слоты    
+    }    
+    for (uint8_t i = 0; i < AF_CW_MSGS; i++)    
+        af_cw_msgs[i][AF_CW_MSG_LEN - 1] = '\0';     // страховка от мусора    
+}    
+  
+bool af_store_cw_save(void) {    
+    memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));    
+    uint8_t* m = &s_sector_img[AF_CW_OFF];    
+    m[0] = 'C'; m[1] = 'W'; m[2] = AF_CW_VER;    
+    memcpy(m + 4, af_cw_msgs, AF_CW_MSGS * AF_CW_MSG_LEN);    
+    m[3] = crc8(m + 4, AF_CW_MSGS * AF_CW_MSG_LEN);    
+  
+    if (!af_store_core1_park(5000)) {    
+        Serial.println("# cw msg: park TIMEOUT — abort");    
+        return false;    
+    }    
+    af_usb_set_muted(true);    
+    af_set_clk_nominal();    
+    af_capture_pause();    
+    const bool pwm_was = af_pwm_is_enabled();    
+    if (pwm_was) af_pwm_set_enabled(false);    
+    uint32_t ints = save_and_disable_interrupts();    
+    do_flash_write(NULL);    
+    flash_flush_cache();    
+    restore_interrupts(ints);    
+    af_capture_resume();    
+    af_dsp_reset_state();    
+    af_usb_set_muted(false);    
+    af_set_clk();    
+    if (pwm_was) af_pwm_set_enabled(true);    
+    af_store_core1_unpark();    
+    af_fm_request_sync();    
+    return true;    
+}    
+
 // ---------------------------------------------------------------------------    
 // Запись сектора во flash. Вызывается напрямую под IRQ-off из    
 // af_store_save/af_store_write_all (flash_safe_execute не используется —    
@@ -172,25 +225,27 @@ void af_store_init(void) {
             r.crc = crc8(&r.d, sizeof(r.d));        
             memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));        
         }        
-        s_need_defaults = true;          
-        Serial.println("[STORE] sector blank/foreign — defaults pending");            
-    } else {    
-        s_need_defaults = false;    
-        // Автозагрузка последнего сохранённого банка (байт [3]).  
-        // Пины GP2..GP4 применят свой банк позже в af_gpio_ctl_init —  
-        // приоритет у пинов.  
-        const uint8_t last = s_sector_img[3];    
-        if (last >= 1 && last <= AF_STORE_BANKS) {    
-            if (af_store_load(last)) {    
-                af_gpio_set_bank_code(last);   // stats 'bank=' = автозагруженный  
-                Serial.printf("[STORE] autoload bank %u\n", (unsigned)last);    
-            } else {    
-                Serial.printf("[STORE] autoload bank %u: bad crc — skipped\n",    
-                              (unsigned)last);    
-            }    
-        }    
-    }      
-}    
+        s_need_defaults = true;            
+        Serial.println("[STORE] sector blank/foreign — defaults pending");              
+    } else {      
+        s_need_defaults = false;      
+        // Автозагрузка последнего сохранённого банка (байт [3]).    
+        // Пины GP2..GP4 применят свой банк позже в af_gpio_ctl_init —    
+        // приоритет у пинов.    
+        const uint8_t last = s_sector_img[3];      
+        if (last >= 1 && last <= AF_STORE_BANKS) {      
+            if (af_store_load(last)) {      
+                af_gpio_set_bank_code(last);   // stats 'bank=' = автозагруженный    
+                Serial.printf("[STORE] autoload bank %u\n", (unsigned)last);      
+            } else {      
+                Serial.printf("[STORE] autoload bank %u: bad crc — skipped\n",      
+                              (unsigned)last);      
+            }      
+        }  
+    }  
+    af_store_cw_init();   // всегда: при пустом/чужом секторе CW-область    
+                          // тоже надо прочитать (или обнулить по crc)    
+}      
   
 bool af_store_read(uint8_t idx, af_bank_t* out) {    
     if (idx < 1 || idx > AF_STORE_BANKS) return false;    

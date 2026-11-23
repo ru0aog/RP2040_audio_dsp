@@ -3,13 +3,17 @@
 // FAT12-диск ~1.6 МБ, RAM-образ ~14 КБ (метаданные + SET.TXT). Раскладка:    
 //   LBA 0      boot sector    
 //   LBA 1..10  FAT (10 секторов, кластер = 1 сектор)    
-//   LBA 11     root dir (SET.TXT + REC1..REC7.WAV)    
-//   LBA 12..27 data: SET.TXT (RAM)    
-//   LBA 28..   REC1..REC7.WAV — виртуальные, синтез в af_fm_msc_read    
+//   LBA 11     root dir (SET.TXT + CW.TXT + REC1..REC7.WAV)      
+//   LBA 12..27 data: SET.TXT (RAM)      
+//   LBA 28     data: CW.TXT (RAM, 4 строки сообщений магнитофона)    
+//   LBA 29..   REC1..REC7.WAV — виртуальные, синтез в af_fm_msc_read      
 //              (WAV 16000 Гц mono, ресемплинг из слота 7732 Гц)    
 //  
 // SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.      
 // Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.      
+//
+// CW.TXT — 4 строки вызовов (af_cw_msgs, af_store.cpp). Пустая строка =      
+// голосовой слот. Запись с ПК: дебаунс 800 мс -> парсер -> af_store_cw_save.    
 //      
 // Аплоад: перезапись RECn.WAV -> стриминг-конвертер -> ram_buf -> слот n.      
 // Любой WAV (PCM 8/16/24/32 бит, mono/stereo, любая частота): ресемплинг      
@@ -24,7 +28,8 @@
 #include "af_fm.h"
 #include "af_cli.h"
 #include "af_usb.h"          // af_usb_reenumerate — перемонтирование диска
- 
+#include "af_store.h"        // af_cw_msgs, af_store_cw_save — CW.TXT 
+
 // Рендер таблицы banks в буфер (af_cli.cpp — там AF_PARAMS/bank_field).    
 // Возвращает длину текста без NUL.    
 extern size_t af_cli_format_banks(char* buf, size_t cap);    
@@ -36,7 +41,9 @@ static uint32_t fm_set_len = 0;        // байт в SET.TXT
 static bool     fm_dirty   = false;    // ПК писал — ждёт парсера    
 static bool     fm_stale   = true;     // SET.TXT устарел — регенерировать      
 static bool     fm_sizes_changed = false;  // размеры файлов изменились -> re-enumerate  
-static uint32_t fm_dirty_ms = 0;       // millis() последней записи (дебаунс)      
+static uint32_t fm_dirty_ms = 0;       // millis() последней записи (дебаунс)        
+static bool     fm_cw_dirty = false;   // ПК писал CW.TXT — ждёт парсера    
+static uint32_t fm_cw_ms    = 0;       // millis() последней записи CW.TXT    
   
 // --- Аплоад WAV: состояние сессии -------------------------------------------    
 static bool     ul_active   = false;   // идёт приём RECn.WAV    
@@ -138,11 +145,13 @@ static void fm_build_fat(uint16_t set_clusters, const uint16_t* wav_clusters) {
     uint8_t* f = &fm_disk[1][0];    
     memset(f, 0, AF_FM_FAT_SECTORS * AF_FM_SECTOR_SIZE);    
     f[0] = 0xF8; f[1] = 0xFF; f[2] = 0xFF;    
-    fat_chain(f, 2, AF_FM_SET_CLUSTERS);   // вся территория SET.TXT занята —  
-                                           // хост не выделит кластеры 3..17  
-                                           // новому файлу (инцидент с REC1)  
-    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {  
-        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + i * AF_FM_WAV_CLUSTERS);  
+    fat_chain(f, 2, AF_FM_SET_CLUSTERS);   // вся территория SET.TXT занята —    
+                                           // хост не выделит кластеры 3..17    
+                                           // новому файлу (инцидент с REC1)    
+    fat_chain(f, 2 + AF_FM_SET_CLUSTERS, AF_FM_CW_CLUSTERS);  // CW.TXT — кластер 18    
+    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
+        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS    
+                                    + i * AF_FM_WAV_CLUSTERS);    
         fat_chain(f, first, AF_FM_WAV_CLUSTERS);  
     }  
     // Свободный пул в конце диска: кластеры за пределами цепочек RECn  
@@ -164,14 +173,18 @@ static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,
                          const uint32_t* wav_sizes) {    
     uint8_t* d = fm_disk[AF_FM_DIR_LBA];    
     memset(d, 0, AF_FM_SECTOR_SIZE);    
-    dir_entry(&d[0], "SET     TXT", set_clusters ? 2 : 0, set_size);    
-    static const char wav_names[AF_FM_WAV_FILES][12] = {  
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV",  
-        "REC5    WAV", "REC6    WAV", "REC7    WAV" };   
-    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
-        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + i * AF_FM_WAV_CLUSTERS);    
-        dir_entry(&d[32 * (i + 1)], wav_names[i], wav_sizes[i] ? first : 0, wav_sizes[i]);  
-    }    
+    dir_entry(&d[0], "SET     TXT", set_clusters ? 2 : 0, set_size);      
+    dir_entry(&d[32], "CW      TXT", (uint16_t)(2 + AF_FM_SET_CLUSTERS),    
+              AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);   // размер = кластер,    
+                                                        // хвост — пробелы    
+    static const char wav_names[AF_FM_WAV_FILES][12] = {    
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV",    
+        "REC5    WAV", "REC6    WAV", "REC7    WAV" };     
+    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {      
+        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS    
+                                    + i * AF_FM_WAV_CLUSTERS);      
+        dir_entry(&d[32 * (i + 2)], wav_names[i], wav_sizes[i] ? first : 0, wav_sizes[i]);    
+    }      
 }    
   
 // ---------------------------------------------------------------------------  
@@ -220,12 +233,52 @@ void af_fm_sync(void) {
         prev_sizes[i] = wav_sizes[i];    
     }        
     first_sync = false;    
-    fm_build_fat(set_clusters, wav_clusters);      
-    fm_build_dir(fm_set_len, set_clusters, wav_sizes);      
-    fm_stale = false;      
-}    
+    // CW.TXT: 4 строки из af_cw_msgs, CRLF, хвост — пробелы (чистый вид    
+    // в редакторе; парсер пробелы/CRLF пропускает).    
+    {    
+        uint8_t* cw = &fm_disk[AF_FM_CW_LBA][0];    
+        memset(cw, ' ', AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);    
+        uint32_t off = 0;    
+        for (uint8_t i = 0; i < AF_CW_MSGS; i++) {    
+            size_t l = strlen(af_cw_msgs[i]);    
+            if (off + l + 2 > AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE) break;    
+            memcpy(cw + off, af_cw_msgs[i], l);    
+            off += l;    
+            cw[off++] = '\r'; cw[off++] = '\n';    
+        }    
+    }    
+    fm_build_fat(set_clusters, wav_clusters);        
+    fm_build_dir(fm_set_len, set_clusters, wav_sizes);        
+    fm_stale = false;        
+}      
 
 static void ul_commit(void);   // определена ниже — коммит аплоада по таймауту  
+
+// Парсер CW.TXT: до 4 непустых строк -> af_cw_msgs -> flash.    
+// Пустые строки пропускаются; строка > AF_CW_MSG_LEN-1 обрезается.    
+static void cw_txt_parse(const char* txt, uint32_t cap) {    
+    uint8_t idx = 0;    
+    uint32_t pos = 0;    
+    while (pos < cap && idx < AF_CW_MSGS) {    
+        // пропустить пробелы/CR/LF    
+        while (pos < cap && (txt[pos] == ' ' || txt[pos] == '\r' ||    
+                             txt[pos] == '\n' || txt[pos] == '\t')) pos++;    
+        if (pos >= cap || txt[pos] == '\0') break;    
+        char line[AF_CW_MSG_LEN];    
+        uint8_t l = 0;    
+        while (pos < cap && txt[pos] != '\r' && txt[pos] != '\n' &&    
+               l < AF_CW_MSG_LEN - 1)    
+            line[l++] = txt[pos++];    
+        line[l] = '\0';    
+        // обрезать хвостовые пробелы    
+        while (l > 0 && line[l - 1] == ' ') line[--l] = '\0';    
+        memcpy(af_cw_msgs[idx], line, l + 1);   // l==0 -> пустая строка = голосовой слот    
+        idx++;      
+        while (pos < cap && (txt[pos] == '\r' || txt[pos] == '\n')) pos++;    
+    }    
+    // Оставшиеся строки — пустые (голосовые слоты)    
+    for (; idx < AF_CW_MSGS; idx++) af_cw_msgs[idx][0] = '\0';    
+}    
 
 void af_fm_poll(void) {      
     // Коммит аплоада WAV: 1.5 с тишины после последнего сектора.    
@@ -240,9 +293,17 @@ void af_fm_poll(void) {
                           AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE);        
         Serial.printf("# fm: SET.TXT %s\n",        
                       applied ? "parsed -> banks written" : "parse failed");        
-        fm_stale = true;               // перерендерить из записанных банков         
-    }      
-    if (fm_stale) af_fm_sync();          
+        fm_stale = true;               // перерендерить из записанных банков           
+    }        
+    // CW.TXT: тот же дебаунс 800 мс -> парсер -> flash -> re-render.    
+    if (fm_cw_dirty && (int32_t)(millis() - fm_cw_ms) >= 800) {    
+        fm_cw_dirty = false;    
+        cw_txt_parse((const char*)&fm_disk[AF_FM_CW_LBA][0],    
+                     AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);    
+        af_store_cw_save();            // flash-окно + af_fm_request_sync    
+        Serial.println("# fm: CW.TXT parsed -> msgs written");    
+    }    
+    if (fm_stale) af_fm_sync();            
     // Пере-энумерация только при появлении файла (пусто -> непусто:    
     // заливка voice14, первая запись) и после аплоада с ПК.    
     // Обычный старт и перезапись существующего слота — без мигания.    
@@ -544,9 +605,10 @@ int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {
     return (int32_t)AF_FM_SECTOR_SIZE;    
 }    
   
-void af_fm_msc_flush(void) {    
-    if (fm_dirty) fm_dirty_ms = millis();   // flush = конец пачки записи    
-}    
+void af_fm_msc_flush(void) {      
+    if (fm_dirty)    fm_dirty_ms = millis();    
+    if (fm_cw_dirty) fm_cw_ms    = millis();    
+}      
   
 int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {          
     if (buffer == nullptr || lba >= AF_FM_SECTOR_COUNT) return -1;          
@@ -622,9 +684,13 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
     // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..27).    
     // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    
     // не должны триггерить парсинг и перемонтирование — иначе цикл.    
-    if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {    
-        fm_dirty   = true;        
-        fm_dirty_ms = millis();      // дебаунс -> парсер в af_fm_poll        
+    if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {      
+        fm_dirty   = true;          
+        fm_dirty_ms = millis();      // дебаунс -> парсер в af_fm_poll          
+    }      
+    if (lba >= AF_FM_CW_LBA && lba < AF_FM_CW_LBA + AF_FM_CW_CLUSTERS) {    
+        fm_cw_dirty = true;    
+        fm_cw_ms    = millis();      // дебаунс -> cw_txt_parse в af_fm_poll    
     }    
-    return (int32_t)AF_FM_SECTOR_SIZE;            
+    return (int32_t)AF_FM_SECTOR_SIZE;                    
 }    
