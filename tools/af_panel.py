@@ -62,8 +62,27 @@ GROUPS = [
      ["tx notch f1", "tx notch f2"]),  
     ("TX EQ (3 полосы)", None,  
      ["txeq lo", "txeq mid", "txeq hi", "txeq lo f", "txeq mid f", "txeq hi f"]),  
-    ("Прочее", None, []),   # сюда попадут метки, не перечисленные выше  
-]  
+    ("Прочее", None, []),   # сюда попадут метки, не перечисленные выше    
+]    
+  
+# Runtime-режимы: НЕ банковые, команда "<name> on|off" выполняется немедленно.  
+# Состояние читается из state dump (R|name|val). Порядок = порядок в рамке.  
+# (имя в state dump R|name|, команда CLI). Имя и команда различаются,  
+# где метка AF_PARAMS содержит пробел ("rx pres" -> R|rxpres|).  
+RUNTIME_MODES = [    
+    ("nt",      "nt"),    
+    ("nr",      "nr"),    
+    ("bypass",  "bypass"),    
+    ("cw",      "cw"),    
+    ("nb",      "nb"),    
+    ("rxnotch", "rxnotch"),    
+    ("rxpres",  "rx pres"),    
+    ("rxexc",   "rx exc"),    
+    ("rtty",    "rtty"),    
+    ("ramp",    "ramp"),    
+    ("tx",      "tx"),    
+    ("tt",      "tt"),    
+]    
   
   
 # ---------------------------------------------------------------------------  
@@ -162,7 +181,20 @@ class Panel(tk.Tk):
             ttk.Button(bf, text=f"save {n}",    
                        command=lambda n=n: self._cmd(f"save {n}")    
                        ).pack(side="left", padx=1)    
-        self.state_var = tk.StringVar(value="")    
+        self.state_var = tk.StringVar(value="")      
+  
+        # Рамка "Режимы" — runtime-флажки из state dump, не сохраняются в банк.  
+        mf = ttk.LabelFrame(self, text="Режимы (runtime, не в банке)")  
+        mf.pack(fill="x", padx=6, pady=(4, 0))  
+        self.mode_vars = {}          # name -> IntVar  
+        self._mode_updating = False  # подавить command при обновлении из дампа  
+        for i, (name, cmd) in enumerate(RUNTIME_MODES):    
+            var = tk.IntVar(value=0)    
+            ttk.Checkbutton(    
+                mf, text=cmd, variable=var,    
+                command=lambda c=cmd, v=var: self._mode_set(c, v.get())    
+            ).grid(row=i // 6, column=i % 6, sticky="w", padx=6, pady=1)    
+            self.mode_vars[name] = var    
   
     def _build_table(self):  
         wrap = ttk.Frame(self)  
@@ -418,13 +450,32 @@ class Panel(tk.Tk):
             except ValueError:  
                 p["var"].set(val)  
   
-    def _show_state(self, lines):  
-        parts = []  
-        for ln in lines:  
-            if ln.startswith("R|"):  
-                _, name, val = (ln.split("|") + ["", ""])[:3]  
+    def _mode_set(self, cmd, val):    
+        # Флажок runtime-режима: команда немедленно, в банк не пишется.    
+        if self._mode_updating:    
+            return                      # изменение пришло из дампа, не от пользователя    
+        if not self.schema_ok:    
+            self._log(f"# read-only: {cmd} не отправлено")    
+            return    
+        self._cmd(f"{cmd} {'on' if val else 'off'}")    
+        # Перечитать живое состояние — плата могла отклонить (nr при nt on и т.п.)  
+        self._pending.append("state dump")  
+        self.after(300, self._send_next)  
+  
+    def _show_state(self, lines):    
+        parts = []    
+        for ln in lines:    
+            if ln.startswith("R|"):    
+                _, name, val = (ln.split("|") + ["", ""])[:3]    
                 parts.append(f"{name}={val}")  
-        self.state_var.set("  ".join(parts))  
+                # Синхронизировать флажки рамки "Режимы" с живым состоянием  
+                if name in self.mode_vars:  
+                    self._mode_updating = True  
+                    try:  
+                        self.mode_vars[name].set(1 if val == "1" else 0)  
+                    finally:  
+                        self._mode_updating = False  
+        self.state_var.set("  ".join(parts))    
   
   
 if __name__ == "__main__":    

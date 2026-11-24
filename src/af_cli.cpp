@@ -1160,20 +1160,33 @@ static void cli_exec(char* line) {
         if (sub && strcmp(sub, "dump") == 0) {  
             // Runtime-режимы (не из банка): программа опрашивает после params dump  
             // и периодически для статус-бара. Формат: R|<имя>|<0|1|число>.  
-            Serial.println("# state begin");  
-            Serial.printf("R|tx|%u\n",       af_dsp_tx_on() ? 1 : 0);  
-            Serial.printf("R|ptt|%u\n",      af_gpio_ptt_active() ? 1 : 0);  
-            Serial.printf("R|bank|%u\n",     (unsigned)af_gpio_last_bank());  
-            Serial.printf("R|msg sel|%u\n",  (unsigned)af_gpio_msg_sel());  
-            Serial.printf("R|key mode|%u\n", (unsigned)af_gpio_key_mode());  
-            Serial.printf("R|key tx|%u\n",   af_gpio_key_tx() ? 1 : 0);  
-            Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);  
-            Serial.printf("R|cwtx|%u\n",     af_dsp_cwtx_busy() ? 1 : 0);  
-            Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);  
-            Serial.printf("R|tt|%u\n",       af_dsp_tt_busy() ? 1 : 0);  
-            Serial.printf("R|rec|%u\n",      af_rec_is_recording() ? 1 : 0);  
-            Serial.printf("R|play|%u\n",     af_rec_is_playing() ? 1 : 0);  
-            Serial.println("# state end");  
+            Serial.println("# state begin");    
+            Serial.printf("R|tx|%u\n",       af_dsp_tx_on() ? 1 : 0);    
+            Serial.printf("R|ptt|%u\n",      af_gpio_ptt_active() ? 1 : 0);    
+            Serial.printf("R|bank|%u\n",     (unsigned)af_gpio_last_bank());    
+            Serial.printf("R|msg sel|%u\n",  (unsigned)af_gpio_msg_sel());    
+            // Enable-флаги блоков RX — runtime, в банке не хранятся.    
+            // Панель рисует по ним флажки в рамке «Режимы».    
+            Serial.printf("R|nt|%u\n",       af_dsp_notch_on() ? 1 : 0);    
+            Serial.printf("R|nr|%u\n",       af_dsp_nr_on() ? 1 : 0);    
+            Serial.printf("R|bypass|%u\n",   af_dsp_bypass_on() ? 1 : 0);    
+            Serial.printf("R|cw|%u\n",       af_dsp_cw_on() ? 1 : 0);    
+            Serial.printf("R|nb|%u\n",       af_dsp_nb_on() ? 1 : 0);    
+            Serial.printf("R|rxnotch|%u\n",  af_dsp_rxnotch_on() ? 1 : 0);    
+            Serial.printf("R|rxpres|%u\n",   af_dsp_rxpres_on() ? 1 : 0);    
+            Serial.printf("R|rxexc|%u\n",    af_dsp_rxexc_on() ? 1 : 0);    
+            Serial.printf("R|rtty|%u\n",     af_dsp_rtty_on() ? 1 : 0);    
+            Serial.printf("R|cwdec|%u\n",    af_dsp_cwdec_on() ? 1 : 0);    
+            Serial.printf("R|ramp|%u\n",     af_dsp_ramp_on() ? 1 : 0);    
+            Serial.printf("R|key mode|%u\n", (unsigned)af_gpio_key_mode());    
+            Serial.printf("R|key tx|%u\n",   af_gpio_key_tx() ? 1 : 0);    
+            Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);    
+            Serial.printf("R|cwtx|%u\n",     af_dsp_cwtx_busy() ? 1 : 0);    
+            Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);    
+            Serial.printf("R|tt|%u\n",       af_dsp_tt_busy() ? 1 : 0);    
+            Serial.printf("R|rec|%u\n",      af_rec_is_recording() ? 1 : 0);    
+            Serial.printf("R|play|%u\n",     af_rec_is_playing() ? 1 : 0);    
+            Serial.println("# state end");    
         } else {  
             Serial.println("# ERR: state dump");  
         }  
