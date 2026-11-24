@@ -7,7 +7,7 @@
 #include "../af_config.h"  
   
 #define TT_LUT_LEN   256  
-#define TT_AMP       13000    // сумма двух тонов ~0.4 FS — запас под gain каскада  
+#define TT_AMP       26000    // сумма двух тонов ~0.8 FS, каждый тон ~0.4 FS (-8 dBFS)  
   
 static int16_t  tt_lut[TT_LUT_LEN];  
 static volatile bool     tt_on = false;  
