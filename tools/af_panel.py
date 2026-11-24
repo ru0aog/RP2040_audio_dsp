@@ -36,7 +36,6 @@ except ImportError:
   
 SCHEMA_SUPPORTED = 1    
 BAUD = 115200    
-DUMP_TIMEOUT_S = 10.0    
   
 # Группировка параметров по блокам аудиотракта.  
 # (заголовок рамки, метка-флажок включения или None, [метки параметров]).  
@@ -301,7 +300,7 @@ class Panel(tk.Tk):
         # Правая панель: спектр сверху, лог ниже + командная строка + статус.      
         self.right_fr = ttk.Frame(self.paned)        
         self.paned.add(self.right_fr, weight=1)        
-        # Спектр входа UAC: текущий срез FFT 0..6 кГц / 0..-100 дБ,    
+        # Спектр входа UAC: текущий срез FFT 0..6 кГц / 0..-80 дБ,    
         # маркеры band lo/hi. Работает, пока включён монитор.    
         # Двойной щелчок — развернуть/свернуть на всё окно.    
         self.spec_fr = ttk.LabelFrame(self.right_fr, text="Спектр (0-6 кГц)")      
@@ -313,9 +312,15 @@ class Panel(tk.Tk):
         # height ограничивает высоту; bg — светло-серый фон лога.  
         # state="normal" + блокировка ввода: текст можно выделять и  
         # копировать (Ctrl+C / ПКМ-выделение), но не редактировать.  
-        self.log = tk.Text(self.right_fr, width=42, height=14,  
+        log_wrap = ttk.Frame(self.right_fr)  
+        log_wrap.pack(fill="both", expand=True, padx=(0, 6), pady=4)  
+        self.log = tk.Text(log_wrap, width=42, height=14,  
                            bg="#f0f0f0")  
-        self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)  
+        log_sb = ttk.Scrollbar(log_wrap, orient="vertical",  
+                               command=self.log.yview)  
+        self.log.configure(yscrollcommand=log_sb.set)  
+        self.log.pack(side="left", fill="both", expand=True)  
+        log_sb.pack(side="right", fill="y")  
         self.log.bind("<Key>", lambda _e: "break")          # read-only    
         for ev in ("<<Paste>>", "<<Cut>>", "<<Clear>>"):    
             self.log.bind(ev, lambda _e: "break")    
@@ -601,17 +606,17 @@ class Panel(tk.Tk):
     def _spec_toggle_full(self):  
         # Двойной щелчок по спектру: развернуть на всё окно / свернуть.  
         self.spec_full = not self.spec_full  
-        if self.spec_full:  
-            self.paned.forget(self.tbl_wrap)          # скрыть таблицу параметров  
-            self.log.pack_forget()                    # скрыть лог  
+        if self.spec_full:    
+            self.paned.forget(self.tbl_wrap)          # скрыть таблицу параметров    
+            self.log.master.pack_forget()             # скрыть лог (обёртка со скроллом)    
             self.cmd_fr.pack_forget()                 # и командную строку  
             self.spec_fr.pack(fill="both", expand=True,  
                               padx=(0, 6), pady=(4, 0))  
             self.spec_cv.pack(fill="both", expand=True, padx=4, pady=4)  
-        else:  
-            self.spec_cv.pack(fill="x", padx=4, pady=4)  
-            self.spec_fr.pack(fill="x", padx=(0, 6), pady=(4, 0))  
-            self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)  
+        else:    
+            self.spec_cv.pack(fill="x", padx=4, pady=4)    
+            self.spec_fr.pack(fill="x", padx=(0, 6), pady=(4, 0))    
+            self.log.master.pack(fill="both", expand=True, padx=(0, 6), pady=4)    
             self.cmd_fr.pack(fill="x", padx=(0, 6), pady=(0, 2))  
             self.paned.insert(0, self.tbl_wrap, weight=3)  # таблица слева  
 
