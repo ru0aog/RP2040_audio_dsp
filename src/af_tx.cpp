@@ -121,24 +121,44 @@ void af_tx_tt_fir_design(void) {
 // Дизайн ST-фильтра: узкая полоса ±150 Гц вокруг тона f_hz —    
 // вырезает всё лишнее (шум, спуры NCO, гармоники). Тапсы те же    
 // tx_tt_taps — st и tt делят один каскад, переключение = пересчёт.    
-void af_tx_st_fir_design(uint32_t f_hz) {    
-    const uint32_t FS2 = AF_FS_OUT_HZ / 2;    
-    uint32_t lo = (f_hz > 200) ? (f_hz - 150) : 50;    
-    uint32_t hi = f_hz + 150;    
-    if (hi > FS2 - 200) hi = FS2 - 200;    
-    const uint32_t save_lo = tx_lo_hz, save_hi = tx_hi_hz;    
-    tx_lo_hz = lo;    
-    tx_hi_hz = hi;    
-    tx_fir_design_n(tx_tt_taps, TX_TT_FIR_N);    
-    tx_lo_hz = save_lo;      
-    tx_hi_hz = save_hi;      
-    memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));      
-    memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));      
-    tx_tt_fir1.taps = tx_tt_taps;  tx_tt_fir1.n = TX_TT_FIR_N;    
-    tx_tt_fir2.taps = tx_tt_taps;  tx_tt_fir2.n = TX_TT_FIR_N;    
-    tx_tt_dc_x1 = 0;      
-    tx_tt_dc_y1 = 0;      
-}      
+void af_tx_st_fir_design(uint32_t f_hz) {      
+    const uint32_t FS2 = AF_FS_OUT_HZ / 2;      
+    uint32_t lo = (f_hz > 200) ? (f_hz - 150) : 50;      
+    uint32_t hi = f_hz + 150;      
+    if (hi > FS2 - 200) hi = FS2 - 200;      
+    const uint32_t save_lo = tx_lo_hz, save_hi = tx_hi_hz;      
+    tx_lo_hz = lo;      
+    tx_hi_hz = hi;      
+    tx_fir_design_n(tx_tt_taps, TX_TT_FIR_N);      
+    tx_lo_hz = save_lo;        
+    tx_hi_hz = save_hi;        
+  
+    // Нормировка по отклику на f0: tx_fir_design_n нормирует по      
+    // sum|h| (энергия), для узкой полосы gain на f0 > 1 — каскад      
+    // из двух FIR клипует тон -> "меандр" с побочками. Меряем      
+    // отклик на f0 и приводим к ~0.9 на стадию (каскад ~0.8).      
+    {      
+        const float w = 2.0f * PI * (float)f_hz / AF_FS_OUT_HZ;      
+        float re = 0.0f, im = 0.0f;      
+        for (int k = 0; k < TX_TT_FIR_N; k++) {      
+            re += (float)tx_tt_taps[k] * cosf(w * k);      
+            im -= (float)tx_tt_taps[k] * sinf(w * k);      
+        }      
+        float g = sqrtf(re * re + im * im) / 32768.0f;   // отклик на f0      
+        if (g > 0.9f) {      
+            const float s = 0.9f / g;      
+            for (int k = 0; k < TX_TT_FIR_N; k++)      
+                tx_tt_taps[k] = (int16_t)lroundf((float)tx_tt_taps[k] * s);      
+        }      
+    }      
+  
+    memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));        
+    memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));        
+    tx_tt_fir1.taps = tx_tt_taps;  tx_tt_fir1.n = TX_TT_FIR_N;      
+    tx_tt_fir2.taps = tx_tt_taps;  tx_tt_fir2.n = TX_TT_FIR_N;      
+    tx_tt_dc_x1 = 0;        
+    tx_tt_dc_y1 = 0;        
+}        
     
 static inline int32_t __not_in_flash_func(tx_fir_push)(tx_fir_t* f, int32_t x) {      
     const int n = f->n;      
