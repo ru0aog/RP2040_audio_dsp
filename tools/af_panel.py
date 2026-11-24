@@ -316,9 +316,10 @@ class Panel(tk.Tk):
         self.log = tk.Text(self.right_fr, width=42, height=14,  
                            bg="#f0f0f0")  
         self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)  
-        self.log.bind("<Key>", lambda _e: "break")          # read-only  
-        for ev in ("<<Paste>>", "<<Cut>>", "<<Clear>>"):  
-            self.log.bind(ev, lambda _e: "break")  
+        self.log.bind("<Key>", lambda _e: "break")          # read-only    
+        for ev in ("<<Paste>>", "<<Cut>>", "<<Clear>>"):    
+            self.log.bind(ev, lambda _e: "break")    
+        self.log.bind("<Button-3>", self._log_menu)         # ПКМ — меню копирования  
         self.cmd_fr = ttk.Frame(self.right_fr)          
         self.cmd_fr.pack(fill="x", padx=(0, 6), pady=(0, 2))          
         self.cmd_var = tk.StringVar()          
@@ -348,10 +349,31 @@ class Panel(tk.Tk):
     def _log_clear(self):      
         self.log.delete("1.0", "end")      
     
-    def _log_copy(self):    
-        # Весь лог в буфер обмена (Text в disabled — читаем напрямую).    
-        self.clipboard_clear()    
-        self.clipboard_append(self.log.get("1.0", "end-1c"))    
+    def _log_copy(self):      
+        # Весь лог в буфер обмена.      
+        self.clipboard_clear()      
+        self.clipboard_append(self.log.get("1.0", "end-1c"))      
+  
+    def _log_menu(self, event):  
+        # ПКМ в логе: меню копирования. "Копировать" активна только  
+        # при наличии выделения.  
+        m = tk.Menu(self, tearoff=0)  
+        has_sel = bool(self.log.tag_ranges("sel"))  
+        m.add_command(label="Копировать",  
+                      command=self._log_copy_sel,  
+                      state="normal" if has_sel else "disabled")  
+        m.add_command(label="Копировать всё", command=self._log_copy)  
+        m.tk_popup(event.x_root, event.y_root)  
+        return "break"  
+  
+    def _log_copy_sel(self):  
+        # Выделенный фрагмент лога в буфер обмена.  
+        try:  
+            txt = self.log.get("sel.first", "sel.last")  
+        except tk.TclError:  
+            return  
+        self.clipboard_clear()  
+        self.clipboard_append(txt)  
     def _audio_inputs(self):        
         # Входные устройства (UAC-плата видна как микрофонный вход).      
         # Только WASAPI: MME/DirectSound дают виртуальные дубли    
