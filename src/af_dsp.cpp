@@ -1756,15 +1756,25 @@ void __not_in_flash_func(af_dsp_poll)(void) {
     core1_update_load(time_us_32());    
 }    
 
-bool af_dsp_tt_start(uint32_t f1, uint32_t f2) {  
-    if (cwtx_busy() || rttytx_busy() || af_rec_is_playing()) return false;  
-    tt_gen_set(f1, f2);  
-    tt_gen_on(true);  
-    af_dsp_set_tx(true);  
-    return true;  
-}  
-void af_dsp_tt_stop(void) { tt_gen_on(false); af_dsp_set_tx(false); }  
-bool af_dsp_tt_busy(void) { return tt_gen_busy(); }  
+bool af_dsp_tt_start(uint32_t f1, uint32_t f2) {    
+    if (cwtx_busy() || rttytx_busy() || af_rec_is_playing()) return false;    
+    af_tx_tt_fir_design();          // вернуть тапсы 400..3200 (могли быть st)    
+    tt_gen_set(f1, f2);    
+    tt_gen_on(true);    
+    af_dsp_set_tx(true);    
+    return true;    
+}    
+// Одиночный тон: узкая полоса FIR вокруг f, f2=0 -> один NCO.    
+bool af_dsp_st_start(uint32_t f_hz) {    
+    if (cwtx_busy() || rttytx_busy() || af_rec_is_playing()) return false;    
+    af_tx_st_fir_design(f_hz);      // полоса f±150 Гц, кламп в 400..3200    
+    tt_gen_set(f_hz, 0);    
+    tt_gen_on(true);    
+    af_dsp_set_tx(true);    
+    return true;    
+}    
+void af_dsp_tt_stop(void) { tt_gen_on(false); af_dsp_set_tx(false); }    
+bool af_dsp_tt_busy(void) { return tt_gen_busy(); }    
 
 // ---------------------------------------------------------------------------  
 // Диагностика  

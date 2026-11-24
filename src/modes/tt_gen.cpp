@@ -21,15 +21,24 @@ void tt_gen_init(void) {
     tt_gen_set(700, 1900);  
 }  
   
-void tt_gen_set(uint32_t f1, uint32_t f2) {  
-    // кламп в полосу FIR — вне 400..3200 тест бессмыслен  
-    if (f1 < TX_TT_LO_HZ) f1 = TX_TT_LO_HZ;  
-    if (f2 < TX_TT_LO_HZ) f2 = TX_TT_LO_HZ;  
-    if (f1 > TX_TT_HI_HZ) f1 = TX_TT_HI_HZ;  
-    if (f2 > TX_TT_HI_HZ) f2 = TX_TT_HI_HZ;  
-    tt_step1 = (uint32_t)(((uint64_t)f1 << 32) / AF_FS_OUT_HZ);  
-    tt_step2 = (uint32_t)(((uint64_t)f2 << 32) / AF_FS_OUT_HZ);
-    tt_f1_hz = f1; tt_f2_hz = f2;   // для статуса OLED "ПРД TT f1/f2" 
+void tt_gen_set(uint32_t f1, uint32_t f2) {    
+    // кламп в полосу FIR — вне 400..3200 тест бессмыслен    
+    if (f1 < TX_TT_LO_HZ) f1 = TX_TT_LO_HZ;    
+    if (f2 < TX_TT_LO_HZ) f2 = TX_TT_LO_HZ;    
+    if (f1 > TX_TT_HI_HZ) f1 = TX_TT_HI_HZ;    
+    if (f2 > TX_TT_HI_HZ) f2 = TX_TT_HI_HZ;    
+    tt_step1 = (uint32_t)(((uint64_t)f1 << 32) / AF_FS_OUT_HZ);    
+    tt_step2 = (uint32_t)(((uint64_t)f2 << 32) / AF_FS_OUT_HZ);  
+    tt_f1_hz = f1; tt_f2_hz = f2;   // для статуса OLED "ПРД TT f1/f2"   
+}    
+  
+// Одиночный тон: f2 = 0 — второй NCO не работает, амплитуда выше.  
+void tt_gen_set1(uint32_t f) {  
+    if (f < TX_TT_LO_HZ) f = TX_TT_LO_HZ;  
+    if (f > TX_TT_HI_HZ) f = TX_TT_HI_HZ;  
+    tt_step1 = (uint32_t)(((uint64_t)f << 32) / AF_FS_OUT_HZ);  
+    tt_step2 = 0;  
+    tt_f1_hz = f; tt_f2_hz = 0;  
 }  
   
 void tt_gen_on(bool on)  { tt_on = on; if (!on) { tt_ph1 = tt_ph2 = 0; } }  
@@ -46,13 +55,17 @@ static inline int32_t tt_nco(uint32_t ph) {
     return a + (((b - a) * (int32_t)frac) >> 8);    
 }    
     
-int16_t __not_in_flash_func(tt_gen_sample)(void) {    
-    if (!tt_on) return 0;    
-    tt_ph1 += tt_step1;    
-    tt_ph2 += tt_step2;    
-    int32_t t = tt_nco(tt_ph1) + tt_nco(tt_ph2);    
-    return (int16_t)((t * TT_AMP) >> 16);   // каждый тон ~0.2 FS    
-}    
+int16_t __not_in_flash_func(tt_gen_sample)(void) {      
+    if (!tt_on) return 0;      
+    tt_ph1 += tt_step1;      
+    if (tt_step2 == 0) {                     // один тон — ~0.4 FS  
+        int32_t t = tt_nco(tt_ph1);  
+        return (int16_t)((t * (TT_AMP * 2)) >> 16);  
+    }  
+    tt_ph2 += tt_step2;      
+    int32_t t = tt_nco(tt_ph1) + tt_nco(tt_ph2);      
+    return (int16_t)((t * TT_AMP) >> 16);   // каждый тон ~0.2 FS      
+}      
   
 uint32_t tt_gen_f1_hz(void) { return tt_f1_hz; }  
 uint32_t tt_gen_f2_hz(void) { return tt_f2_hz; }  

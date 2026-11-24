@@ -7,3 +7,4 @@ bool    tt_gen_busy(void);
 int16_t tt_gen_sample(void);  
 uint32_t tt_gen_f1_hz(void);  
 uint32_t tt_gen_f2_hz(void);  
+void tt_gen_set1(uint32_t f);   // одиночный тон (st)  

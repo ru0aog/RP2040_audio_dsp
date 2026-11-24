@@ -172,3 +172,6 @@ uint32_t af_tx_txeqf    (uint8_t band);
 // (значения дБ/частот при этом хранятся).  
 void     af_tx_set_txeq_on(bool on);  
 bool     af_tx_txeq_on(void);  
+
+void af_tx_tt_fir_design(void);              // вернуть тапсы 400..3200  
+void af_tx_st_fir_design(uint32_t f_hz);     // узкая полоса вокруг тона  
