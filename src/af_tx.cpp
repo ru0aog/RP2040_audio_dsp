@@ -76,9 +76,10 @@ static tx_fir_t tx_rtty_fir1, tx_rtty_fir2;   // каскад: два одина
 // --- Двухтональный генератор: свой FIR 400..3200 Гц ---  
 // Классический IMD-тест 700/1900: верхний тон и продукт IMD3 на 3100 Гц  
 // Свой каскад 2x127
-#define TX_TT_FIR_N    127  
-static int16_t tx_tt_taps[TX_TT_FIR_N];  
+#define TX_TT_FIR_N    127    
+static int16_t tx_tt_taps[TX_TT_FIR_N];    
 static tx_fir_t tx_tt_fir1, tx_tt_fir2;    
+static int32_t tx_tt_dc_x1 = 0, tx_tt_dc_y1 = 0;   // DC-blocker TT/ST-каскада  
       
 static void tx_fir_design(void) {        
     tx_fir_design_n(tx_fir_taps,  TX_FIR_N);       // пред-фильтр, 127      
@@ -247,9 +248,6 @@ static int32_t xo_lp_x1 = 0, xo_lp_x2 = 0, xo_lp_y1 = 0, xo_lp_y2 = 0;
 static int32_t xo_hp_x1 = 0, xo_hp_x2 = 0, xo_hp_y1 = 0, xo_hp_y2 = 0;    
 static int64_t tx_env_lo_q16 = (int64_t)256 << 16;  // EMA огибающей НЧ-полосы  
 static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей ВЧ-полосы  
-
-// Двухтональный генератор: прогон через каскадный 400..3200 + DC-blocker.  
-static int32_t tx_tt_dc_x1 = 0, tx_tt_dc_y1 = 0;  
 
 // --- Этап 5: HF ducking ---    
 static volatile uint8_t  tx_duck_on     = AF_TX_DUCK_ON_DEFAULT;    

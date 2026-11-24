@@ -1767,8 +1767,8 @@ bool af_dsp_tt_start(uint32_t f1, uint32_t f2) {
 // Одиночный тон: узкая полоса FIR вокруг f, f2=0 -> один NCO.    
 bool af_dsp_st_start(uint32_t f_hz) {    
     if (cwtx_busy() || rttytx_busy() || af_rec_is_playing()) return false;    
-    af_tx_st_fir_design(f_hz);      // полоса f±150 Гц, кламп в 400..3200    
-    tt_gen_set(f_hz, 0);    
+    af_tx_st_fir_design(f_hz);      // полоса f±150 Гц вокруг тона  
+    tt_gen_set1(f_hz);              // f2=0 -> один NCO, ~0.4 FS  
     tt_gen_on(true);    
     af_dsp_set_tx(true);    
     return true;    
