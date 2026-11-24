@@ -62,10 +62,15 @@ GROUPS = [
       "tx shelf", "tx shelf f", "tx shelf q", "tx exc", "tx excmix"], 3),    
     ("TX нотчи", "tx notch",    
      ["tx notch f1", "tx notch f2"], 3),    
-    ("TX EQ (3 полосы)", None,    
-     ["txeq lo", "txeq mid", "txeq hi", "txeq lo f", "txeq mid f", "txeq hi f"], 3),    
-    ("Прочее", None, [], 3),   # нераспределённые метки — в последнюю колонку    
-]      
+    ("TX EQ (3 полосы)", None,      
+     ["txeq lo", "txeq mid", "txeq hi", "txeq lo f", "txeq mid f", "txeq hi f"], 3),      
+    ("Прочее RX", None,      
+     ["voice vol", "nb", "nb thr"], 1),      
+    ("Прочее TX", None,      
+     ["tx clip", "tx comp", "tx agc max", "tx agc tgt",      
+      "tx gate hys", "tx gate hld"], 3),      
+    ("Прочее", None, [], 2),   # нераспределённые метки — в колонку 3 (под TX дакинг)        
+]        
   
 # Runtime-режимы: НЕ банковые, команда "<name> on|off" выполняется немедленно.  
 # Состояние читается из state dump (R|name|val). Порядок = порядок в рамке.  
@@ -414,14 +419,14 @@ class Panel(tk.Tk):
                 self._add_param(fr, r, label, *parsed[label])      
                 used.add(label)      
                 r += 1      
-            if title == "Прочее":        
-                # Два столбца параметров: чётные — col 0..2, нечётные — col 3..5.  
-                misc = [lb for lb in parsed if lb not in used]  
-                for i, label in enumerate(misc):  
-                    self._add_param(fr, i // 2, label,  
-                                    *parsed[label], col0=(i % 2) * 3)  
-                    used.add(label)  
-                r = (len(misc) + 1) // 2  
+            if title == "Прочее":          
+                # Нераспределённые метки — одним столбцом, чтобы не растягивать    
+                # колонку по ширине (двухстолбцовая раскладка ломала рамки выше).    
+                for label in parsed:    
+                    if label not in used:    
+                        self._add_param(fr, r, label, *parsed[label])    
+                        used.add(label)    
+                        r += 1    
             if r == 0:      
                 fr.destroy()          # пустая рамка — не показывать      
                 continue      
