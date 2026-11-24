@@ -174,8 +174,12 @@ class Panel(tk.Tk):
         self.rec_lock = threading.Lock()    
         self.spec_q = queue.Queue(maxsize=8)   # блоки float32 для FFT    
         self.spec_fs = 44100    
-        self.spec_on = False      # спектр рисуется, пока работает монитор    
-        self.spec_buf = None      # накопитель отсчётов до SPEC_NFFT (np.array)  
+        self.spec_on = False        
+        self.spec_buf = None    
+        self.spec_peak = -100.0  
+        self.spec_peak_f = 0.0  
+        while not self.spec_q.empty():        
+        self.spec_peak_f = 0.0    # частота последнего пика, Гц  
         self.protocol("WM_DELETE_WINDOW", self._on_close)      
   
         self._build_top()      
@@ -558,17 +562,26 @@ class Panel(tk.Tk):
             cv.create_text(x, h - 12, text=f"{f // 1000}k", anchor="n",    
                            fill="#888", font=("TkDefaultFont", 7))    
             f += 1000    
-        for lbl in ("band lo", "band hi"):  # маркеры полосы ПФ    
-            p = self.params.get(lbl)    
-            if p:    
-                try:    
-                    fx = float(p["var"].get())    
-                    if 0 < fx < fmax:    
-                        x = fx / fmax * w    
-                        cv.create_line(x, 0, x, plot_h,    
-                                       fill="#ff5555", dash=(3, 2))    
-                except (ValueError, tk.TclError):    
-                    pass    
+        # Маркеры полосы ПФ — только когда фильтр в тракте (rx band on)  
+        p_band = self.params.get("rx band")  
+        band_on = True  
+        if p_band:  
+            try:  
+                band_on = (int(p_band["var"].get()) == 1)  
+            except (ValueError, tk.TclError):  
+                band_on = True  
+        if band_on:  
+            for lbl in ("band lo", "band hi"):  # маркеры полосы ПФ      
+                p = self.params.get(lbl)      
+                if p:      
+                    try:      
+                        fx = float(p["var"].get())      
+                        if 0 < fx < fmax:      
+                            x = fx / fmax * w      
+                            cv.create_line(x, 0, x, plot_h,      
+                                           fill="#ff5555", dash=(3, 2))      
+                    except (ValueError, tk.TclError):      
+                        pass      
         if self.spec_buf is not None and len(self.spec_buf) >= self.SPEC_NFFT:      
             win = np.hanning(self.SPEC_NFFT)      
             mag = np.abs(np.fft.rfft(self.spec_buf[-self.SPEC_NFFT:] * win))      
@@ -579,9 +592,26 @@ class Panel(tk.Tk):
             for x, y in zip(freqs[m] / fmax * w,    
                             np.clip(-db[m], 0, 100) / 100.0 * plot_h):    
                 pts += [x, y]    
-            if len(pts) >= 4:    
-                cv.create_line(*pts, fill="#40ff40")    
-        self.after(80, self._spec_draw)    
+            if len(pts) >= 4:      
+                cv.create_line(*pts, fill="#00ff00", width=1, smooth=True)  
+            # Peak-hold: жёлтый пунктир на уровне максимума, затухание  
+            # 0.5 дБ/кадр (~6 дБ/с). Частота — у последнего пробившего пика.  
+            pk = int(np.argmax(db[m]))  
+            pk_db = float(db[m][pk])  
+            if pk_db >= self.spec_peak:  
+                self.spec_peak = pk_db  
+                self.spec_peak_f = float(freqs[m][pk])  
+            else:  
+                self.spec_peak = max(-100.0, self.spec_peak - 0.5)  
+            py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h  
+            cv.create_line(0, py, w, py, fill="#ffff00", dash=(2, 4))  
+            cv.create_text(w - 4, 4, text=f"{self.spec_peak:.0f} dB",  
+                           fill="#ffff00", anchor="ne",  
+                           font=("TkDefaultFont", 8))  
+            cv.create_text(w - 4, 18, text=f"{self.spec_peak_f:.0f} Гц",  
+                           fill="#ffff00", anchor="ne",  
+                           font=("TkDefaultFont", 8))  
+        self.after(80, self._spec_draw)      
 
     def _on_close(self):        
         # Освободить аудио и порт, иначе процесс может повиснуть.        
