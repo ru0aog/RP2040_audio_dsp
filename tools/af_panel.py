@@ -1,6 +1,6 @@
 #!/usr/bin/env python3  
 # tools/af_panel.py — панель настроек RP2040_audio_dsp.  
-# Зависимости: pip install pyserial. GUI — tkinter (стандартная поставка).  
+# Зависимости: pip install pyserial sounddevice. GUI — tkinter (стандартная поставка).  
 #  
 # Протокол (прошивка schema=1):  
 #   version      -> "# version: NAME VER (schema=N store=N)"  
@@ -161,8 +161,10 @@ class Panel(tk.Tk):
         self._dump_got = 0  
         self._state_lines = []  
         self._state_active = False  
-        self._pending = []        # очередь команд после connect    
-        self.audio_stream = None  # sd.Stream при активном мониторинге    
+        self._pending = []        # очередь команд после connect      
+        self.audio_stream = None  # sd.Stream при активном мониторинге      
+        self.audio_vol = 0.3      # громкость монитора 0.0..1.0 (читается из audio-потока)  
+        self.protocol("WM_DELETE_WINDOW", self._on_close)  
   
         self._build_top()      
         # Строка состояния (state dump) — на всю ширину внизу окна.  
@@ -223,13 +225,20 @@ class Panel(tk.Tk):
                                      width=28, state="readonly",  
                                      values=self._audio_inputs())  
         self.audio_cb.grid(row=0, column=6, rowspan=2, padx=(16, 4), sticky="e")  
-        self.audio_btn = ttk.Button(mf, text="Монитор",  
-                                    command=self._audio_toggle)  
-        self.audio_btn.grid(row=0, column=7, rowspan=2, padx=4, sticky="e")  
-        if sd is None:  
-            self.audio_cb.configure(state="disabled")  
-            self.audio_btn.configure(state="disabled")  
-        mf.columnconfigure(6, weight=1)   # прижать аудио-блок вправо    
+        self.audio_btn = ttk.Button(mf, text="Монитор",    
+                                    command=self._audio_toggle)    
+        self.audio_btn.grid(row=0, column=7, rowspan=2, padx=4, sticky="e")    
+        # Громкость монитора (аналог volumeSlider/waveOutSetVolume в RP2040_Control)  
+        self.audio_scale = ttk.Scale(  
+            mf, from_=0, to=100, orient="horizontal", length=90,  
+            command=lambda v: setattr(self, "audio_vol", float(v) / 100.0))  
+        self.audio_scale.set(30)  
+        self.audio_scale.grid(row=0, column=8, rowspan=2, padx=(0, 4), sticky="e")  
+        if sd is None:    
+            self.audio_cb.configure(state="disabled")    
+            self.audio_btn.configure(state="disabled")    
+            self.audio_scale.configure(state="disabled")  
+        mf.columnconfigure(6, weight=1)   # прижать аудио-блок вправо      
   
     def _build_table(self):    
         wrap = ttk.Frame(self.paned)    
@@ -319,20 +328,52 @@ class Panel(tk.Tk):
         if not sel:  
             messagebox.showerror("Аудио", "Выберите аудиоустройство")  
             return  
-        idx = int(sel.split(":")[0])  
-        try:  
-            # duplex: вход = выбранное устройство, выход = динамики по умолчанию.  
-            # Частота/каналы — по AF_USB_FS_HZ в af_usb.cpp (44100, 2ch).  
-            self.audio_stream = sd.Stream(  
-                device=(idx, None), samplerate=44100, channels=2,  
-                dtype="int16", blocksize=960)  
-            self.audio_stream.start()  
-        except Exception as ex:  
-            self.audio_stream = None  
-            messagebox.showerror("Аудио", str(ex))  
-            return  
+        idx = int(sel.split(":")[0])    
+        try:    
+            info = sd.query_devices(idx)    
+            ch = min(2, int(info["max_input_channels"])) or 1    
+  
+            def callback(indata, outdata, frames, time, status):  
+                # loopback: вход UAC-платы -> выход ПК  
+                # (аналог waveIn->waveOut в RP2040_Control handleWaveBuffer)  
+                outdata[:] = indata * self.audio_vol  
+  
+            # Плата — UAC 44100/16 стерео (src/af_usb.cpp). Пробуем 44100,  
+            # при отказе — default_samplerate устройства.  
+            last_ex = None  
+            for fs in (44100, int(info["default_samplerate"])):  
+                try:  
+                    self._log(f"# audio: {info['name']} fs={fs} ch={ch}")  
+                    self.audio_stream = sd.Stream(  
+                        device=(idx, None),   # вход = выбранное, выход = по умолчанию  
+                        samplerate=fs, channels=ch, dtype="float32",  
+                        blocksize=fs // 50,   # ~20 мс  
+                        callback=callback)  
+                    self.audio_stream.start()  
+                    break  
+                except Exception as ex:  
+                    last_ex = ex  
+                    self.audio_stream = None  
+            if self.audio_stream is None:  
+                raise last_ex  
+        except Exception as ex:    
+            self.audio_stream = None    
+            messagebox.showerror("Аудио", str(ex))    
+            return    
         self.audio_btn.configure(text="Стоп")  
         self._log(f"# audio: монитор <- {sel}")  
+
+    def _on_close(self):  
+        # Освободить аудио и порт, иначе процесс может повиснуть.  
+        if self.audio_stream is not None:  
+            try:  
+                self.audio_stream.stop()  
+                self.audio_stream.close()  
+            except Exception:  
+                pass  
+            self.audio_stream = None  
+        self.w.close()  
+        self.destroy()  
 
     def _connect(self):  
         if self.w.ser:    
