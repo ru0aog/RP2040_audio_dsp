@@ -38,47 +38,47 @@ DUMP_TIMEOUT_S = 10.0
 # Порядок рамок = порядок в списке; метки не из списка попадут в "Прочее".  
 # (заголовок рамки, метка-флажок или None, [метки], колонка 0..3).  
 # Колонки 0-1 = RX, 2-3 = TX; рамки внутри колонки pack'уются сверху вниз.  
-GROUPS = [    
-    ("Полоса приёма", None,    
-     ["band lo", "band hi"], 0),    
-    ("АРУ / лимитер", "agc",    
-     ["gain", "agc ref", "agc max", "agc min", "lim ceil"], 0),    
-    ("CW-фильтр / декодер", "cw",    
-     ["cw f0", "cw bw", "cw noise", "cw dec", "cw wpm", "cw sql"], 0),    
-    ("RX shelf / exciter", None,    
-     ["rx shelf", "rx shelf f", "rx shelf q", "rx exc", "rx excmix"], 0),    
-    ("Шумоподавление NR", "nr",    
-     ["nr depth", "nr makeup", "nr mu"], 1),    
-    ("Автонотч NT", "nt",    
-     ["nt mu"], 1),    
-    ("RTTY", "rtty",    
-     ["rtty scan", "rtty rsid", "rtty rev", "rtty dbg", "rtty ctr", "rtty sql"], 1),    
-    ("RX presence", "rx pres",    
-     ["rx presmax", "rx pres f", "rx pres q"], 1),    
-    ("RX EQ (3 полосы)", None,    
-     ["rxeq lo", "rxeq mid", "rxeq hi", "rxeq lo f", "rxeq mid f", "rxeq hi f"], 1),    
-    ("TX полоса / АРУ", "tx",    
-     ["tx band lo", "tx band hi", "tx agc", "tx agcmax",    
-      "tx gate", "tx gatehold", "tx gatehyst", "tx gfloor"], 2),    
-    ("TX компрессор", "tx 2band",    
-     ["tx split", "tx lr2", "tx cthr", "tx cthr lo", "tx cthr hi",    
-      "tx soft", "tx ap"], 2),    
-    ("TX дакинг / разборчивость", "tx duck",    
-     ["tx duckmax", "tx intel", "tx intel tgt", "tx intel cut", "tx intel bst"], 2),    
-    ("TX presence / shelf / exciter", "tx pres",    
-     ["tx presmax", "tx pres f", "tx pres q",    
-      "tx shelf", "tx shelf f", "tx shelf q", "tx exc", "tx excmix"], 3),    
-    ("TX нотчи", "tx notch",    
-     ["tx notch f1", "tx notch f2"], 3),    
-    ("TX EQ (3 полосы)", None,      
-     ["txeq lo", "txeq mid", "txeq hi", "txeq lo f", "txeq mid f", "txeq hi f"], 3),      
-    ("Прочее RX", None,        
-     ["voice vol", "nb", "nb thr"], 0),          
-    ("Прочее TX", None,      
-     ["tx clip", "tx comp", "tx agc max", "tx agc tgt",      
-      "tx gate hys", "tx gate hld"], 3),      
-    ("Прочее", None, [], 2),   # нераспределённые метки — в колонку 3 (под TX дакинг)        
-]        
+GROUPS = [      
+    ("Полоса приёма", "rx band",      
+     ["band lo", "band hi"], 0),      
+    ("АРУ / лимитер", "agc",      
+     ["gain", "agc ref", "agc max", "agc min", "lim ceil"], 0),      
+    ("CW-фильтр / декодер", "cw",      
+     ["cw f0", "cw bw", "cw noise", "cw dec", "cw wpm", "cw sql"], 0),      
+    ("RX shelf / exciter", "rx shelf on",      
+     ["rx shelf", "rx shelf f", "rx shelf q", "rx exc", "rx excmix"], 0),      
+    ("Шумоподавление NR", "nr",      
+     ["nr depth", "nr makeup", "nr mu"], 1),      
+    ("Автонотч NT", "nt",      
+     ["nt mu"], 1),      
+    ("RTTY", "rtty",      
+     ["rtty scan", "rtty rsid", "rtty rev", "rtty dbg", "rtty ctr", "rtty sql"], 1),      
+    ("RX presence", "rx pres",      
+     ["rx presmax", "rx pres f", "rx pres q"], 1),      
+    ("RX EQ (3 полосы)", "rxeq on",      
+     ["rxeq lo", "rxeq mid", "rxeq hi", "rxeq lo f", "rxeq mid f", "rxeq hi f"], 1),      
+    ("TX полоса / АРУ", "tx band on",      
+     ["tx band lo", "tx band hi", "tx agc on", "tx agc", "tx agcmax",      
+      "tx agc max", "tx agc tgt", "tx gate on", "tx gate", "tx gatehold",      
+      "tx gatehyst", "tx gate hys", "tx gate hld", "tx gfloor"], 2),      
+    ("TX компрессор", "tx comp on",      
+     ["tx comp", "tx 2band", "tx split", "tx lr2", "tx cthr", "tx cthr lo",      
+      "tx cthr hi", "tx soft", "tx ap"], 2),      
+    ("TX дакинг / разборчивость", "tx duck",      
+     ["tx duckmax", "tx intel", "tx intel tgt", "tx intel cut", "tx intel bst"], 2),      
+    ("TX pres / shelf / exc", "tx pres",      
+     ["tx presmax", "tx pres f", "tx pres q", "tx shelf on",      
+      "tx shelf", "tx shelf f", "tx shelf q", "tx exc", "tx excmix"], 3),      
+    ("TX нотчи", "tx notch",      
+     ["tx notch f1", "tx notch f2"], 3),      
+    ("TX EQ (3 полосы)", "txeq on",        
+     ["txeq lo", "txeq mid", "txeq hi", "txeq lo f", "txeq mid f", "txeq hi f"], 3),        
+    ("Прочее RX", None,          
+     ["voice vol", "nb", "nb thr"], 0),            
+    ("TX Клип", "tx clip on",        
+     ["tx clip"], 3),        
+    ("Прочее", None, [], 2),   # нераспределённые метки — в колонку 3 (под TX дакинг)          
+]          
   
 # Runtime-режимы: НЕ банковые, команда "<name> on|off" выполняется немедленно.  
 # Состояние читается из state dump (R|name|val). Порядок = порядок в рамке.  
@@ -153,7 +153,7 @@ class Panel(tk.Tk):
     def __init__(self):  
         super().__init__()  
         self.title("RP2040 audio DSP by RU0AOG 2026 — панель настроек")  
-        self.geometry("1130x800")    
+        self.geometry("1150x810")    
   
         self.w = SerialWorker()  
         self.params = {}          # label -> {"type":..., "var":...}  
