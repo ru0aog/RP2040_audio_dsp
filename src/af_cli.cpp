@@ -87,7 +87,8 @@ static void cli_help(void) {
     Serial.println("#   cw txwpm <5..60>  — скорость передачи;  cw abort — оборвать посылку");
     Serial.println("#   cw msg <1..4> <текст> — строка CW.TXT (пусто = голосовой слот)");      
     Serial.println("#   cw msgs           — показать 4 сообщения магнитофона");      
-    Serial.println("#   cw key off|on|iambic_a|iambic_b|straight — ключ на GP11/GP12");      
+    Serial.println("#   cw key off|on|iambic_a|iambic_b|straight — ключ на GP11/GP12");        
+    Serial.println("#   cw beacon <5..3600> <текст> — CW-маяк с автоповтором; off — стоп");        
     Serial.println("#   rtty on|off       — RTTY-декодер 45.45/170: текст в Serial (взаимоискл. с cw)");  
     Serial.println("#   rtty rsid on|off  — захват центра по RSID-метке (дефолт on)");  
     Serial.println("#   rtty scan on|off  — сканер тонов как fallback без RSID (дефолт on)");  
@@ -143,9 +144,13 @@ static void cli_help(void) {
     Serial.println("#   txeq lo|mid|hi <-120..120> — 3-полосный EQ TX, дБx10");    
     Serial.println("#   txeq lo|mid|hi f <Гц>      — частоты полос EQ TX");    
     Serial.println("#   txprof <1..7|имя> — профиль передачи: 1 flat, 2 natural, 3 dx, 4 bass, 5 whisper, 6 loud, 7 max");  
-    Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам"); 
-    Serial.println("# === СИСТЕМА ===");
-    Serial.println("#   stats             — таблица параметров RX/TX/SYS");  
+    Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам");   
+    Serial.println("#   tt on [f1 f2]|off — двухтональный генератор IMD-теста (дефолт 700/1900)");  
+    Serial.println("# === СИСТЕМА ===");  
+    Serial.println("#   stats             — таблица параметров RX/TX/SYS");    
+    Serial.println("#   version           — версия прошивки и схемы (handshake внешней панели)");    
+    Serial.println("#   params dump       — машинный дамп всех параметров (P|label|type|cur|banked)");    
+    Serial.println("#   state dump        — машинный дамп runtime-режимов (R|name|val)");    
     Serial.println("#   dump [N|off]      — инженерный дамп счётчиков: однократно / каждые N сек / стоп");    
     Serial.println("#   fmap              — RLE-карта flash: регионы, граница прошивки, банки");
     Serial.println("#   ftest [m] [N]     — FLASH-TEST @0x100000: m=0 окно, 1 +park, 2 +clk, 3 всё; N итераций");
@@ -1139,11 +1144,35 @@ static void cli_exec(char* line) {
                               p->label, tn, (long)bank_field(&cur, p));  
             }  
             Serial.println("# params end");  
+        } else {    
+            Serial.println("# ERR: params dump");    
+        }    
+    }  
+    else if (strcmp(cmd, "state") == 0) {  
+        char* sub = strtok(NULL, " \t");  
+        if (sub && strcmp(sub, "dump") == 0) {  
+            // Runtime-режимы (не из банка): программа опрашивает после params dump  
+            // и периодически для статус-бара. Формат: R|<имя>|<0|1|число>.  
+            Serial.println("# state begin");  
+            Serial.printf("R|tx|%u\n",       af_dsp_tx_on() ? 1 : 0);  
+            Serial.printf("R|ptt|%u\n",      af_gpio_ptt_active() ? 1 : 0);  
+            Serial.printf("R|bank|%u\n",     (unsigned)af_gpio_last_bank());  
+            Serial.printf("R|msg sel|%u\n",  (unsigned)af_gpio_msg_sel());  
+            Serial.printf("R|key mode|%u\n", (unsigned)af_gpio_key_mode());  
+            Serial.printf("R|key tx|%u\n",   af_gpio_key_tx() ? 1 : 0);  
+            Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);  
+            Serial.printf("R|cwtx|%u\n",     af_dsp_cwtx_busy() ? 1 : 0);  
+            Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);  
+            Serial.printf("R|tt|%u\n",       af_dsp_tt_busy() ? 1 : 0);  
+            Serial.printf("R|rec|%u\n",      af_rec_is_recording() ? 1 : 0);  
+            Serial.printf("R|play|%u\n",     af_rec_is_playing() ? 1 : 0);  
+            Serial.println("# state end");  
         } else {  
-            Serial.println("# ERR: params dump");  
+            Serial.println("# ERR: state dump");  
         }  
     }  
-    else if (strcmp(cmd, "fmap") == 0) {  
+  
+    else if (strcmp(cmd, "fmap") == 0) {    
         cli_fmap();  
     }  
     else if (strcmp(cmd, "dump") == 0) {      

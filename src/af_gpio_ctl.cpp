@@ -521,3 +521,6 @@ void af_gpio_ctl_poll(void) {
 
 }  
 
+bool    af_gpio_ptt_active(void) { return sw_ptt_active; }  
+bool    af_gpio_key_tx(void)     { return key_tx; }  
+uint8_t af_gpio_key_mode(void)   { return key_mode; }  
