@@ -88,20 +88,19 @@ GROUPS = [
 # Состояние читается из state dump (R|name|val). Порядок = порядок в рамке.  
 # (имя в state dump R|name|, команда CLI). Имя и команда различаются,  
 # где метка AF_PARAMS содержит пробел ("rx pres" -> R|rxpres|).  
-RUNTIME_MODES = [    
-    ("nt",      "nt"),    
-    ("nr",      "nr"),    
-    ("bypass",  "bypass"),    
-    ("cw",      "cw"),    
-    ("nb",      "nb"),    
-    ("rxnotch", "rxnotch"),    
-    ("rxpres",  "rx pres"),    
-    ("rxexc",   "rx exc"),    
-    ("rtty",    "rtty"),    
-    ("ramp",    "ramp"),    
-    ("tx",      "tx"),    
-    ("tt",      "tt"),    
-]    
+RUNTIME_MODES = [      
+    ("nt",      "nt"),      
+    ("nr",      "nr"),      
+    ("bypass",  "bypass"),      
+    ("cw",      "cw"),      
+    ("nb",      "nb"),      
+    ("rxexc",   "rx exc"),      
+    ("rtty",    "rtty"),      
+    ("ramp",    "ramp"),      
+    ("tx",      "tx"),      
+    ("tt",      "tt"),      
+    ("st",      "st"),      
+]      
   
   
 # ---------------------------------------------------------------------------  
@@ -1240,13 +1239,24 @@ class Panel(tk.Tk):
                 self._add_param(fr, r, en_label, *parsed[en_label])      
                 used.add(en_label)      
                 r += 1      
-            for label in members:      
-                if label == en_label or label not in parsed:      
-                    continue      
-                self._add_param(fr, r, label, *parsed[label])      
-                used.add(label)      
-                r += 1      
-            if title == "Прочее":          
+            for label in members:        
+                if label == en_label or label not in parsed:        
+                    continue        
+                self._add_param(fr, r, label, *parsed[label])        
+                used.add(label)        
+                r += 1        
+            if title == "Автонотч NT":  
+                # Ручной нотч — runtime-флажок рядом с автонотчем  
+                # (не банковый параметр: команда rxnotch on|off немедленно,  
+                # состояние из state dump R|rxnotch|).  
+                var = tk.IntVar(value=0)  
+                ttk.Checkbutton(  
+                    fr, text="rxnotch", variable=var,  
+                    command=lambda v=var: self._mode_set("rxnotch", v.get())  
+                ).grid(row=r, column=0, columnspan=2, sticky="w", padx=4)  
+                self.mode_vars["rxnotch"] = var  
+                r += 1  
+            if title == "Прочее":               
                 # Нераспределённые метки — одним столбцом, чтобы не растягивать    
                 # колонку по ширине (двухстолбцовая раскладка ломала рамки выше).    
                 for label in parsed:    
