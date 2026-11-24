@@ -179,7 +179,8 @@ class Panel(tk.Tk):
         self.spec_peak = -100.0     # peak-hold уровень, дБ    
         self.spec_peak_f = 0.0      # частота последнего пика, Гц    
         self.spec_hold = None       # послесвечение: max по бинам с затуханием (np.array)      
-        self.spec_last = None       # (freqs, db) последнего кадра — для кнопки "Скрин"  
+        self.spec_last = None       # (freqs, db) последнего кадра — для кнопки "Скрин"    
+        self.spec_full = False      # спектр развёрнут на всё окно (dblclick)  
         self.protocol("WM_DELETE_WINDOW", self._on_close)    
   
         self._build_top()      
@@ -263,12 +264,12 @@ class Panel(tk.Tk):
             self.rec_btn.configure(state="disabled")  
         mf.columnconfigure(6, weight=1)   # прижать аудио-блок вправо      
   
-    def _build_table(self):    
-        wrap = ttk.Frame(self.paned)    
-        self.paned.add(wrap, weight=3)    
-        self.canvas = tk.Canvas(wrap, highlightthickness=0)    
-        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.canvas.yview)    
-        self.tbl = ttk.Frame(self.canvas)    
+    def _build_table(self):      
+        self.tbl_wrap = ttk.Frame(self.paned)      
+        self.paned.add(self.tbl_wrap, weight=3)      
+        self.canvas = tk.Canvas(self.tbl_wrap, highlightthickness=0)      
+        sb = ttk.Scrollbar(self.tbl_wrap, orient="vertical", command=self.canvas.yview)      
+        self.tbl = ttk.Frame(self.canvas)      
         self.tbl.bind("<Configure>",    
                       lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))    
         self.canvas.create_window((0, 0), window=self.tbl, anchor="nw")    
@@ -288,30 +289,32 @@ class Panel(tk.Tk):
         self.canvas.bind("<Leave>",      
             lambda _e: self.canvas.unbind_all("<MouseWheel>"))      
   
-    def _build_bottom(self):      
-        # Правая панель: спектр сверху, лог ниже + командная строка + статус.    
-        right = ttk.Frame(self.paned)      
-        self.paned.add(right, weight=1)      
-        # Спектр входа UAC: текущий срез FFT 0..6 кГц / 0..-100 дБ,  
-        # маркеры band lo/hi. Работает, пока включён монитор.  
-        sf = ttk.LabelFrame(right, text="Спектр (0-6 кГц)")    
-        sf.pack(fill="x", padx=(0, 6), pady=(4, 0))    
-        self.spec_cv = tk.Canvas(sf, height=280, bg="#101010",    
-                                 highlightthickness=0)    
-        self.spec_cv.pack(fill="x", padx=4, pady=4)    
-        # height ограничивает высоту; bg — светло-серый фон лога.    
-        self.log = tk.Text(right, width=42, height=14, state="disabled",    
-                           bg="#f0f0f0")            
-        self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)        
-        f = ttk.Frame(right)      
-        f.pack(fill="x", padx=(0, 6), pady=(0, 2))      
-        self.cmd_var = tk.StringVar()      
-        e = ttk.Entry(f, textvariable=self.cmd_var)      
+    def _build_bottom(self):        
+        # Правая панель: спектр сверху, лог ниже + командная строка + статус.      
+        self.right_fr = ttk.Frame(self.paned)        
+        self.paned.add(self.right_fr, weight=1)        
+        # Спектр входа UAC: текущий срез FFT 0..6 кГц / 0..-100 дБ,    
+        # маркеры band lo/hi. Работает, пока включён монитор.    
+        # Двойной щелчок — развернуть/свернуть на всё окно.    
+        self.spec_fr = ttk.LabelFrame(self.right_fr, text="Спектр (0-6 кГц)")      
+        self.spec_fr.pack(fill="x", padx=(0, 6), pady=(4, 0))      
+        self.spec_cv = tk.Canvas(self.spec_fr, height=280, bg="#101010",      
+                                 highlightthickness=0)      
+        self.spec_cv.pack(fill="x", padx=4, pady=4)      
+        self.spec_cv.bind("<Double-Button-1>", lambda _e: self._spec_toggle_full())  
+        # height ограничивает высоту; bg — светло-серый фон лога.      
+        self.log = tk.Text(self.right_fr, width=42, height=14, state="disabled",      
+                           bg="#f0f0f0")              
+        self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)          
+        self.cmd_fr = ttk.Frame(self.right_fr)        
+        self.cmd_fr.pack(fill="x", padx=(0, 6), pady=(0, 2))        
+        self.cmd_var = tk.StringVar()        
+        e = ttk.Entry(self.cmd_fr, textvariable=self.cmd_var)        
         e.pack(side="left", fill="x", expand=True)      
         e.bind("<Return>", lambda _e: self._send_manual())      
-        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)           
-        ttk.Button(f, text="Очистить", command=self._log_clear).pack(side="left")    
-        ttk.Button(f, text="Скопировать", command=self._log_copy).pack(side="left", padx=(4, 0))    
+        ttk.Button(self.cmd_fr, text="Отправить", command=self._send_manual).pack(side="left", padx=4)             
+        ttk.Button(self.cmd_fr, text="Очистить", command=self._log_clear).pack(side="left")      
+        ttk.Button(self.cmd_fr, text="Скопировать", command=self._log_copy).pack(side="left", padx=(4, 0))      
   
     # --- helpers ------------------------------------------------------------  
     def _ports(self):  
@@ -533,7 +536,24 @@ class Panel(tk.Tk):
         self.rec_btn.configure(text="Запись")  
 
     SPEC_NFFT = 4096   # окно FFT;  ~10.8 Гц/бин при fs=44100 
-  
+
+    def _spec_toggle_full(self):  
+        # Двойной щелчок по спектру: развернуть на всё окно / свернуть.  
+        self.spec_full = not self.spec_full  
+        if self.spec_full:  
+            self.paned.forget(self.tbl_wrap)          # скрыть таблицу параметров  
+            self.log.pack_forget()                    # скрыть лог  
+            self.cmd_fr.pack_forget()                 # и командную строку  
+            self.spec_fr.pack(fill="both", expand=True,  
+                              padx=(0, 6), pady=(4, 0))  
+            self.spec_cv.pack(fill="both", expand=True, padx=4, pady=4)  
+        else:  
+            self.spec_cv.pack(fill="x", padx=4, pady=4)  
+            self.spec_fr.pack(fill="x", padx=(0, 6), pady=(4, 0))  
+            self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)  
+            self.cmd_fr.pack(fill="x", padx=(0, 6), pady=(0, 2))  
+            self.paned.insert(0, self.tbl_wrap, weight=3)  # таблица слева  
+
     def _spec_draw(self):    
         # Перерисовка ~12 раз/с: сетка дБ/Гц + маркеры ПФ + полилиния спектра.  
         # Фиксированные диапазоны: 0..6 кГц по X, 0..-100 дБ по Y.  
@@ -663,10 +683,10 @@ class Panel(tk.Tk):
             img = Image.new("RGB", (W, H), "#101010")    
             dr = ImageDraw.Draw(img)    
             # TrueType с кириллицей; без него — дефолтный bitmap (мелкий, без рус.)    
-            try:    
-                from PIL import ImageFont    
-                fnt = ImageFont.truetype("arial.ttf", 22)    
-                fnt_sm = ImageFont.truetype("arial.ttf", 18)    
+            try:
+                from PIL import ImageFont
+                fnt = ImageFont.truetype("arial.ttf", 22)
+                fnt_sm = ImageFont.truetype("arial.ttf", 18)
             except Exception:    
                 try:    
                     fnt = ImageFont.truetype("DejaVuSans.ttf", 22)    
