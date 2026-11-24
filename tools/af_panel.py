@@ -21,9 +21,49 @@ try:
 except ImportError:  
     raise SystemExit("Нужен pyserial: pip install pyserial")  
   
-SCHEMA_SUPPORTED = 1  
-BAUD = 115200  
-DUMP_TIMEOUT_S = 10.0  
+SCHEMA_SUPPORTED = 1    
+BAUD = 115200    
+DUMP_TIMEOUT_S = 10.0    
+  
+# Группировка параметров по блокам аудиотракта.  
+# (заголовок рамки, метка-флажок включения или None, [метки параметров]).  
+# Порядок рамок = порядок в списке; метки не из списка попадут в "Прочее".  
+GROUPS = [  
+    ("Полоса приёма", None,  
+     ["band lo", "band hi"]),  
+    ("АРУ / лимитер", "agc",  
+     ["gain", "agc ref", "agc max", "agc min", "lim ceil"]),  
+    ("Шумоподавление NR", "nr",  
+     ["nr depth", "nr makeup", "nr mu"]),  
+    ("Автонотч NT", "nt",  
+     ["nt mu"]),  
+    ("CW-фильтр / декодер", "cw",  
+     ["cw f0", "cw bw", "cw noise", "cw dec", "cw wpm", "cw sql"]),  
+    ("RTTY", "rtty",  
+     ["rtty scan", "rtty rsid", "rtty rev", "rtty dbg", "rtty ctr", "rtty sql"]),  
+    ("RX presence", "rx pres",  
+     ["rx presmax", "rx pres f", "rx pres q"]),  
+    ("RX shelf / exciter", None,  
+     ["rx shelf", "rx shelf f", "rx shelf q", "rx exc", "rx excmix"]),  
+    ("RX EQ (3 полосы)", None,  
+     ["rxeq lo", "rxeq mid", "rxeq hi", "rxeq lo f", "rxeq mid f", "rxeq hi f"]),  
+    ("TX полоса / АРУ", "tx",  
+     ["tx band lo", "tx band hi", "tx agc", "tx agcmax",  
+      "tx gate", "tx gatehold", "tx gatehyst", "tx gfloor"]),  
+    ("TX компрессор", "tx 2band",  
+     ["tx split", "tx lr2", "tx cthr", "tx cthr lo", "tx cthr hi",  
+      "tx soft", "tx ap"]),  
+    ("TX дакинг / разборчивость", "tx duck",  
+     ["tx duckmax", "tx intel", "tx intel tgt", "tx intel cut", "tx intel bst"]),  
+    ("TX presence / shelf / exciter", "tx pres",  
+     ["tx presmax", "tx pres f", "tx pres q",  
+      "tx shelf", "tx shelf f", "tx shelf q", "tx exc", "tx excmix"]),  
+    ("TX нотчи", "tx notch",  
+     ["tx notch f1", "tx notch f2"]),  
+    ("TX EQ (3 полосы)", None,  
+     ["txeq lo", "txeq mid", "txeq hi", "txeq lo f", "txeq mid f", "txeq hi f"]),  
+    ("Прочее", None, []),   # сюда попадут метки, не перечисленные выше  
+]  
   
   
 # ---------------------------------------------------------------------------  
@@ -293,43 +333,70 @@ class Panel(tk.Tk):
                 "Панель в режиме read-only.")  
   
     # --- params table ---------------------------------------------------------  
-    def _build_params(self, lines):  
-        for wdg in self.tbl.winfo_children():  
-            wdg.destroy()  
-        self.params.clear()  
-  
-        row = 0  
-        for ln in lines:  
-            if ln.startswith("# S|"):  
-                ttk.Label(self.tbl, text=ln[4:],  
-                          font=("TkDefaultFont", 10, "bold")).grid(  
-                    row=row, column=0, columnspan=3, sticky="w", pady=(8, 2))  
-                row += 1  
-                continue  
-            if not ln.startswith("P|"):  
-                continue  
-            _, label, ptype, cur, banked = (ln.split("|") + ["", "", "", ""])[:5]  
-            ttk.Label(self.tbl, text=label).grid(row=row, column=0, sticky="w")  
-  
-            if ptype == "onoff":  
-                var = tk.IntVar(value=int(cur))  
-                wdg = ttk.Checkbutton(  
-                    self.tbl, variable=var,  
-                    command=lambda l=label, v=var: self._set(l, v.get()))  
-                wdg.grid(row=row, column=1, sticky="w")  
-            else:  
-                var = tk.StringVar(value=cur)  
-                e = ttk.Entry(self.tbl, textvariable=var, width=10)  
-                e.grid(row=row, column=1, sticky="w")  
-                e.bind("<Return>",  
-                       lambda _e, l=label, v=var: self._set(l, v.get()))  
-                e.bind("<FocusOut>",  
-                       lambda _e, l=label, v=var: self._set(l, v.get()))  
-            note = {"x100": "x100", "gain": "Q8", "u32": "u32"}.get(ptype, "")  
-            ttk.Label(self.tbl, text=note, foreground="#888").grid(  
-                row=row, column=2, sticky="w", padx=4)  
-            self.params[label] = {"type": ptype, "var": var}  
-            row += 1  
+    def _build_params(self, lines):    
+        for wdg in self.tbl.winfo_children():    
+            wdg.destroy()    
+        self.params.clear()    
+    
+        # Разобрать дамп: label -> (type, cur)    
+        parsed = {}    
+        for ln in lines:    
+            if ln.startswith("P|"):    
+                _, label, ptype, cur, _b = (ln.split("|") + ["", "", "", ""])[:5]    
+                parsed[label] = (ptype, cur)    
+    
+        # Раскладка по рамкам; нераспределённые — в "Прочее"    
+        used = set()    
+        col = row = 0    
+        for title, en_label, members in GROUPS:    
+            fr = ttk.LabelFrame(self.tbl, text=title)    
+            fr.grid(row=row, column=col, sticky="new", padx=4, pady=4)    
+            r = 0    
+            # Флажок включения блока — первой строкой    
+            if en_label and en_label in parsed:    
+                self._add_param(fr, r, en_label, *parsed[en_label])    
+                used.add(en_label)    
+                r += 1    
+            for label in members:    
+                if label == en_label or label not in parsed:    
+                    continue    
+                self._add_param(fr, r, label, *parsed[label])    
+                used.add(label)    
+                r += 1    
+            if title == "Прочее":    
+                for label, (ptype, cur) in parsed.items():    
+                    if label not in used:    
+                        self._add_param(fr, r, label, ptype, cur)    
+                        r += 1    
+            if r == 0:    
+                fr.destroy()          # пустая рамка — не показывать    
+                continue    
+            col += 1    
+            if col == 2:              # рамки в 2 колонки    
+                col = 0    
+                row += 1    
+    
+    def _add_param(self, parent, row, label, ptype, cur):    
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4)    
+        if ptype == "onoff":    
+            var = tk.IntVar(value=int(cur))    
+            ttk.Checkbutton(    
+                parent, variable=var,    
+                command=lambda l=label, v=var: self._set(l, v.get())    
+            ).grid(row=row, column=1, sticky="w")    
+        else:    
+            var = tk.StringVar(value=cur)    
+            e = ttk.Entry(parent, textvariable=var, width=9)    
+            e.grid(row=row, column=1, sticky="w")    
+            e.bind("<Return>",    
+                   lambda _e, l=label, v=var: self._set(l, v.get()))    
+            e.bind("<FocusOut>",    
+                   lambda _e, l=label, v=var: self._set(l, v.get()))    
+        hint = {"x100": "x100", "gain": "Q8", "u32": "u32"}.get(ptype, "")    
+        if hint:    
+            ttk.Label(parent, text=hint, foreground="#888").grid(    
+                row=row, column=2, sticky="w")    
+        self.params[label] = {"type": ptype, "var": var}    
   
     def _set(self, label, val):  
         if not self.schema_ok:  
