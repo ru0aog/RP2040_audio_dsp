@@ -441,12 +441,17 @@ class Panel(tk.Tk):
         if not sel:  
             messagebox.showerror("Запись", "Выберите аудиоустройство")  
             return  
-        idx = int(sel.split(":")[0])  
-        try:  
-            info = sd.query_devices(idx)  
-            ch = min(2, int(info["max_input_channels"])) or 1  
-            fs = 44100                      # плата — UAC 44100/16 (src/af_usb.cpp)  
-            fname = time.strftime("rec_%Y%m%d_%H%M%S.wav")  
+        idx = int(sel.split(":")[0])    
+        try:    
+            info = sd.query_devices(idx)    
+            ch = min(2, int(info["max_input_channels"])) or 1    
+            # Как в мониторе: WASAPI принимает только частоту, настроенную  
+            # в Windows — перебираем кандидатов (иначе PaErrorCode -9997).  
+            fs = self._probe_fs(idx, "in",  
+                                (44100, 48000, int(info["default_samplerate"])))  
+            if fs is None:  
+                raise RuntimeError("нет поддерживаемой частоты записи")  
+            fname = time.strftime("rec_%Y%m%d_%H%M%S.wav")    
             wf = wave.open(fname, "wb")  
             wf.setnchannels(ch)  
             wf.setsampwidth(2)              # int16  
