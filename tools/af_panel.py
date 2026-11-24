@@ -576,11 +576,11 @@ class Panel(tk.Tk):
         h = max(cv.winfo_height(), 60)    
         fmax = 6000    
         plot_h = h - 14                     # нижние 14 px — подписи частот    
-        for db in (-20, -40, -60):          # сетка уровней, 0 дБ сверху, -80 внизу      
-            y = -db / 80.0 * plot_h      
-            cv.create_line(0, y, w, y, fill="#303030")    
-            cv.create_text(2, y, text=str(db), anchor="nw", fill="#888",    
-                           font=("TkDefaultFont", 7))    
+        for db in range(-10, -80, -10):     # сетка уровней, шаг 10 дБ, -80 внизу        
+            y = -db / 80.0 * plot_h        
+            cv.create_line(0, y, w, y, fill="#303030")      
+            cv.create_text(2, y, text=str(db), anchor="nw", fill="#888",      
+                           font=("TkDefaultFont", 7))      
         f = 1000    
         while f < fmax:                     # сетка частот, шаг 1 кГц    
             x = f / fmax * w    
@@ -700,9 +700,9 @@ class Panel(tk.Tk):
                     dr.line([(x0, y), (x1, min(y + dash, y1))],    
                             fill=fill, width=width)    
                     y += dash + gap    
-            for dbv in (-20, -40, -60):        
-                y = -dbv / 80.0 * plot_h        
-                dr.line([(0, y), (W, y)], fill="#303030")        
+            for dbv in range(-10, -80, -10):          
+                y = -dbv / 80.0 * plot_h          
+                dr.line([(0, y), (W, y)], fill="#303030")                 
             for f in range(1000, fmax, 1000):      
                 x = f / fmax * W      
                 dr.line([(x, 0), (x, plot_h)], fill="#303030")       
@@ -762,9 +762,9 @@ class Panel(tk.Tk):
             dr.text((W - 10 - dr.textlength(t2, font=fnt), 40),        
                     t2, fill="#ffff00", font=fnt)        
             # Подписи сетки — последними, поверх всех линий, на подложках  
-            for dbv in (-20, -40, -60):    
-                y = -dbv / 80.0 * plot_h    
-                t = f"{dbv} дБ"    
+            for dbv in range(-10, -80, -10):      
+                y = -dbv / 80.0 * plot_h      
+                t = f"{dbv} дБ"        
                 tw2 = dr.textlength(t, font=fnt_sm)  
                 dr.rectangle([4, y, 12 + tw2, y + 24], fill="#101010")  
                 dr.text((6, y + 2), t, fill="#888888", font=fnt_sm)  
