@@ -583,8 +583,10 @@ class Panel(tk.Tk):
                     except (ValueError, tk.TclError):      
                         pass      
         if self.spec_buf is not None and len(self.spec_buf) >= self.SPEC_NFFT:      
-            win = np.hanning(self.SPEC_NFFT)      
-            mag = np.abs(np.fft.rfft(self.spec_buf[-self.SPEC_NFFT:] * win))      
+            win = np.hanning(self.SPEC_NFFT)  
+            seg = self.spec_buf[-self.SPEC_NFFT:]  
+            seg = seg - np.mean(seg)          # убрать DC до окна  
+            mag = np.abs(np.fft.rfft(seg * win))   
             db = 20 * np.log10(mag / (self.SPEC_NFFT / 2) + 1e-9)    
             freqs = np.fft.rfftfreq(self.SPEC_NFFT, 1.0 / self.spec_fs)      
             m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем  
