@@ -145,7 +145,7 @@ class Panel(tk.Tk):
     def __init__(self):  
         super().__init__()  
         self.title("RP2040 audio DSP by RU0AOG 2026 — панель настроек")  
-        self.geometry("1130x820")    
+        self.geometry("1130x800")    
   
         self.w = SerialWorker()  
         self.params = {}          # label -> {"type":..., "var":...}  
