@@ -23,11 +23,16 @@ try:
 except ImportError:    
     raise SystemExit("Нужен pyserial: pip install pyserial")    
   
-try:      
-    import sounddevice as sd  
-    import numpy as np  
-except ImportError:      
-    sd = None   # мониторинг и спектр недоступны, панель работает без звука        
+try:        
+    import sounddevice as sd    
+    import numpy as np    
+except ImportError:        
+    sd = None   # мониторинг и спектр недоступны, панель работает без звука          
+  
+try:  
+    import lameenc  
+except ImportError:  
+    lameenc = None   # нет — запись пойдёт в WAV       
   
 SCHEMA_SUPPORTED = 1    
 BAUD = 115200    
@@ -169,9 +174,10 @@ class Panel(tk.Tk):
         self.audio_out = None   # sd.OutputStream  
         self.audio_q = queue.Queue(maxsize=50)  # блоки вход->выход  
         self.audio_vol = 0.3      # громкость монитора 0.0..1.0 (читается из audio-потока)      
-        self.rec_stream = None    # sd.InputStream при активной записи    
-        self.rec_file = None      # wave.Wave_write    
-        self.rec_lock = threading.Lock()    
+        self.rec_stream = None    # sd.InputStream при активной записи      
+        self.rec_file = None      # wave.Wave_write или file для MP3  
+        self.rec_enc = None       # lameenc.Encoder при записи в MP3  
+        self.rec_lock = threading.Lock()      
         self.spec_q = queue.Queue(maxsize=8)   # блоки float32 для FFT    
         self.spec_fs = 44100    
         self.spec_on = False        
@@ -492,20 +498,39 @@ class Panel(tk.Tk):
                                 (44100, 48000, int(info["default_samplerate"])))  
             if fs is None:  
                 raise RuntimeError("нет поддерживаемой частоты записи")  
-            fname = time.strftime("rec_%Y%m%d_%H%M%S.wav")    
-            wf = wave.open(fname, "wb")  
-            wf.setnchannels(ch)  
-            wf.setsampwidth(2)              # int16  
-            wf.setframerate(fs)  
+            if lameenc is not None:  
+                # MP3: lameenc кодирует int16 PCM на лету, 64 кбит/с mono  
+                # (~0.5 МБ/мин против ~5.5 МБ/мин у WAV). Stereo -> mono.  
+                fname = time.strftime("rec_%Y%m%d_%H%M%S.mp3")  
+                enc = lameenc.Encoder()  
+                enc.set_bit_rate(64)  
+                enc.set_in_sample_rate(fs)  
+                enc.set_channels(1)  
+                enc.set_quality(2)  
+                self.rec_enc = enc  
+                self.rec_file = open(fname, "wb")  
   
-            def rec_cb(indata, frames, time_, status):  
-                # int16 -> сырые байты в WAV; запись короткая, блокировка не мешает  
-                with self.rec_lock:  
-                    if self.rec_file is not None:  
-                        self.rec_file.writeframes(indata.tobytes())  
-  
-            self.rec_file = wf            # до стрима: callback увидит файл сразу,  
-                                          # а _rec_stop закроет его при ошибке  
+                def rec_cb(indata, frames, time_, status):  
+                    with self.rec_lock:  
+                        if self.rec_file is not None and self.rec_enc is not None:  
+                            pcm = indata[:, 0] if indata.ndim > 1 else indata  
+                            data = self.rec_enc.encode(pcm.tobytes())  
+                            if data:  
+                                self.rec_file.write(data)  
+            else:  
+                fname = time.strftime("rec_%Y%m%d_%H%M%S.wav")      
+                wf = wave.open(fname, "wb")    
+                wf.setnchannels(ch)    
+                wf.setsampwidth(2)              # int16    
+                wf.setframerate(fs)    
+    
+                def rec_cb(indata, frames, time_, status):    
+                    # int16 -> сырые байты в WAV; запись короткая, блокировка не мешает    
+                    with self.rec_lock:    
+                        if self.rec_file is not None:    
+                            self.rec_file.writeframes(indata.tobytes())    
+    
+            # до стрима: callback увидит файл сразу, а _rec_stop закроет при ошибке    
             self.rec_stream = sd.InputStream(    
                 device=idx, samplerate=fs, channels=ch,    
                 dtype="int16", blocksize=fs // 50,    
@@ -515,8 +540,9 @@ class Panel(tk.Tk):
             self._rec_stop()    
             messagebox.showerror("Запись", str(ex))  
             return  
-        self.rec_btn.configure(text="Стоп rec")  
-        self._log(f"# rec: -> {fname} <- {sel}")  
+        self.rec_btn.configure(text="Стоп rec")    
+        fmt = "mp3 64k" if lameenc is not None else "wav (lameenc не найден)"  
+        self._log(f"# rec: -> {fname} [{fmt}] <- {sel}")    
   
     def _rec_stop(self):  
         if self.rec_stream is not None:  
@@ -526,14 +552,19 @@ class Panel(tk.Tk):
             except Exception:  
                 pass  
             self.rec_stream = None  
-        with self.rec_lock:  
-            if self.rec_file is not None:  
+        with self.rec_lock:    
+            if self.rec_file is not None:    
                 try:  
-                    self.rec_file.close()  
-                except Exception:  
-                    pass  
-                self.rec_file = None  
-        self.rec_btn.configure(text="Запись")  
+                    if self.rec_enc is not None:  
+                        tail = self.rec_enc.flush()   # хвост MP3-фреймов  
+                        if tail:  
+                            self.rec_file.write(tail)  
+                    self.rec_file.close()    
+                except Exception:    
+                    pass    
+                self.rec_file = None    
+                self.rec_enc = None  
+        self.rec_btn.configure(text="Запись")    
 
     SPEC_NFFT = 4096   # окно FFT;  ~10.8 Гц/бин при fs=44100 
 
