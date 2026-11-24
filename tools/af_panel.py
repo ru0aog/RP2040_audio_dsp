@@ -176,7 +176,7 @@ class Panel(tk.Tk):
         self.spec_fs = 44100    
         self.spec_on = False        
         self.spec_buf = None    
-        self.spec_peak = -100.0     # peak-hold уровень, дБ    
+        self.spec_peak = -80.0      # peak-hold уровень, дБ  
         self.spec_peak_f = 0.0      # частота последнего пика, Гц    
         self.spec_hold = None       # послесвечение: max по бинам с затуханием (np.array)      
         self.spec_last = None       # (freqs, db) последнего кадра — для кнопки "Скрин"    
@@ -461,7 +461,7 @@ class Panel(tk.Tk):
                 break    
         self.spec_on = False        
         self.spec_buf = None    
-        self.spec_peak = -100.0    
+        self.spec_peak = -80.0      
         self.spec_peak_f = 0.0    
         self.spec_hold = None  
         while not self.spec_q.empty():        
@@ -556,7 +556,7 @@ class Panel(tk.Tk):
 
     def _spec_draw(self):    
         # Перерисовка ~12 раз/с: сетка дБ/Гц + маркеры ПФ + полилиния спектра.  
-        # Фиксированные диапазоны: 0..6 кГц по X, 0..-100 дБ по Y.  
+        # Фиксированные диапазоны: 0..6 кГц по X, 0..-80 дБ по Y.    
         if not self.spec_on:    
             return    
         cv = self.spec_cv      
@@ -576,8 +576,8 @@ class Panel(tk.Tk):
         h = max(cv.winfo_height(), 60)    
         fmax = 6000    
         plot_h = h - 14                     # нижние 14 px — подписи частот    
-        for db in (-20, -40, -60, -80):     # сетка уровней, 0 дБ сверху    
-            y = -db / 100.0 * plot_h    
+        for db in (-20, -40, -60):          # сетка уровней, 0 дБ сверху, -80 внизу      
+            y = -db / 80.0 * plot_h      
             cv.create_line(0, y, w, y, fill="#303030")    
             cv.create_text(2, y, text=str(db), anchor="nw", fill="#888",    
                            font=("TkDefaultFont", 7))    
@@ -627,22 +627,22 @@ class Panel(tk.Tk):
             db = 20 * np.log10(mag / (self.SPEC_NFFT / 2) + 1e-9)    
             freqs = np.fft.rfftfreq(self.SPEC_NFFT, 1.0 / self.spec_fs)      
             m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем      
-            dbm = np.clip(db[m], -100.0, 0.0)    
+            dbm = np.clip(db[m], -80.0, 0.0)      
             self.spec_last = (freqs[m].copy(), dbm.copy())   # кадр для "Скрин"  
             # Послесвечение: per-bin max с затуханием ~1.5 дБ/кадр (~18 дБ/с).  
             # Рисуется тёмно-зелёным ПОД основной линией.  
-            if self.spec_hold is None or len(self.spec_hold) != len(dbm):  
-                self.spec_hold = np.full(len(dbm), -100.0)  
+            if self.spec_hold is None or len(self.spec_hold) != len(dbm):    
+                self.spec_hold = np.full(len(dbm), -80.0)    
             self.spec_hold = np.maximum(dbm, self.spec_hold - 1.5)  
             pts_h = []  
-            for x, y in zip(freqs[m] / fmax * w,  
-                            np.clip(-self.spec_hold, 0, 100) / 100.0 * plot_h):  
+            for x, y in zip(freqs[m] / fmax * w,    
+                            np.clip(-self.spec_hold, 0, 80) / 80.0 * plot_h):    
                 pts_h += [x, y]  
             if len(pts_h) >= 4:  
                 cv.create_line(*pts_h, fill="#0a5a0a", width=1, smooth=True)  
             pts = []      
-            for x, y in zip(freqs[m] / fmax * w,      
-                            np.clip(-dbm, 0, 100) / 100.0 * plot_h):      
+            for x, y in zip(freqs[m] / fmax * w,        
+                            np.clip(-dbm, 0, 80) / 80.0 * plot_h):        
                 pts += [x, y]      
             if len(pts) >= 4:        
                 cv.create_line(*pts, fill="#00ff00", width=1, smooth=True)    
@@ -655,8 +655,8 @@ class Panel(tk.Tk):
                 self.spec_peak = pk_db    
                 self.spec_peak_f = float(freqs[mpk][pk])    
             else:  
-                self.spec_peak = max(-100.0, self.spec_peak - 0.5)  
-            py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h    
+                self.spec_peak = max(-80.0, self.spec_peak - 0.5)    
+            py = np.clip(-self.spec_peak, 0, 80) / 80.0 * plot_h      
             cv.create_line(0, py, w, py, fill="#ffff00", dash=(2, 4))    
             cv.create_rectangle(w - 62, 2, w - 2, 30, fill="#101010",    
                                 outline="")   # подложка под подписи    
@@ -700,9 +700,9 @@ class Panel(tk.Tk):
                     dr.line([(x0, y), (x1, min(y + dash, y1))],    
                             fill=fill, width=width)    
                     y += dash + gap    
-            for dbv in (-20, -40, -60, -80):      
-                y = -dbv / 100.0 * plot_h      
-                dr.line([(0, y), (W, y)], fill="#303030")      
+            for dbv in (-20, -40, -60):        
+                y = -dbv / 80.0 * plot_h        
+                dr.line([(0, y), (W, y)], fill="#303030")        
             for f in range(1000, fmax, 1000):      
                 x = f / fmax * W      
                 dr.line([(x, 0), (x, plot_h)], fill="#303030")       
@@ -737,17 +737,17 @@ class Panel(tk.Tk):
             fr, dbv = self.spec_last    
             # послесвечение — тёмно-зелёным под живой линией  
             if self.spec_hold is not None and len(self.spec_hold) == len(dbv):  
-                hpts = [(float(f / fmax * W),  
-                         float(np.clip(-d, 0, 100) / 100.0 * plot_h))  
+                hpts = [(float(f / fmax * W),    
+                         float(np.clip(-d, 0, 80) / 80.0 * plot_h))    
                         for f, d in zip(fr, self.spec_hold)]  
                 if len(hpts) >= 2:  
                     dr.line(hpts, fill="#0a5a0a", width=2)  
-            pts = [(float(f / fmax * W),    
-                    float(np.clip(-d, 0, 100) / 100.0 * plot_h))    
+            pts = [(float(f / fmax * W),      
+                    float(np.clip(-d, 0, 80) / 80.0 * plot_h))      
                    for f, d in zip(fr, dbv)]    
             if len(pts) >= 2:    
                 dr.line(pts, fill="#00ff00", width=3)    
-            py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h    
+            py = np.clip(-self.spec_peak, 0, 80) / 80.0 * plot_h      
             x = 0    
             while x < W:   # горизонтальный пунктир    
                 dr.line([(x, py), (min(x + 8, W), py)], fill="#8a8a20", width=2)      
@@ -762,9 +762,9 @@ class Panel(tk.Tk):
             dr.text((W - 10 - dr.textlength(t2, font=fnt), 40),        
                     t2, fill="#ffff00", font=fnt)        
             # Подписи сетки — последними, поверх всех линий, на подложках  
-            for dbv in (-20, -40, -60, -80):  
-                y = -dbv / 100.0 * plot_h  
-                t = f"{dbv} дБ"  
+            for dbv in (-20, -40, -60):    
+                y = -dbv / 80.0 * plot_h    
+                t = f"{dbv} дБ"    
                 tw2 = dr.textlength(t, font=fnt_sm)  
                 dr.rectangle([4, y, 12 + tw2, y + 24], fill="#101010")  
                 dr.text((6, y + 2), t, fill="#888888", font=fnt_sm)  

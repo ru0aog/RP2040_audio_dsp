@@ -155,7 +155,7 @@ void af_store_cw_init(void) {
     for (uint8_t i = 0; i < AF_CW_MSGS; i++)      
         af_cw_msgs[i][AF_CW_MSG_LEN - 1] = '\0';     // страховка от мусора      
 }      
-  
+
 bool af_store_cw_save(void) {    
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));    
     uint8_t* m = &s_sector_img[AF_CW_OFF];    
