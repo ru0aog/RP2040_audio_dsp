@@ -10,10 +10,12 @@
 #   <label> <v>  -> "# OK ..." | "# ERR ..."  
 #   load N/save N-> банки 1..7  
   
-import queue  
-import threading  
-import tkinter as tk  
-from tkinter import ttk, messagebox  
+import queue    
+import threading    
+import time    
+import wave    
+import tkinter as tk    
+from tkinter import ttk, messagebox    
   
 try:    
     import serial    
@@ -162,9 +164,14 @@ class Panel(tk.Tk):
         self._state_lines = []  
         self._state_active = False  
         self._pending = []        # очередь команд после connect      
-        self.audio_stream = None  # sd.Stream при активном мониторинге      
-        self.audio_vol = 0.3      # громкость монитора 0.0..1.0 (читается из audio-потока)  
-        self.protocol("WM_DELETE_WINDOW", self._on_close)  
+        self.audio_in = None    # sd.InputStream при активном мониторинге  
+        self.audio_out = None   # sd.OutputStream  
+        self.audio_q = queue.Queue(maxsize=50)  # блоки вход->выход  
+        self.audio_vol = 0.3      # громкость монитора 0.0..1.0 (читается из audio-потока)      
+        self.rec_stream = None    # sd.InputStream при активной записи  
+        self.rec_file = None      # wave.Wave_write  
+        self.rec_lock = threading.Lock()  
+        self.protocol("WM_DELETE_WINDOW", self._on_close)    
   
         self._build_top()      
         # Строка состояния (state dump) — на всю ширину внизу окна.  
@@ -232,12 +239,16 @@ class Panel(tk.Tk):
         self.audio_scale = ttk.Scale(  
             mf, from_=0, to=100, orient="horizontal", length=90,  
             command=lambda v: setattr(self, "audio_vol", float(v) / 100.0))  
-        self.audio_scale.set(30)  
-        self.audio_scale.grid(row=0, column=8, rowspan=2, padx=(0, 4), sticky="e")  
-        if sd is None:    
-            self.audio_cb.configure(state="disabled")    
-            self.audio_btn.configure(state="disabled")    
-            self.audio_scale.configure(state="disabled")  
+        self.audio_scale.set(30)    
+        self.audio_scale.grid(row=0, column=8, rowspan=2, padx=(0, 4), sticky="e")    
+        self.rec_btn = ttk.Button(mf, text="Запись",  
+                                  command=self._rec_toggle)  
+        self.rec_btn.grid(row=0, column=9, rowspan=2, padx=4, sticky="e")  
+        if sd is None:      
+            self.audio_cb.configure(state="disabled")      
+            self.audio_btn.configure(state="disabled")      
+            self.audio_scale.configure(state="disabled")    
+            self.rec_btn.configure(state="disabled")  
         mf.columnconfigure(6, weight=1)   # прижать аудио-блок вправо      
   
     def _build_table(self):    
@@ -305,84 +316,191 @@ class Panel(tk.Tk):
         # Весь лог в буфер обмена (Text в disabled — читаем напрямую).    
         self.clipboard_clear()    
         self.clipboard_append(self.log.get("1.0", "end-1c"))    
-    def _audio_inputs(self):  
-        # Входные устройства (UAC-плата видна как микрофонный вход).  
-        if sd is None:  
-            return []  
-        try:  
-            return [f"{i}: {d['name']}"  
-                    for i, d in enumerate(sd.query_devices())  
-                    if d["max_input_channels"] > 0]  
-        except Exception:  
-            return []  
+    def _audio_inputs(self):        
+        # Входные устройства (UAC-плата видна как микрофонный вход).      
+        # Только WASAPI: MME/DirectSound дают виртуальные дубли    
+        # ("Первичный драйвер записи", "Стерео микшер", "Переназначение...").    
+        if sd is None:        
+            return []        
+        try:        
+            wasapi = {i for i, h in enumerate(sd.query_hostapis())    
+                      if "WASAPI" in h["name"]}    
+            if not wasapi:  
+                # Не Windows (Linux/Mac) — WASAPI нет, берём все входы.  
+                return [f"{i}: {d['name']}"  
+                        for i, d in enumerate(sd.query_devices())  
+                        if d["max_input_channels"] > 0]  
+            return [f"{i}: {d['name']}"    
+                    for i, d in enumerate(sd.query_devices())    
+                    if d["max_input_channels"] > 0    
+                    and d["hostapi"] in wasapi]    
+        except Exception:        
+            return []        
+
+    def _probe_fs(self, idx, kind, candidates):  
+        # Первая частота, которую устройство реально принимает.  
+        for fs in dict.fromkeys(candidates):  
+            try:  
+                if kind == "in":  
+                    sd.check_input_settings(device=idx, samplerate=fs)  
+                else:  
+                    sd.check_output_settings(device=idx, samplerate=fs)  
+                return fs  
+            except Exception:  
+                continue  
+        return None  
+
+    def _audio_toggle(self):    
+        if self.audio_in is not None:    
+            self._audio_stop()  
+            self._log("# audio: монитор выкл")    
+            return    
+        sel = self.audio_var.get()    
+        if not sel:    
+            messagebox.showerror("Аудио", "Выберите аудиоустройство")    
+            return    
+        idx = int(sel.split(":")[0])        
+        try:        
+            info = sd.query_devices(idx)        
+            ch = min(2, int(info["max_input_channels"])) or 1        
+            # WASAPI shared mode принимает только частоту, настроенную  
+            # в Windows для устройства — перебираем кандидатов.  
+            fs_in = self._probe_fs(idx, "in",  
+                                   (44100, 48000, int(info["default_samplerate"])))  
+            out_def = sd.query_devices(sd.default.device[1])  
+            fs_out = self._probe_fs(sd.default.device[1], "out",  
+                                    (fs_in, 44100, 48000,  
+                                     int(out_def["default_samplerate"])))  
+            if fs_in is None or fs_out is None:  
+                raise RuntimeError("нет поддерживаемой частоты "  
+                                   f"(in={fs_in} out={fs_out})")  
+            fs = fs_in  
+            blk = fs // 50  
+            if fs_out != fs_in:  
+                self._log(f"# audio: внимание fs_in={fs_in} != fs_out={fs_out}"  
+                          " — возможен сдвиг тона")  
   
-    def _audio_toggle(self):  
-        if self.audio_stream is not None:  
-            self.audio_stream.stop()  
-            self.audio_stream.close()  
-            self.audio_stream = None  
-            self.audio_btn.configure(text="Монитор")  
-            self._log("# audio: монитор выкл")  
+            # Как в RP2040_Control: вход и выход — НЕЗАВИСИМЫЕ потоки  
+            # (waveIn + waveOut/WAVE_MAPPER), буферы копируются через очередь.  
+            # Duplex sd.Stream не используем — PortAudio требует один host API  
+            # для входа и выхода и падает с PaErrorCode -9993.  
+            def in_cb(indata, frames, time_, status):  
+                try:  
+                    self.audio_q.put_nowait(indata.copy())  
+                except queue.Full:  
+                    pass            # выход не успевает — блок теряем  
+  
+            def out_cb(outdata, frames, time_, status):  
+                try:  
+                    data = self.audio_q.get_nowait()  
+                    n = min(len(data), len(outdata))  
+                    outdata[:n] = data[:n] * self.audio_vol  
+                    outdata[n:] = 0  
+                except queue.Empty:  
+                    outdata[:] = 0  
+  
+            self.audio_out = sd.OutputStream(  
+                samplerate=fs_out, channels=ch, dtype="float32",  
+                blocksize=fs_out // 50, callback=out_cb)  # выход по умолчанию  
+            self.audio_in = sd.InputStream(  
+                device=idx, samplerate=fs_in, channels=ch,  
+                dtype="float32", blocksize=blk, callback=in_cb)  
+            self.audio_out.start()  
+            self.audio_in.start()  
+            self._log(f"# audio: {info['name']} fs={fs} ch={ch}")  
+        except Exception as ex:      
+            self._audio_stop()  
+            messagebox.showerror("Аудио", str(ex))      
+            return      
+        self.audio_btn.configure(text="Стоп")    
+        self._log(f"# audio: монитор <- {sel}")    
+  
+    def _audio_stop(self):  
+        for attr in ("audio_in", "audio_out"):  
+            st = getattr(self, attr)  
+            if st is not None:  
+                try:  
+                    st.stop()  
+                    st.close()  
+                except Exception:  
+                    pass  
+                setattr(self, attr, None)  
+        while not self.audio_q.empty():  
+            try:  
+                self.audio_q.get_nowait()  
+            except queue.Empty:  
+                break  
+        self.audio_btn.configure(text="Монитор")  
+
+    def _rec_toggle(self):  
+        if self.rec_stream is not None:  
+            self._rec_stop()  
+            self._log("# rec: стоп")  
             return  
         sel = self.audio_var.get()  
         if not sel:  
-            messagebox.showerror("Аудио", "Выберите аудиоустройство")  
+            messagebox.showerror("Запись", "Выберите аудиоустройство")  
             return  
-        idx = int(sel.split(":")[0])    
-        try:    
-            info = sd.query_devices(idx)    
-            ch = min(2, int(info["max_input_channels"])) or 1    
+        idx = int(sel.split(":")[0])  
+        try:  
+            info = sd.query_devices(idx)  
+            ch = min(2, int(info["max_input_channels"])) or 1  
+            fs = 44100                      # плата — UAC 44100/16 (src/af_usb.cpp)  
+            fname = time.strftime("rec_%Y%m%d_%H%M%S.wav")  
+            wf = wave.open(fname, "wb")  
+            wf.setnchannels(ch)  
+            wf.setsampwidth(2)              # int16  
+            wf.setframerate(fs)  
   
-            def callback(indata, outdata, frames, time, status):  
-                # loopback: вход UAC-платы -> выход ПК  
-                # (аналог waveIn->waveOut в RP2040_Control handleWaveBuffer)  
-                outdata[:] = indata * self.audio_vol  
+            def rec_cb(indata, frames, time_, status):  
+                # int16 -> сырые байты в WAV; запись короткая, блокировка не мешает  
+                with self.rec_lock:  
+                    if self.rec_file is not None:  
+                        self.rec_file.writeframes(indata.tobytes())  
   
-            # Плата — UAC 44100/16 стерео (src/af_usb.cpp). Пробуем 44100,  
-            # при отказе — default_samplerate устройства.  
-            last_ex = None  
-            for fs in (44100, int(info["default_samplerate"])):  
-                try:  
-                    self._log(f"# audio: {info['name']} fs={fs} ch={ch}")  
-                    self.audio_stream = sd.Stream(  
-                        device=(idx, None),   # вход = выбранное, выход = по умолчанию  
-                        samplerate=fs, channels=ch, dtype="float32",  
-                        blocksize=fs // 50,   # ~20 мс  
-                        callback=callback)  
-                    self.audio_stream.start()  
-                    break  
-                except Exception as ex:  
-                    last_ex = ex  
-                    self.audio_stream = None  
-            if self.audio_stream is None:  
-                raise last_ex  
+            self.rec_file = wf            # до стрима: callback увидит файл сразу,  
+                                          # а _rec_stop закроет его при ошибке  
+            self.rec_stream = sd.InputStream(    
+                device=idx, samplerate=fs, channels=ch,    
+                dtype="int16", blocksize=fs // 50,    
+                callback=rec_cb)    
+            self.rec_stream.start()    
         except Exception as ex:    
-            self.audio_stream = None    
-            messagebox.showerror("Аудио", str(ex))    
-            return    
-        self.audio_btn.configure(text="Стоп")  
-        self._log(f"# audio: монитор <- {sel}")  
-
-    def _on_close(self):  
-        # Освободить аудио и порт, иначе процесс может повиснуть.  
-        if self.audio_stream is not None:  
+            self._rec_stop()    
+            messagebox.showerror("Запись", str(ex))  
+            return  
+        self.rec_btn.configure(text="Стоп rec")  
+        self._log(f"# rec: -> {fname} <- {sel}")  
+  
+    def _rec_stop(self):  
+        if self.rec_stream is not None:  
             try:  
-                self.audio_stream.stop()  
-                self.audio_stream.close()  
+                self.rec_stream.stop()  
+                self.rec_stream.close()  
             except Exception:  
                 pass  
-            self.audio_stream = None  
-        self.w.close()  
-        self.destroy()  
+            self.rec_stream = None  
+        with self.rec_lock:  
+            if self.rec_file is not None:  
+                try:  
+                    self.rec_file.close()  
+                except Exception:  
+                    pass  
+                self.rec_file = None  
+        self.rec_btn.configure(text="Запись")  
+
+    def _on_close(self):      
+        # Освободить аудио и порт, иначе процесс может повиснуть.      
+        self._rec_stop()    
+        self._audio_stop()  
+        self.w.close()      
+        self.destroy()      
 
     def _connect(self):  
-        if self.w.ser:    
-            self.w.close()    
-            if self.audio_stream is not None:  
-                self.audio_stream.stop()  
-                self.audio_stream.close()  
-                self.audio_stream = None  
-                self.audio_btn.configure(text="Монитор")  
+        if self.w.ser:        
+            self.w.close()        
+            self._rec_stop()    
+            self._audio_stop()  
             self.btn_conn["text"] = "Подключить"    
             self.status_var.set("не подключено")    
             return    
