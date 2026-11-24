@@ -692,11 +692,17 @@ class Panel(tk.Tk):
                 row=row, column=col0 + 2, sticky="w")      
         self.params[label] = {"type": ptype, "var": var}      
   
-    def _set(self, label, val):  
-        if not self.schema_ok:  
-            self._log(f"# read-only: {label} не отправлено")  
-            return  
-        self._cmd(f"{label} {val}")  
+    def _set(self, label, val):    
+        if not self.schema_ok:    
+            self._log(f"# read-only: {label} не отправлено")    
+            return    
+        # onoff-параметры: прошивка принимает только on|off, не 0|1  
+        # (cli_param_try в af_cli.cpp возвращает false на числе ->  
+        # строка уходит в cli_exec и даёт ERR).  
+        p = self.params.get(label)  
+        if p and p["type"] == "onoff":  
+            val = "on" if str(val) in ("1", "on") else "off"  
+        self._cmd(f"{label} {val}")    
   
     def _refresh_param(self, ok_text):  
         # "# OK band lo=100" -> обновить var, если метка совпала  
