@@ -601,11 +601,13 @@ class Panel(tk.Tk):
                 self.rec_enc = None  
         self.rec_btn.configure(text="Запись")    
 
-    SPEC_NFFT = 4096   # окно FFT;  ~10.8 Гц/бин при fs=44100 
+    SPEC_NFFT      = 4096    # окно FFT обычное;  ~10.8 Гц/бин при fs=44100  
+    SPEC_NFFT_FULL = 4096    # развёрнутый спектр; ~5.4 Гц/бин  
 
-    def _spec_toggle_full(self):  
-        # Двойной щелчок по спектру: развернуть на всё окно / свернуть.  
-        self.spec_full = not self.spec_full  
+    def _spec_toggle_full(self):    
+        # Двойной щелчок по спектру: развернуть на всё окно / свернуть.    
+        self.spec_full = not self.spec_full    
+        self.spec_hold = None   # длина бинов сменится — пересоздать  
         if self.spec_full:    
             self.paned.forget(self.tbl_wrap)          # скрыть таблицу параметров    
             self.log.master.pack_forget()             # скрыть лог (обёртка со скроллом)    
@@ -625,18 +627,19 @@ class Panel(tk.Tk):
         # Фиксированные диапазоны: 0..6 кГц по X, 0..-80 дБ по Y.    
         if not self.spec_on:    
             return    
-        cv = self.spec_cv      
-        # Блоки из in_cb идут по fs//50 (~882 при 44100) — меньше SPEC_NFFT.  
-        # Сливаем всё из очереди в накопитель и берём последние SPEC_NFFT.  
-        try:      
-            while True:  
-                blk = self.spec_q.get_nowait()  
+        cv = self.spec_cv        
+        nfft = self.SPEC_NFFT_FULL if self.spec_full else self.SPEC_NFFT  
+        # Блоки из in_cb идут по fs//50 (~882 при 44100) — меньше NFFT.    
+        # Сливаем всё из очереди в накопитель и берём последние nfft.    
+        try:        
+            while True:    
+                blk = self.spec_q.get_nowait()    
                 self.spec_buf = blk if self.spec_buf is None \
-                    else np.concatenate((self.spec_buf, blk))  
-        except queue.Empty:      
-            pass  
-        if self.spec_buf is not None and len(self.spec_buf) > 4 * self.SPEC_NFFT:  
-            self.spec_buf = self.spec_buf[-2 * self.SPEC_NFFT:]  # не растим хвост  
+                    else np.concatenate((self.spec_buf, blk))    
+        except queue.Empty:        
+            pass    
+        if self.spec_buf is not None and len(self.spec_buf) > 4 * nfft:    
+            self.spec_buf = self.spec_buf[-2 * nfft:]  # не растим хвост    
         cv.delete("all")    
         w = max(cv.winfo_width(), 100)    
         h = max(cv.winfo_height(), 60)    
@@ -685,13 +688,13 @@ class Panel(tk.Tk):
                 cv.create_text(4, 4, text=f"{lo:.0f}–{hi:.0f} Гц",    
                                fill="#ff5555", anchor="nw",    
                                font=("TkDefaultFont", 8))    
-        if self.spec_buf is not None and len(self.spec_buf) >= self.SPEC_NFFT:      
-            win = np.hanning(self.SPEC_NFFT)  
-            seg = self.spec_buf[-self.SPEC_NFFT:]  
-            seg = seg - np.mean(seg)  
-            mag = np.abs(np.fft.rfft(seg * win))  
-            db = 20 * np.log10(mag / (win.sum() / 2) + 1e-9)   # компенсация ~6 дБ окна  
-            freqs = np.fft.rfftfreq(self.SPEC_NFFT, 1.0 / self.spec_fs)      
+        if self.spec_buf is not None and len(self.spec_buf) >= nfft:        
+            win = np.hanning(nfft)    
+            seg = self.spec_buf[-nfft:]    
+            seg = seg - np.mean(seg)    
+            mag = np.abs(np.fft.rfft(seg * win))    
+            db = 20 * np.log10(mag / (win.sum() / 2) + 1e-9)   # компенсация ~6 дБ окна    
+            freqs = np.fft.rfftfreq(nfft, 1.0 / self.spec_fs)         
             m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем      
             dbm = np.clip(db[m], -80.0, 0.0)      
             self.spec_last = (freqs[m].copy(), dbm.copy())   # кадр для "Скрин"  
