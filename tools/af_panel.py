@@ -209,12 +209,13 @@ class Panel(tk.Tk):
         f.pack(fill="x", padx=6, pady=4)  
         ttk.Label(f, text="Порт:").pack(side="left")  
         self.port_var = tk.StringVar()  
-        self.port_cb = ttk.Combobox(f, textvariable=self.port_var, width=12,  
-                                    values=self._ports())  
-        self.port_cb.pack(side="left", padx=4)  
-        ttk.Button(f, text="Обновить", command=self._refresh_ports).pack(side="left")  
-        self.btn_conn = ttk.Button(f, text="Подключить", command=self._connect)  
-        self.btn_conn.pack(side="left", padx=8)  
+        self.port_cb = ttk.Combobox(f, textvariable=self.port_var, width=12,    
+                                    state="readonly",    
+                                    values=self._ports())    
+        self.port_cb.pack(side="left", padx=4)      
+        self.btn_conn = ttk.Button(f, text="Подключить", command=self._connect)       
+        self.btn_conn.pack(side="left", padx=8)    
+        ttk.Button(f, text="Обновить", command=self._refresh_ports).pack(side="left")    
         self.status_var = tk.StringVar(value="не подключено")  
         ttk.Label(f, textvariable=self.status_var).pack(side="left", padx=8)  
   
@@ -346,7 +347,7 @@ class Panel(tk.Tk):
   
     def _refresh_ports(self):  
         self.port_cb["values"] = self._ports()  
-  
+
     def _log(self, s):      
         self.log.insert("end", s + "\n")      
         self.log.see("end")      
