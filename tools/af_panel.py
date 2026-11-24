@@ -28,42 +28,44 @@ DUMP_TIMEOUT_S = 10.0
 # Группировка параметров по блокам аудиотракта.  
 # (заголовок рамки, метка-флажок включения или None, [метки параметров]).  
 # Порядок рамок = порядок в списке; метки не из списка попадут в "Прочее".  
-GROUPS = [  
-    ("Полоса приёма", None,  
-     ["band lo", "band hi"]),  
-    ("АРУ / лимитер", "agc",  
-     ["gain", "agc ref", "agc max", "agc min", "lim ceil"]),  
-    ("Шумоподавление NR", "nr",  
-     ["nr depth", "nr makeup", "nr mu"]),  
-    ("Автонотч NT", "nt",  
-     ["nt mu"]),  
-    ("CW-фильтр / декодер", "cw",  
-     ["cw f0", "cw bw", "cw noise", "cw dec", "cw wpm", "cw sql"]),  
-    ("RTTY", "rtty",  
-     ["rtty scan", "rtty rsid", "rtty rev", "rtty dbg", "rtty ctr", "rtty sql"]),  
-    ("RX presence", "rx pres",  
-     ["rx presmax", "rx pres f", "rx pres q"]),  
-    ("RX shelf / exciter", None,  
-     ["rx shelf", "rx shelf f", "rx shelf q", "rx exc", "rx excmix"]),  
-    ("RX EQ (3 полосы)", None,  
-     ["rxeq lo", "rxeq mid", "rxeq hi", "rxeq lo f", "rxeq mid f", "rxeq hi f"]),  
-    ("TX полоса / АРУ", "tx",  
-     ["tx band lo", "tx band hi", "tx agc", "tx agcmax",  
-      "tx gate", "tx gatehold", "tx gatehyst", "tx gfloor"]),  
-    ("TX компрессор", "tx 2band",  
-     ["tx split", "tx lr2", "tx cthr", "tx cthr lo", "tx cthr hi",  
-      "tx soft", "tx ap"]),  
-    ("TX дакинг / разборчивость", "tx duck",  
-     ["tx duckmax", "tx intel", "tx intel tgt", "tx intel cut", "tx intel bst"]),  
-    ("TX presence / shelf / exciter", "tx pres",  
-     ["tx presmax", "tx pres f", "tx pres q",  
-      "tx shelf", "tx shelf f", "tx shelf q", "tx exc", "tx excmix"]),  
-    ("TX нотчи", "tx notch",  
-     ["tx notch f1", "tx notch f2"]),  
-    ("TX EQ (3 полосы)", None,  
-     ["txeq lo", "txeq mid", "txeq hi", "txeq lo f", "txeq mid f", "txeq hi f"]),  
-    ("Прочее", None, []),   # сюда попадут метки, не перечисленные выше    
-]    
+# (заголовок рамки, метка-флажок или None, [метки], колонка 0..3).  
+# Колонки 0-1 = RX, 2-3 = TX; рамки внутри колонки pack'уются сверху вниз.  
+GROUPS = [    
+    ("Полоса приёма", None,    
+     ["band lo", "band hi"], 0),    
+    ("АРУ / лимитер", "agc",    
+     ["gain", "agc ref", "agc max", "agc min", "lim ceil"], 0),    
+    ("CW-фильтр / декодер", "cw",    
+     ["cw f0", "cw bw", "cw noise", "cw dec", "cw wpm", "cw sql"], 0),    
+    ("RX shelf / exciter", None,    
+     ["rx shelf", "rx shelf f", "rx shelf q", "rx exc", "rx excmix"], 0),    
+    ("Шумоподавление NR", "nr",    
+     ["nr depth", "nr makeup", "nr mu"], 1),    
+    ("Автонотч NT", "nt",    
+     ["nt mu"], 1),    
+    ("RTTY", "rtty",    
+     ["rtty scan", "rtty rsid", "rtty rev", "rtty dbg", "rtty ctr", "rtty sql"], 1),    
+    ("RX presence", "rx pres",    
+     ["rx presmax", "rx pres f", "rx pres q"], 1),    
+    ("RX EQ (3 полосы)", None,    
+     ["rxeq lo", "rxeq mid", "rxeq hi", "rxeq lo f", "rxeq mid f", "rxeq hi f"], 1),    
+    ("TX полоса / АРУ", "tx",    
+     ["tx band lo", "tx band hi", "tx agc", "tx agcmax",    
+      "tx gate", "tx gatehold", "tx gatehyst", "tx gfloor"], 2),    
+    ("TX компрессор", "tx 2band",    
+     ["tx split", "tx lr2", "tx cthr", "tx cthr lo", "tx cthr hi",    
+      "tx soft", "tx ap"], 2),    
+    ("TX дакинг / разборчивость", "tx duck",    
+     ["tx duckmax", "tx intel", "tx intel tgt", "tx intel cut", "tx intel bst"], 2),    
+    ("TX presence / shelf / exciter", "tx pres",    
+     ["tx presmax", "tx pres f", "tx pres q",    
+      "tx shelf", "tx shelf f", "tx shelf q", "tx exc", "tx excmix"], 3),    
+    ("TX нотчи", "tx notch",    
+     ["tx notch f1", "tx notch f2"], 3),    
+    ("TX EQ (3 полосы)", None,    
+     ["txeq lo", "txeq mid", "txeq hi", "txeq lo f", "txeq mid f", "txeq hi f"], 3),    
+    ("Прочее", None, [], 3),   # нераспределённые метки — в последнюю колонку    
+]      
   
 # Runtime-режимы: НЕ банковые, команда "<name> on|off" выполняется немедленно.  
 # Состояние читается из state dump (R|name|val). Порядок = порядок в рамке.  
@@ -138,7 +140,7 @@ class Panel(tk.Tk):
     def __init__(self):  
         super().__init__()  
         self.title("RP2040 audio DSP by RU0AOG 2026 — панель настроек")  
-        self.geometry("980x640")  
+        self.geometry("1130x820")    
   
         self.w = SerialWorker()  
         self.params = {}          # label -> {"type":..., "var":...}  
@@ -151,10 +153,13 @@ class Panel(tk.Tk):
         self._state_active = False  
         self._pending = []        # очередь команд после connect  
   
-        self._build_top()  
-        self._build_table()  
-        self._build_bottom()  
-        self.after(50, self._poll_rx)  
+        self._build_top()    
+        # Горизонтальный сплит: слева таблица параметров, справа лог на всю высоту.  
+        self.paned = ttk.PanedWindow(self, orient="horizontal")  
+        self.paned.pack(fill="both", expand=True)  
+        self._build_table()    
+        self._build_bottom()    
+        self.after(50, self._poll_rx)    
   
     # --- layout -------------------------------------------------------------  
     def _build_top(self):  
@@ -196,37 +201,47 @@ class Panel(tk.Tk):
             ).grid(row=i // 6, column=i % 6, sticky="w", padx=6, pady=1)    
             self.mode_vars[name] = var    
   
-    def _build_table(self):  
-        wrap = ttk.Frame(self)  
-        wrap.pack(fill="both", expand=True, padx=6, pady=4)  
-        self.canvas = tk.Canvas(wrap, highlightthickness=0)  
-        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.canvas.yview)  
-        self.tbl = ttk.Frame(self.canvas)  
-        self.tbl.bind("<Configure>",  
-                      lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))  
-        self.canvas.create_window((0, 0), window=self.tbl, anchor="nw")  
-        self.canvas.configure(yscrollcommand=sb.set)  
-        self.canvas.pack(side="left", fill="both", expand=True)  
-        sb.pack(side="right", fill="y")  
-        # Колесо — только над таблицей; bind_all перехватывал бы и лог.    
-        self.canvas.bind("<Enter>",    
-            lambda _e: self.canvas.bind_all("<MouseWheel>",    
-                lambda e: self.canvas.yview_scroll(-e.delta // 120, "units")))    
-        self.canvas.bind("<Leave>",    
-            lambda _e: self.canvas.unbind_all("<MouseWheel>"))    
+    def _build_table(self):    
+        wrap = ttk.Frame(self.paned)    
+        self.paned.add(wrap, weight=3)    
+        self.canvas = tk.Canvas(wrap, highlightthickness=0)    
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.canvas.yview)    
+        self.tbl = ttk.Frame(self.canvas)    
+        self.tbl.bind("<Configure>",    
+                      lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))    
+        self.canvas.create_window((0, 0), window=self.tbl, anchor="nw")    
+        self.canvas.configure(yscrollcommand=sb.set)    
+        self.canvas.pack(side="left", fill="both", expand=True)    
+        sb.pack(side="right", fill="y")    
+        # 4 вертикальные колонки: рамки pack'уются сверху вниз без "дыр" grid'а.  
+        self.columns = []  
+        for c in range(4):  
+            cf = ttk.Frame(self.tbl)  
+            cf.grid(row=0, column=c, sticky="new", padx=2)  
+            self.columns.append(cf)  
+        # Колесо — только над таблицей; bind_all перехватывал бы и лог.      
+        self.canvas.bind("<Enter>",      
+            lambda _e: self.canvas.bind_all("<MouseWheel>",      
+                lambda e: self.canvas.yview_scroll(-e.delta // 120, "units")))      
+        self.canvas.bind("<Leave>",      
+            lambda _e: self.canvas.unbind_all("<MouseWheel>"))      
   
-    def _build_bottom(self):  
-        f = ttk.Frame(self)  
-        f.pack(fill="x", padx=6, pady=4)  
-        self.cmd_var = tk.StringVar()  
-        e = ttk.Entry(f, textvariable=self.cmd_var)  
-        e.pack(side="left", fill="x", expand=True)  
-        e.bind("<Return>", lambda _e: self._send_manual())  
-        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)    
-        ttk.Label(self, textvariable=self.state_var,    
-                  anchor="w", foreground="#555").pack(fill="x", padx=6)    
-        self.log = tk.Text(self, height=8, state="disabled")    
-        self.log.pack(fill="x", padx=6, pady=(0, 6))    
+    def _build_bottom(self):    
+        # Правая панель: лог на всю высоту + командная строка + статус снизу.  
+        right = ttk.Frame(self.paned)    
+        self.paned.add(right, weight=1)    
+        self.log = tk.Text(right, width=42, state="disabled")      
+        self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)      
+        f = ttk.Frame(right)    
+        f.pack(fill="x", padx=(0, 6), pady=(0, 2))    
+        self.cmd_var = tk.StringVar()    
+        e = ttk.Entry(f, textvariable=self.cmd_var)    
+        e.pack(side="left", fill="x", expand=True)    
+        e.bind("<Return>", lambda _e: self._send_manual())    
+        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)      
+        ttk.Label(right, textvariable=self.state_var,      
+                  anchor="w", foreground="#555", wraplength=300,    
+                  justify="left").pack(fill="x", padx=(0, 6), pady=(0, 4))      
   
     # --- helpers ------------------------------------------------------------  
     def _ports(self):  
@@ -365,10 +380,11 @@ class Panel(tk.Tk):
                 "Панель в режиме read-only.")  
   
     # --- params table ---------------------------------------------------------  
-    def _build_params(self, lines):    
-        for wdg in self.tbl.winfo_children():    
-            wdg.destroy()    
-        self.params.clear()    
+    def _build_params(self, lines):      
+        for cf in self.columns:    
+            for wdg in cf.winfo_children():      
+                wdg.destroy()      
+        self.params.clear()      
     
         # Разобрать дамп: label -> (type, cur)    
         parsed = {}    
@@ -377,36 +393,32 @@ class Panel(tk.Tk):
                 _, label, ptype, cur, _b = (ln.split("|") + ["", "", "", ""])[:5]    
                 parsed[label] = (ptype, cur)    
     
-        # Раскладка по рамкам; нераспределённые — в "Прочее"    
-        used = set()    
-        col = row = 0    
-        for title, en_label, members in GROUPS:    
-            fr = ttk.LabelFrame(self.tbl, text=title)    
-            fr.grid(row=row, column=col, sticky="new", padx=4, pady=4)    
-            r = 0    
-            # Флажок включения блока — первой строкой    
-            if en_label and en_label in parsed:    
-                self._add_param(fr, r, en_label, *parsed[en_label])    
-                used.add(en_label)    
-                r += 1    
-            for label in members:    
-                if label == en_label or label not in parsed:    
-                    continue    
-                self._add_param(fr, r, label, *parsed[label])    
-                used.add(label)    
-                r += 1    
-            if title == "Прочее":    
-                for label, (ptype, cur) in parsed.items():    
-                    if label not in used:    
-                        self._add_param(fr, r, label, ptype, cur)    
-                        r += 1    
-            if r == 0:    
-                fr.destroy()          # пустая рамка — не показывать    
-                continue    
-            col += 1    
-            if col == 2:              # рамки в 2 колонки    
-                col = 0    
-                row += 1    
+        # Раскладка по рамкам; нераспределённые — в "Прочее".  
+        # Рамки pack'уются в свою колонку сверху вниз — без "дыр" grid'а.  
+        used = set()      
+        for title, en_label, members, col in GROUPS:      
+            fr = ttk.LabelFrame(self.columns[col], text=title)      
+            r = 0      
+            # Флажок включения блока — первой строкой      
+            if en_label and en_label in parsed:      
+                self._add_param(fr, r, en_label, *parsed[en_label])      
+                used.add(en_label)      
+                r += 1      
+            for label in members:      
+                if label == en_label or label not in parsed:      
+                    continue      
+                self._add_param(fr, r, label, *parsed[label])      
+                used.add(label)      
+                r += 1      
+            if title == "Прочее":      
+                for label, (ptype, cur) in parsed.items():      
+                    if label not in used:      
+                        self._add_param(fr, r, label, ptype, cur)      
+                        r += 1      
+            if r == 0:      
+                fr.destroy()          # пустая рамка — не показывать      
+                continue      
+            fr.pack(fill="x", padx=2, pady=3)      
     
     def _add_param(self, parent, row, label, ptype, cur):    
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4)    
