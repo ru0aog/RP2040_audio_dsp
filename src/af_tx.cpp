@@ -108,13 +108,15 @@ static void tx_tt_fir_design(void) {
 }    
     
 // Восстановить тапсы TT-фильтра 400..3200 (после st они узкие).    
-void af_tx_tt_fir_design(void) {    
-    tx_tt_fir_design();    
-    memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));    
-    memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));    
-    tx_tt_dc_x1 = 0;    
-    tx_tt_dc_y1 = 0;    
-}    
+void af_tx_tt_fir_design(void) {      
+    tx_tt_fir_design();      
+    memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));      
+    memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));      
+    tx_tt_fir1.taps = tx_tt_taps;  tx_tt_fir1.n = TX_TT_FIR_N;    
+    tx_tt_fir2.taps = tx_tt_taps;  tx_tt_fir2.n = TX_TT_FIR_N;    
+    tx_tt_dc_x1 = 0;      
+    tx_tt_dc_y1 = 0;      
+}      
     
 // Дизайн ST-фильтра: узкая полоса ±150 Гц вокруг тона f_hz —    
 // вырезает всё лишнее (шум, спуры NCO, гармоники). Тапсы те же    
@@ -128,13 +130,15 @@ void af_tx_st_fir_design(uint32_t f_hz) {
     tx_lo_hz = lo;    
     tx_hi_hz = hi;    
     tx_fir_design_n(tx_tt_taps, TX_TT_FIR_N);    
-    tx_lo_hz = save_lo;    
-    tx_hi_hz = save_hi;    
-    memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));    
-    memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));    
-    tx_tt_dc_x1 = 0;    
-    tx_tt_dc_y1 = 0;    
-}    
+    tx_lo_hz = save_lo;      
+    tx_hi_hz = save_hi;      
+    memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));      
+    memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));      
+    tx_tt_fir1.taps = tx_tt_taps;  tx_tt_fir1.n = TX_TT_FIR_N;    
+    tx_tt_fir2.taps = tx_tt_taps;  tx_tt_fir2.n = TX_TT_FIR_N;    
+    tx_tt_dc_x1 = 0;      
+    tx_tt_dc_y1 = 0;      
+}      
     
 static inline int32_t __not_in_flash_func(tx_fir_push)(tx_fir_t* f, int32_t x) {      
     const int n = f->n;      
