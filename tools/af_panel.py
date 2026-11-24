@@ -15,11 +15,16 @@ import threading
 import tkinter as tk  
 from tkinter import ttk, messagebox  
   
-try:  
-    import serial  
-    from serial.tools import list_ports  
-except ImportError:  
-    raise SystemExit("Нужен pyserial: pip install pyserial")  
+try:    
+    import serial    
+    from serial.tools import list_ports    
+except ImportError:    
+    raise SystemExit("Нужен pyserial: pip install pyserial")    
+  
+try:    
+    import sounddevice as sd    
+except ImportError:    
+    sd = None   # мониторинг недоступен, панель работает без звука    
   
 SCHEMA_SUPPORTED = 1    
 BAUD = 115200    
@@ -156,7 +161,8 @@ class Panel(tk.Tk):
         self._dump_got = 0  
         self._state_lines = []  
         self._state_active = False  
-        self._pending = []        # очередь команд после connect  
+        self._pending = []        # очередь команд после connect    
+        self.audio_stream = None  # sd.Stream при активном мониторинге    
   
         self._build_top()      
         # Строка состояния (state dump) — на всю ширину внизу окна.  
@@ -203,13 +209,27 @@ class Panel(tk.Tk):
         mf.pack(fill="x", padx=6, pady=(4, 0))  
         self.mode_vars = {}          # name -> IntVar  
         self._mode_updating = False  # подавить command при обновлении из дампа  
-        for i, (name, cmd) in enumerate(RUNTIME_MODES):    
-            var = tk.IntVar(value=0)    
-            ttk.Checkbutton(    
-                mf, text=cmd, variable=var,    
-                command=lambda c=cmd, v=var: self._mode_set(c, v.get())    
-            ).grid(row=i // 6, column=i % 6, sticky="w", padx=6, pady=1)    
-            self.mode_vars[name] = var    
+        for i, (name, cmd) in enumerate(RUNTIME_MODES):      
+            var = tk.IntVar(value=0)      
+            ttk.Checkbutton(      
+                mf, text=cmd, variable=var,      
+                command=lambda c=cmd, v=var: self._mode_set(c, v.get())      
+            ).grid(row=i // 6, column=i % 6, sticky="w", padx=6, pady=1)      
+            self.mode_vars[name] = var      
+  
+        # Аудиомонитор: UAC-устройство платы -> динамики ПК (справа в рамке).  
+        self.audio_var = tk.StringVar()  
+        self.audio_cb = ttk.Combobox(mf, textvariable=self.audio_var,  
+                                     width=28, state="readonly",  
+                                     values=self._audio_inputs())  
+        self.audio_cb.grid(row=0, column=6, rowspan=2, padx=(16, 4), sticky="e")  
+        self.audio_btn = ttk.Button(mf, text="Монитор",  
+                                    command=self._audio_toggle)  
+        self.audio_btn.grid(row=0, column=7, rowspan=2, padx=4, sticky="e")  
+        if sd is None:  
+            self.audio_cb.configure(state="disabled")  
+            self.audio_btn.configure(state="disabled")  
+        mf.columnconfigure(6, weight=1)   # прижать аудио-блок вправо    
   
     def _build_table(self):    
         wrap = ttk.Frame(self.paned)    
@@ -276,13 +296,55 @@ class Panel(tk.Tk):
         # Весь лог в буфер обмена (Text в disabled — читаем напрямую).    
         self.clipboard_clear()    
         self.clipboard_append(self.log.get("1.0", "end-1c"))    
+    def _audio_inputs(self):  
+        # Входные устройства (UAC-плата видна как микрофонный вход).  
+        if sd is None:  
+            return []  
+        try:  
+            return [f"{i}: {d['name']}"  
+                    for i, d in enumerate(sd.query_devices())  
+                    if d["max_input_channels"] > 0]  
+        except Exception:  
+            return []  
   
-    def _connect(self):  
-        if self.w.ser:  
-            self.w.close()  
-            self.btn_conn["text"] = "Подключить"  
-            self.status_var.set("не подключено")  
+    def _audio_toggle(self):  
+        if self.audio_stream is not None:  
+            self.audio_stream.stop()  
+            self.audio_stream.close()  
+            self.audio_stream = None  
+            self.audio_btn.configure(text="Монитор")  
+            self._log("# audio: монитор выкл")  
             return  
+        sel = self.audio_var.get()  
+        if not sel:  
+            messagebox.showerror("Аудио", "Выберите аудиоустройство")  
+            return  
+        idx = int(sel.split(":")[0])  
+        try:  
+            # duplex: вход = выбранное устройство, выход = динамики по умолчанию.  
+            # Частота/каналы — по AF_USB_FS_HZ в af_usb.cpp (44100, 2ch).  
+            self.audio_stream = sd.Stream(  
+                device=(idx, None), samplerate=44100, channels=2,  
+                dtype="int16", blocksize=960)  
+            self.audio_stream.start()  
+        except Exception as ex:  
+            self.audio_stream = None  
+            messagebox.showerror("Аудио", str(ex))  
+            return  
+        self.audio_btn.configure(text="Стоп")  
+        self._log(f"# audio: монитор <- {sel}")  
+
+    def _connect(self):  
+        if self.w.ser:    
+            self.w.close()    
+            if self.audio_stream is not None:  
+                self.audio_stream.stop()  
+                self.audio_stream.close()  
+                self.audio_stream = None  
+                self.audio_btn.configure(text="Монитор")  
+            self.btn_conn["text"] = "Подключить"    
+            self.status_var.set("не подключено")    
+            return    
         port = self.port_var.get()  
         if not port:  
             messagebox.showerror("Порт", "Выберите COM-порт")  
