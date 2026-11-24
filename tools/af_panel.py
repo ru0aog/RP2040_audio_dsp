@@ -176,8 +176,10 @@ class Panel(tk.Tk):
         self.spec_fs = 44100    
         self.spec_on = False        
         self.spec_buf = None    
-        self.spec_peak = -100.0     # peak-hold уровень, дБ  
-        self.spec_peak_f = 0.0      # частота последнего пика, Гц  
+        self.spec_peak = -100.0     # peak-hold уровень, дБ    
+        self.spec_peak_f = 0.0      # частота последнего пика, Гц    
+        self.spec_hold = None       # послесвечение: max по бинам с затуханием (np.array)      
+        self.spec_last = None       # (freqs, db) последнего кадра — для кнопки "Скрин"  
         self.protocol("WM_DELETE_WINDOW", self._on_close)    
   
         self._build_top()      
@@ -248,9 +250,12 @@ class Panel(tk.Tk):
             command=lambda v: setattr(self, "audio_vol", float(v) / 100.0))  
         self.audio_scale.set(30)    
         self.audio_scale.grid(row=0, column=8, rowspan=2, padx=(0, 4), sticky="e")    
-        self.rec_btn = ttk.Button(mf, text="Запись",  
-                                  command=self._rec_toggle)  
-        self.rec_btn.grid(row=0, column=9, rowspan=2, padx=4, sticky="e")  
+        self.rec_btn = ttk.Button(mf, text="Запись",    
+                                  command=self._rec_toggle)    
+        self.rec_btn.grid(row=0, column=9, rowspan=2, padx=4, sticky="e")    
+        self.shot_btn = ttk.Button(mf, text="Скрин",  
+                                   command=self._spec_shot)  
+        self.shot_btn.grid(row=0, column=10, rowspan=2, padx=4, sticky="e")  
         if sd is None:      
             self.audio_cb.configure(state="disabled")      
             self.audio_btn.configure(state="disabled")      
@@ -453,8 +458,9 @@ class Panel(tk.Tk):
                 break    
         self.spec_on = False        
         self.spec_buf = None    
-        self.spec_peak = -100.0  
-        self.spec_peak_f = 0.0  
+        self.spec_peak = -100.0    
+        self.spec_peak_f = 0.0    
+        self.spec_hold = None  
         while not self.spec_q.empty():        
             try:    
                 self.spec_q.get_nowait()    
@@ -570,18 +576,27 @@ class Panel(tk.Tk):
                 band_on = (int(p_band["var"].get()) == 1)  
             except (ValueError, tk.TclError):  
                 band_on = True  
-        if band_on:  
-            for lbl in ("band lo", "band hi"):  # маркеры полосы ПФ      
-                p = self.params.get(lbl)      
-                if p:      
-                    try:      
-                        fx = float(p["var"].get())      
-                        if 0 < fx < fmax:      
-                            x = fx / fmax * w      
-                            cv.create_line(x, 0, x, plot_h,      
-                                           fill="#ff5555", dash=(3, 2))      
-                    except (ValueError, tk.TclError):      
-                        pass      
+        if band_on:    
+            lo = hi = None  
+            for lbl in ("band lo", "band hi"):  # маркеры полосы ПФ        
+                p = self.params.get(lbl)        
+                if p:        
+                    try:        
+                        fx = float(p["var"].get())        
+                        if lbl == "band lo":  
+                            lo = fx  
+                        else:  
+                            hi = fx  
+                        if 0 < fx < fmax:        
+                            x = fx / fmax * w        
+                            cv.create_line(x, 0, x, plot_h,        
+                                           fill="#ff5555", dash=(3, 2))        
+                    except (ValueError, tk.TclError):        
+                        pass  
+            if lo is not None and hi is not None:  
+                cv.create_text(4, 4, text=f"{lo:.0f}–{hi:.0f} Гц",  
+                               fill="#ff5555", anchor="nw",  
+                               font=("TkDefaultFont", 8))  
         if self.spec_buf is not None and len(self.spec_buf) >= self.SPEC_NFFT:      
             win = np.hanning(self.SPEC_NFFT)  
             seg = self.spec_buf[-self.SPEC_NFFT:]  
@@ -589,13 +604,26 @@ class Panel(tk.Tk):
             mag = np.abs(np.fft.rfft(seg * win))   
             db = 20 * np.log10(mag / (self.SPEC_NFFT / 2) + 1e-9)    
             freqs = np.fft.rfftfreq(self.SPEC_NFFT, 1.0 / self.spec_fs)      
-            m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем  
-            pts = []    
-            for x, y in zip(freqs[m] / fmax * w,    
-                            np.clip(-db[m], 0, 100) / 100.0 * plot_h):    
-                pts += [x, y]    
-            if len(pts) >= 4:      
-                cv.create_line(*pts, fill="#00ff00", width=1, smooth=True)  
+            m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем      
+            dbm = np.clip(db[m], -100.0, 0.0)    
+            self.spec_last = (freqs[m].copy(), dbm.copy())   # кадр для "Скрин"  
+            # Послесвечение: per-bin max с затуханием ~1.5 дБ/кадр (~18 дБ/с).  
+            # Рисуется тёмно-зелёным ПОД основной линией.  
+            if self.spec_hold is None or len(self.spec_hold) != len(dbm):  
+                self.spec_hold = np.full(len(dbm), -100.0)  
+            self.spec_hold = np.maximum(dbm, self.spec_hold - 1.5)  
+            pts_h = []  
+            for x, y in zip(freqs[m] / fmax * w,  
+                            np.clip(-self.spec_hold, 0, 100) / 100.0 * plot_h):  
+                pts_h += [x, y]  
+            if len(pts_h) >= 4:  
+                cv.create_line(*pts_h, fill="#0a5a0a", width=1, smooth=True)  
+            pts = []      
+            for x, y in zip(freqs[m] / fmax * w,      
+                            np.clip(-dbm, 0, 100) / 100.0 * plot_h):      
+                pts += [x, y]      
+            if len(pts) >= 4:        
+                cv.create_line(*pts, fill="#00ff00", width=1, smooth=True)    
             # Peak-hold: жёлтый пунктир на уровне максимума, затухание  
             # 0.5 дБ/кадр (~6 дБ/с). Частота — у последнего пробившего пика.  
             mpk = m   # <50 Гц уже отрезаны маской отрисовки  
@@ -615,6 +643,79 @@ class Panel(tk.Tk):
                            fill="#ffff00", anchor="ne",  
                            font=("TkDefaultFont", 8))  
         self.after(80, self._spec_draw)      
+
+    def _spec_shot(self):  
+        # Снимок спектра в высоком разрешении: перерисовка последнего  
+        # кадра через Pillow в PNG 1920x720. Без Pillow — fallback на  
+        # postscript виджета (вектор, конвертируется в PDF/PNG).  
+        fname = time.strftime("spec_%Y%m%d_%H%M%S")  
+        try:  
+            from PIL import Image, ImageDraw  
+        except ImportError:  
+            Image = None  
+        if Image is not None and self.spec_last is not None:  
+            W, H, fmax = 1920, 720, 6000  
+            plot_h = H - 40  
+            img = Image.new("RGB", (W, H), "#101010")  
+            dr = ImageDraw.Draw(img)  
+            for dbv in (-20, -40, -60, -80):  
+                y = -dbv / 100.0 * plot_h  
+                dr.line([(0, y), (W, y)], fill="#303030")  
+                dr.text((4, y + 2), str(dbv), fill="#888888")  
+            for f in range(1000, fmax, 1000):  
+                x = f / fmax * W  
+                dr.line([(x, 0), (x, plot_h)], fill="#303030")  
+                dr.text((x + 2, H - 36), f"{f // 1000}k", fill="#888888")  
+            p_band = self.params.get("rx band")  
+            band_on = True  
+            if p_band:  
+                try:  
+                    band_on = (int(p_band["var"].get()) == 1)  
+                except (ValueError, tk.TclError):  
+                    band_on = True  
+            if band_on:  
+                lo = hi = None  
+                for lbl in ("band lo", "band hi"):  
+                    p = self.params.get(lbl)  
+                    if p:  
+                        try:  
+                            fx = float(p["var"].get())  
+                            if lbl == "band lo":  
+                                lo = fx  
+                            else:  
+                                hi = fx  
+                            if 0 < fx < fmax:  
+                                x = fx / fmax * W  
+                                dr.line([(x, 0), (x, plot_h)], fill="#ff5555")  
+                        except (ValueError, tk.TclError):  
+                            pass  
+                if lo is not None and hi is not None:  
+                    dr.text((8, 6), f"{lo:.0f}-{hi:.0f} Гц", fill="#ff5555")  
+            fr, dbv = self.spec_last  
+            pts = [(float(f / fmax * W),  
+                    float(np.clip(-d, 0, 100) / 100.0 * plot_h))  
+                   for f, d in zip(fr, dbv)]  
+            if len(pts) >= 2:  
+                dr.line(pts, fill="#00ff00", width=3)  
+            py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h  
+            dr.line([(0, py), (W, py)], fill="#ffff00")  
+            t1 = f"{self.spec_peak:.0f} dB"  
+            t2 = f"{self.spec_peak_f:.0f} Гц"  
+            dr.text((W - 8 - dr.textlength(t1), 6), t1, fill="#ffff00")  
+            dr.text((W - 8 - dr.textlength(t2), 22), t2, fill="#ffff00")  
+            try:  
+                img.save(fname + ".png")  
+                self._log(f"# скрин: {fname}.png ({W}x{H})")  
+            except Exception as e:  
+                self._log(f"# скрин не удался: {e}")  
+            return  
+        # Fallback: postscript виджета (векторная графика).  
+        try:  
+            self.spec_cv.update()  
+            self.spec_cv.postscript(file=fname + ".ps", colormode="color")  
+            self._log(f"# скрин: {fname}.ps (postscript; для PNG нужен Pillow)")  
+        except tk.TclError as e:  
+            self._log(f"# скрин не удался: {e}")  
 
     def _on_close(self):        
         # Освободить аудио и порт, иначе процесс может повиснуть.        
