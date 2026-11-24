@@ -226,17 +226,17 @@ class Panel(tk.Tk):
         self.status_var = tk.StringVar(value="не подключено")  
         ttk.Label(f, textvariable=self.status_var).pack(side="left", padx=8)  
   
-        bf = ttk.Frame(self)  
-        bf.pack(fill="x", padx=6)  
-        ttk.Label(bf, text="Банк:").pack(side="left")  
-        for n in range(1, 8):  
-            ttk.Button(bf, text=f"load {n}",  
-                       command=lambda n=n: self._cmd(f"load {n}", redump=True)  
-                       ).pack(side="left", padx=1)  
-            ttk.Button(bf, text=f"save {n}",    
-                       command=lambda n=n: self._cmd(f"save {n}")    
-                       ).pack(side="left", padx=1)    
-        self.state_var = tk.StringVar(value="")      
+        bf = ttk.Frame(self)    
+        bf.pack(fill="x", padx=6)    
+        ttk.Label(bf, text="Банк:").grid(row=0, column=0, rowspan=2, sticky="w")    
+        for n in range(1, 8):    
+            ttk.Button(bf, text=f"load {n}",    
+                       command=lambda n=n: self._cmd(f"load {n}", redump=True)    
+                       ).grid(row=0, column=n, padx=1)    
+            ttk.Button(bf, text=f"save {n}",      
+                       command=lambda n=n: self._cmd(f"save {n}")      
+                       ).grid(row=1, column=n, padx=1)      
+        self.state_var = tk.StringVar(value="")         
   
         # Рамка "Режимы" — runtime-флажки из state dump, не сохраняются в банк.  
         mf = ttk.LabelFrame(self, text="Режимы (runtime, не в банке)")  
