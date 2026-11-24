@@ -62,11 +62,17 @@ static bool     key_straight_down;   // прямой ключ: текущее с
 static uint8_t  dit_db, dah_db;      // счётчики антидребезга    
 static bool     dit_lvl, dah_lvl;    // устойчивые уровни (true=нажато)    
 
-// --- CW-маяк: циклическая посылка по таймеру (Core 0) ---  
-static bool     beacon_on      = false;  
-static uint32_t beacon_period  = 0;      // мс, 0 = выкл  
-static uint32_t beacon_next_ms = 0;  
-static char     beacon_text[AF_CW_MSG_LEN];   // текст посылки (как строка CW.TXT)  
+// --- CW-маяк: циклическая посылка по таймеру (Core 0) ---    
+static bool     beacon_on      = false;    
+static uint32_t beacon_period  = 0;      // мс, 0 = выкл    
+static uint32_t beacon_next_ms = 0;    
+static char     beacon_text[AF_CW_MSG_LEN];   // текст посылки (как строка CW.TXT)    
+  
+// --- Голосовой маяк: слот текущего банка по таймеру ---    
+static bool     vbcn_on       = false;    
+static uint32_t vbcn_period   = 0;       // мс, 0 = выкл    
+static uint32_t vbcn_next_ms  = 0;    
+static bool     vbcn_playing  = false;   // посылка идёт — период от конца    
   
 static uint32_t t_next_poll = 0;      
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
@@ -444,21 +450,42 @@ void af_gpio_ctl_init(void) {
     t_next_poll = millis() + AF_GPIO_POLL_MS;  
 }  
 
-void af_gpio_beacon_set(const char* text, uint32_t period_s) {  
-    if (!text || !*text || period_s == 0) {  
-        beacon_on = false;  
-        Serial.println("[BEACON] off");  
-        return;  
-    }  
-    strncpy(beacon_text, text, AF_CW_MSG_LEN - 1);  
-    beacon_text[AF_CW_MSG_LEN - 1] = '\0';  
-    beacon_period  = period_s * 1000u;  
-    beacon_next_ms = millis();            // первая посылка сразу  
-    beacon_on      = true;  
-    Serial.printf("[BEACON] on: \"%s\" every %lu s\n", beacon_text, (unsigned long)period_s);  
-}  
+void af_gpio_beacon_set(const char* text, uint32_t period_s) {    
+    if (!text || !*text || period_s == 0) {    
+        beacon_on = false;    
+        Serial.println("[BEACON] off");    
+        return;    
+    }    
+    if (vbcn_on) { vbcn_on = false; Serial.println("[VBCN] off (cw beacon on)"); }    
+    strncpy(beacon_text, text, AF_CW_MSG_LEN - 1);    
+    beacon_text[AF_CW_MSG_LEN - 1] = '\0';    
+    beacon_period  = period_s * 1000u;    
+    beacon_next_ms = millis();            // первая посылка сразу    
+    beacon_on      = true;    
+    Serial.printf("[BEACON] on: \"%s\" every %lu s\n", beacon_text, (unsigned long)period_s);    
+}    
+    
+bool af_gpio_beacon_on(void) { return beacon_on; }    
   
-bool af_gpio_beacon_on(void) { return beacon_on; }  
+// Голосовой маяк: играет слот текущего банка (rec_bank), пустой слот —    
+// клип-заглушку voice_14 (это делает сам af_rec_play). Период — от конца    
+// воспроизведения. Включение снимает CW-маяк и наоборот.    
+void af_gpio_vbcn_set(uint32_t period_s) {    
+    if (period_s == 0) {    
+        vbcn_on = false;    
+        vbcn_playing = false;    
+        Serial.println("[VBCN] off");    
+        return;    
+    }    
+    if (beacon_on) { beacon_on = false; Serial.println("[BEACON] off (vbcn on)"); }    
+    vbcn_period  = period_s * 1000u;    
+    vbcn_next_ms = millis();              // первая посылка сразу    
+    vbcn_playing = false;    
+    vbcn_on      = true;    
+    Serial.printf("[VBCN] on: bank slot every %lu s\n", (unsigned long)period_s);    
+}    
+    
+bool af_gpio_vbcn_on(void) { return vbcn_on; }    
   
 void af_gpio_ctl_poll(void) {    
     const uint32_t now = millis();    
@@ -505,21 +532,46 @@ void af_gpio_ctl_poll(void) {
         Serial.println("[GPIO] rec end (buf full) -> tx released");      
     }      
 
-    // CW-маяк: время пришло и тракт свободен -> очередная посылка  
-    if (beacon_on && (int32_t)(millis() - beacon_next_ms) >= 0) {  
-        if (!af_dsp_cwtx_busy() && !af_rec_is_playing() && !key_tx) {  
-            if (af_dsp_cwtx_start(beacon_text)) {  
-                af_gpio_ptt_tx_on();      // PTT на время посылки  
-                beacon_next_ms = millis() + beacon_period;  
-            } else {  
-                beacon_next_ms = millis() + 1000u;   // очередь занята — повтор через 1 с  
-            }  
-        } else {  
-            beacon_next_ms = millis() + 500u;        // тракт занят — отложить  
-        }  
-    }  
-
-}  
+    // CW-маяк: время пришло и тракт свободен -> очередная посылка    
+    if (beacon_on && (int32_t)(millis() - beacon_next_ms) >= 0) {    
+        if (!af_dsp_cwtx_busy() && !af_rec_is_playing() && !key_tx) {    
+            if (af_dsp_cwtx_start(beacon_text)) {    
+                af_gpio_ptt_tx_on();      // PTT на время посылки    
+                beacon_next_ms = millis() + beacon_period;    
+            } else {    
+                beacon_next_ms = millis() + 1000u;   // очередь занята — повтор через 1 с    
+            }    
+        } else {    
+            beacon_next_ms = millis() + 500u;        // тракт занят — отложить    
+        }    
+    }    
+  
+    // Голосовой маяк: период отсчитывается от КОНЦА воспроизведения.    
+    // PTT/TX отпускает общий добиватель выше по !af_rec_is_playing().    
+    if (vbcn_on) {    
+        if (vbcn_playing) {    
+            if (!af_rec_is_playing()) {          // доиграла — отсчёт паузы    
+                vbcn_playing = false;    
+                vbcn_next_ms = millis() + vbcn_period;    
+            }    
+        } else if ((int32_t)(millis() - vbcn_next_ms) >= 0) {    
+            if (!af_dsp_cwtx_busy() && !af_rec_is_playing() && !key_tx    
+                && !af_rec_is_recording()) {    
+                if (af_gpio_ptt_tx_on() && af_rec_play()) {    
+                    vbcn_playing = true;    
+                    Serial.printf("# vbcn: playing bank %u\n",    
+                                  (unsigned)af_gpio_last_bank());    
+                } else {    
+                    af_gpio_ptt_tx_off();        // нечего играть — вернуть PTT    
+                    vbcn_next_ms = millis() + 1000u;    
+                }    
+            } else {    
+                vbcn_next_ms = millis() + 500u;  // тракт занят — отложить    
+            }    
+        }    
+    }    
+    
+}    
 
 bool    af_gpio_ptt_active(void) { return sw_ptt_active; }  
 bool    af_gpio_key_tx(void)     { return key_tx; }  

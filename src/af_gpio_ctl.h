@@ -26,8 +26,10 @@ uint8_t af_gpio_msg_sel(void);        // код селектора сообще�
 
 void    af_gpio_key_mode(uint8_t m);     // 0=off 1=iambicA 2=iambicB 3=straight    
 uint8_t af_gpio_key_mode_get(void);    
-void    af_gpio_beacon_set(const char* text, uint32_t period_s);  // 0/пусто = выкл  
-bool    af_gpio_beacon_on(void);  
+void    af_gpio_beacon_set(const char* text, uint32_t period_s);  // 0/пусто = выкл    
+bool    af_gpio_beacon_on(void);    
+void    af_gpio_vbcn_set(uint32_t period_s);   // голосовой маяк, 0 = выкл    
+bool    af_gpio_vbcn_on(void);    
 
 bool    af_gpio_ptt_active(void);   // sw_ptt_active — PTT поднят софтом  
 bool    af_gpio_key_tx(void);       // key_tx — ключ держит TX  

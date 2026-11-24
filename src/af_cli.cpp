@@ -91,7 +91,8 @@ static void cli_help(void) {
     Serial.println("#   cw msg <1..4> <текст> — строка CW.TXT (пусто = голосовой слот)");      
     Serial.println("#   cw msgs           — показать 4 сообщения магнитофона");      
     Serial.println("#   cw key off|on|iambic_a|iambic_b|straight — ключ на GP11/GP12");        
-    Serial.println("#   cw beacon <5..3600> <текст> — CW-маяк с автоповтором; off — стоп");        
+    Serial.println("#   cw beacon <5..3600> <текст> — CW-маяк с автоповтором; off — стоп");
+    Serial.println("#   vbcn <period_s> on|off — голосовой маяк (слот банка, пустой -> voice_14)");  
     Serial.println("#   rtty on|off       — RTTY-декодер 45.45/170: текст в Serial (взаимоискл. с cw)");  
     Serial.println("#   rtty rsid on|off  — захват центра по RSID-метке (дефолт on)");  
     Serial.println("#   rtty scan on|off  — сканер тонов как fallback без RSID (дефолт on)");  
@@ -1200,7 +1201,8 @@ static void cli_exec(char* line) {
             Serial.printf("R|ramp|%u\n",     af_dsp_ramp_on() ? 1 : 0);    
             Serial.printf("R|key mode|%u\n", (unsigned)af_gpio_key_mode());    
             Serial.printf("R|key tx|%u\n",   af_gpio_key_tx() ? 1 : 0);    
-            Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);    
+            Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);      
+            Serial.printf("R|vbcn|%u\n",     af_gpio_vbcn_on() ? 1 : 0);      
             Serial.printf("R|cwtx|%u\n",     af_dsp_cwtx_busy() ? 1 : 0);    
             Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);    
             Serial.printf("R|tt|%u\n",       af_dsp_tt_busy() ? 1 : 0);    
@@ -1451,8 +1453,42 @@ static void cli_exec(char* line) {
         }  
     }  
 
-    else if (strcmp(cmd, "tt") == 0) {  
-        char* a1 = strtok(NULL, " \t");  
+    else if (strcmp(cmd, "vbcn") == 0) {  
+        // Голосовой маяк: слот текущего банка (пустой -> voice_14),  
+        // период от конца воспроизведения. Выключает CW-маяк и наоборот.  
+        char* per = strtok(NULL, " \t");    
+        char* sw  = strtok(NULL, " \t");    
+        if (per == NULL) {    
+            Serial.println("# ERR: vbcn <period_s> on|off");    
+            return;    
+        }    
+        // "vbcn off" / "vbcn 0" — без периода    
+        if (strcmp(per, "off") == 0 || strcmp(per, "0") == 0) {    
+            af_gpio_vbcn_set(0);    
+            Serial.println("# OK vbcn=off");    
+            return;    
+        }    
+        if (sw == NULL) {    
+            Serial.println("# ERR: vbcn <period_s> on|off");    
+            return;    
+        }    
+        if (strcmp(sw, "off") == 0 || strcmp(sw, "0") == 0) {    
+            af_gpio_vbcn_set(0);    
+            Serial.println("# OK vbcn=off");    
+            return;    
+        }    
+        if (strcmp(sw, "on") != 0) {  
+            Serial.println("# ERR: vbcn <period_s> on|off");  
+            return;  
+        }  
+        uint32_t s = (uint32_t)strtoul(per, NULL, 10);  
+        if (s < 5 || s > 3600) { Serial.println("# ERR: period 5..3600 s"); return; }  
+        af_gpio_vbcn_set(s);  
+        Serial.printf("# OK vbcn=%lu s\n", (unsigned long)s);  
+    }  
+  
+    else if (strcmp(cmd, "tt") == 0) {    
+        char* a1 = strtok(NULL, " \t");    
         if (a1 && strcmp(a1, "off") == 0) {  
             af_dsp_tt_stop();  
             Serial.println("# OK tt=off");  
