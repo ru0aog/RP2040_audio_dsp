@@ -153,10 +153,15 @@ class Panel(tk.Tk):
         self._state_active = False  
         self._pending = []        # очередь команд после connect  
   
-        self._build_top()    
-        # Горизонтальный сплит: слева таблица параметров, справа лог на всю высоту.  
-        self.paned = ttk.PanedWindow(self, orient="horizontal")  
-        self.paned.pack(fill="both", expand=True)  
+        self._build_top()      
+        # Строка состояния (state dump) — на всю ширину внизу окна.  
+        # pack side="bottom" ДО paned — иначе paned съест всё место.  
+        ttk.Label(self, textvariable=self.state_var,  
+                  anchor="w", foreground="#555").pack(  
+                  side="bottom", fill="x", padx=6, pady=(0, 2))  
+        # Горизонтальный сплит: слева таблица параметров, справа лог на всю высоту.    
+        self.paned = ttk.PanedWindow(self, orient="horizontal")    
+        self.paned.pack(fill="both", expand=True)    
         self._build_table()    
         self._build_bottom()    
         self.after(50, self._poll_rx)    
@@ -230,18 +235,17 @@ class Panel(tk.Tk):
         # Правая панель: лог на всю высоту + командная строка + статус снизу.  
         right = ttk.Frame(self.paned)    
         self.paned.add(right, weight=1)    
-        self.log = tk.Text(right, width=42, state="disabled")      
-        self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)      
-        f = ttk.Frame(right)    
-        f.pack(fill="x", padx=(0, 6), pady=(0, 2))    
-        self.cmd_var = tk.StringVar()    
-        e = ttk.Entry(f, textvariable=self.cmd_var)    
-        e.pack(side="left", fill="x", expand=True)    
-        e.bind("<Return>", lambda _e: self._send_manual())    
-        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)      
-        ttk.Label(right, textvariable=self.state_var,      
-                  anchor="w", foreground="#555", wraplength=300,    
-                  justify="left").pack(fill="x", padx=(0, 6), pady=(0, 4))      
+        # height ограничивает высоту; bg — светло-серый фон лога.  
+        self.log = tk.Text(right, width=42, height=14, state="disabled",  
+                           bg="#f0f0f0")        
+        self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)        
+        f = ttk.Frame(right)      
+        f.pack(fill="x", padx=(0, 6), pady=(0, 2))      
+        self.cmd_var = tk.StringVar()      
+        e = ttk.Entry(f, textvariable=self.cmd_var)      
+        e.pack(side="left", fill="x", expand=True)      
+        e.bind("<Return>", lambda _e: self._send_manual())      
+        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)         
   
     # --- helpers ------------------------------------------------------------  
     def _ports(self):  
@@ -410,37 +414,40 @@ class Panel(tk.Tk):
                 self._add_param(fr, r, label, *parsed[label])      
                 used.add(label)      
                 r += 1      
-            if title == "Прочее":      
-                for label, (ptype, cur) in parsed.items():      
-                    if label not in used:      
-                        self._add_param(fr, r, label, ptype, cur)      
-                        r += 1      
+            if title == "Прочее":        
+                # Два столбца параметров: чётные — col 0..2, нечётные — col 3..5.  
+                misc = [lb for lb in parsed if lb not in used]  
+                for i, label in enumerate(misc):  
+                    self._add_param(fr, i // 2, label,  
+                                    *parsed[label], col0=(i % 2) * 3)  
+                    used.add(label)  
+                r = (len(misc) + 1) // 2  
             if r == 0:      
                 fr.destroy()          # пустая рамка — не показывать      
                 continue      
             fr.pack(fill="x", padx=2, pady=3)      
     
-    def _add_param(self, parent, row, label, ptype, cur):    
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4)    
-        if ptype == "onoff":    
-            var = tk.IntVar(value=int(cur))    
-            ttk.Checkbutton(    
-                parent, variable=var,    
-                command=lambda l=label, v=var: self._set(l, v.get())    
-            ).grid(row=row, column=1, sticky="w")    
-        else:    
-            var = tk.StringVar(value=cur)    
-            e = ttk.Entry(parent, textvariable=var, width=9)    
-            e.grid(row=row, column=1, sticky="w")    
-            e.bind("<Return>",    
-                   lambda _e, l=label, v=var: self._set(l, v.get()))    
-            e.bind("<FocusOut>",    
-                   lambda _e, l=label, v=var: self._set(l, v.get()))    
-        hint = {"x100": "x100", "gain": "Q8", "u32": "u32"}.get(ptype, "")    
-        if hint:    
-            ttk.Label(parent, text=hint, foreground="#888").grid(    
-                row=row, column=2, sticky="w")    
-        self.params[label] = {"type": ptype, "var": var}    
+    def _add_param(self, parent, row, label, ptype, cur, col0=0):      
+        ttk.Label(parent, text=label).grid(row=row, column=col0, sticky="w", padx=4)      
+        if ptype == "onoff":      
+            var = tk.IntVar(value=int(cur))      
+            ttk.Checkbutton(      
+                parent, variable=var,      
+                command=lambda l=label, v=var: self._set(l, v.get())      
+            ).grid(row=row, column=col0 + 1, sticky="w")      
+        else:      
+            var = tk.StringVar(value=cur)      
+            e = ttk.Entry(parent, textvariable=var, width=9)      
+            e.grid(row=row, column=col0 + 1, sticky="w")      
+            e.bind("<Return>",      
+                   lambda _e, l=label, v=var: self._set(l, v.get()))      
+            e.bind("<FocusOut>",      
+                   lambda _e, l=label, v=var: self._set(l, v.get()))      
+        hint = {"x100": "x100", "gain": "Q8", "u32": "u32"}.get(ptype, "")      
+        if hint:      
+            ttk.Label(parent, text=hint, foreground="#888").grid(      
+                row=row, column=col0 + 2, sticky="w")      
+        self.params[label] = {"type": ptype, "var": var}      
   
     def _set(self, label, val):  
         if not self.schema_ok:  
