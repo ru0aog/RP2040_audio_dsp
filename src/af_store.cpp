@@ -110,9 +110,13 @@ struct af_bank_rec_t {
 // Образ всего сектора — читаем, патчим, пишем целиком.    
 static uint8_t s_sector_img[FLASH_SECTOR_SIZE];    
   
-// Флаг отложенной записи дефолтов через af_store_poll (не в init:    
-// там запись висла). Ставится, когда сектор пустой/чужой.    
-static bool s_need_defaults = false;        
+// Флаг отложенной записи дефолтов через af_store_poll (не в init:      
+// там запись висла). Ставится, когда сектор пустой/чужой.      
+static bool s_need_defaults = false;          
+  
+// Флаг отложенной записи дефолтных CW-вызовов — ставится, когда      
+// CW-блок в секторе пустой/битый (чистая плата, стёртый сектор).      
+static bool s_need_cw_save = false;           
   
 static uint8_t crc8(const void* p, size_t n) {  
     const uint8_t* b = (const uint8_t*)p;  
@@ -133,17 +137,24 @@ char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];
 // Forward: RAM-функция записи сектора, определена ниже.  
 static void __not_in_flash_func(do_flash_write)(void* param);  
 
-void af_store_cw_init(void) {    
-    const uint8_t* m = &s_sector_img[AF_CW_OFF];    
-    if (m[0] == 'C' && m[1] == 'W' && m[2] == AF_CW_VER &&    
-        m[3] == crc8(m + 4, AF_CW_MSGS * AF_CW_MSG_LEN)) {    
-        memcpy(af_cw_msgs, m + 4, AF_CW_MSGS * AF_CW_MSG_LEN);    
-    } else {    
-        memset(af_cw_msgs, 0, sizeof(af_cw_msgs));   // пустые = голосовые слоты    
-    }    
-    for (uint8_t i = 0; i < AF_CW_MSGS; i++)    
-        af_cw_msgs[i][AF_CW_MSG_LEN - 1] = '\0';     // страховка от мусора    
-}    
+void af_store_cw_init(void) {      
+    const uint8_t* m = &s_sector_img[AF_CW_OFF];      
+    if (m[0] == 'C' && m[1] == 'W' && m[2] == AF_CW_VER &&      
+        m[3] == crc8(m + 4, AF_CW_MSGS * AF_CW_MSG_LEN)) {      
+        memcpy(af_cw_msgs, m + 4, AF_CW_MSGS * AF_CW_MSG_LEN);      
+    } else {        
+        // Чистая плата / битый блок: стандартные вызовы во все слоты.        
+        // af_store_poll зафиксирует их во flash (запись из init висла).        
+        memset(af_cw_msgs, 0, sizeof(af_cw_msgs));        
+        if (AF_CW_DEFAULT[0]) {                       // "" = дефолты не подставлять  
+            for (uint8_t i = 0; i < AF_CW_MSGS; i++)        
+                strncpy(af_cw_msgs[i], AF_CW_DEFAULT, AF_CW_MSG_LEN - 1);        
+            s_need_cw_save = true;        
+        }  
+    }        
+    for (uint8_t i = 0; i < AF_CW_MSGS; i++)      
+        af_cw_msgs[i][AF_CW_MSG_LEN - 1] = '\0';     // страховка от мусора      
+}      
   
 bool af_store_cw_save(void) {    
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));    
@@ -748,12 +759,18 @@ static void af_store_write_defaults(void) {
     af_store_write_all(preset);   // park + nominal + DMA-окно + erase/program    
 }    
   
-// Core 0, из loop(): отложенная запись дефолтных банков при пустом секторе.    
-void af_store_poll(void) {        
-    if (!s_need_defaults) return;        
-    s_need_defaults = false;        
-    af_store_write_defaults();        
-}  
+// Core 0, из loop(): отложенная запись дефолтных банков при пустом секторе      
+// и дефолтных CW-вызовов при пустом/битом CW-блоке.      
+void af_store_poll(void) {          
+    if (s_need_defaults) {          
+        s_need_defaults = false;          
+        af_store_write_defaults();          
+    }          
+    if (s_need_cw_save) {      
+        s_need_cw_save = false;      
+        af_store_cw_save();    // то же окно записи, что и 'cw msg'      
+    }      
+}    
 
 // ============================================================================  
 // FLASH-TEST: отработка механизма записи в изоляции.  

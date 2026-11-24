@@ -13,8 +13,12 @@
 // Число ячеек банка (коды 001..111 на GP2..GP4; 000 = ручной режим).    
 #define AF_STORE_BANKS  7  
 
-#define AF_CW_MSGS     4  
-#define AF_CW_MSG_LEN  64    // включая '\0' — строка до 63 символов  
+#define AF_CW_MSGS     4    
+#define AF_CW_MSG_LEN  64    // включая '\0' — строка до 63 символов    
+  
+// Дефолтный вызов для всех слотов при невалидном CW-блоке во flash    
+// (чистая плата / битый crc). Пустая строка "" = дефолты не подставлять.    
+#define AF_CW_DEFAULT  "VVV TESTING BEACON K"    
   
 #define AF_STORE_VER      12  // было 11: +флаги bypass блоков (rxband_on, rxeq_on,  
                             // rxshelf_on, txband_on, txeq_on, txagc_on, txgate_on,  
@@ -25,7 +29,9 @@
 
 extern char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];  
   
-void af_store_cw_init(void);   // чтение из образа сектора (в af_store_init)  
+void af_store_cw_init(void);   // чтение из образа сектора (в af_store_init);    
+                               // при невалидном блоке — дефолты AF_CW_DEFAULT    
+                               // во все слоты + отложенная запись через af_store_poll    
 bool af_store_cw_save(void);   // запись во flash (окно как af_store_save)  
 
 struct af_bank_t {    
