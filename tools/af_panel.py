@@ -250,7 +250,9 @@ class Panel(tk.Tk):
         e = ttk.Entry(f, textvariable=self.cmd_var)      
         e.pack(side="left", fill="x", expand=True)      
         e.bind("<Return>", lambda _e: self._send_manual())      
-        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)         
+        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)           
+        ttk.Button(f, text="Очистить", command=self._log_clear).pack(side="left")    
+        ttk.Button(f, text="Скопировать", command=self._log_copy).pack(side="left", padx=(4, 0))    
   
     # --- helpers ------------------------------------------------------------  
     def _ports(self):  
@@ -259,11 +261,21 @@ class Panel(tk.Tk):
     def _refresh_ports(self):  
         self.port_cb["values"] = self._ports()  
   
-    def _log(self, s):  
-        self.log.configure(state="normal")  
-        self.log.insert("end", s + "\n")  
-        self.log.see("end")  
-        self.log.configure(state="disabled")  
+    def _log(self, s):    
+        self.log.configure(state="normal")    
+        self.log.insert("end", s + "\n")    
+        self.log.see("end")    
+        self.log.configure(state="disabled")    
+    
+    def _log_clear(self):    
+        self.log.configure(state="normal")    
+        self.log.delete("1.0", "end")    
+        self.log.configure(state="disabled")    
+    
+    def _log_copy(self):    
+        # Весь лог в буфер обмена (Text в disabled — читаем напрямую).    
+        self.clipboard_clear()    
+        self.clipboard_append(self.log.get("1.0", "end-1c"))    
   
     def _connect(self):  
         if self.w.ser:  
