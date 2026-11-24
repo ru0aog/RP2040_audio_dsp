@@ -100,7 +100,33 @@ RUNTIME_MODES = [
     ("tt",      "tt"),        
     ("st",      "st"),        
 ]        
+
   
+  
+# Единицы измерения по имени метки — бледная подпись справа от поля,  
+# в той же колонке, что x100/Q8/u32. Первое совпадение побеждает.  
+def _unit(label):  
+    w = label.split()  
+    last = w[-1] if w else ""  
+    if last in ("f", "f0", "f1", "f2", "ctr"):      # частоты  
+        return "Гц"  
+    if last == "q":                                  # добротность x100  
+        return "x100"  
+    if last in ("lo", "mid", "hi") and "eq" in label:  # EQ gain, дБx10  
+        return "x0.1 дБ"  
+    if last in ("ref", "ceil", "tgt", "thr", "cthr", "gfloor", "depth",  
+                "makeup", "max", "min", "presmax", "duckmax", "bst",  
+                "cut", "shelf", "exc", "excmix", "clip", "soft", "ap",  
+                "lr2", "split", "2band", "intel", "noise", "dec", "sql",  
+                "vol", "bw"):  
+        return ""                                    # без единицы / неизвестно  
+    if last == "mu":  
+        return "x1000"  
+    if last == "wpm":  
+        return "зн/мин"  
+    if last in ("hold", "hld", "hys", "hyst"):  
+        return "мс"  
+    return ""  
   
 # ---------------------------------------------------------------------------  
 # Serial worker: поток чтения -> очередь строк в GUI  
@@ -1284,10 +1310,11 @@ class Panel(tk.Tk):
                    lambda _e, l=label, v=var: self._set(l, v.get()))      
             e.bind("<FocusOut>",      
                    lambda _e, l=label, v=var: self._set(l, v.get()))      
-        hint = {"x100": "x100", "gain": "Q8", "u32": "u32"}.get(ptype, "")      
-        if hint:      
-            ttk.Label(parent, text=hint, foreground="#888").grid(      
-                row=row, column=col0 + 2, sticky="w")      
+        hint = _unit(label) or \
+            {"x100": "x100", "gain": "Q8", "u32": "u32"}.get(ptype, "")  
+        if hint:  
+            ttk.Label(parent, text=hint, foreground="#888").grid(  
+                row=row, column=col0 + 2, sticky="w")  
         self.params[label] = {"type": ptype, "var": var}      
   
     def _set(self, label, val):    
