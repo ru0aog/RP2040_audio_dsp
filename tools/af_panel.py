@@ -137,8 +137,12 @@ class Panel(tk.Tk):
         self.canvas.configure(yscrollcommand=sb.set)  
         self.canvas.pack(side="left", fill="both", expand=True)  
         sb.pack(side="right", fill="y")  
-        self.canvas.bind_all("<MouseWheel>",  
-                             lambda e: self.canvas.yview_scroll(-e.delta // 120, "units"))  
+        # Колесо — только над таблицей; bind_all перехватывал бы и лог.    
+        self.canvas.bind("<Enter>",    
+            lambda _e: self.canvas.bind_all("<MouseWheel>",    
+                lambda e: self.canvas.yview_scroll(-e.delta // 120, "units")))    
+        self.canvas.bind("<Leave>",    
+            lambda _e: self.canvas.unbind_all("<MouseWheel>"))    
   
     def _build_bottom(self):  
         f = ttk.Frame(self)  
@@ -190,11 +194,14 @@ class Panel(tk.Tk):
             self._log("> " + cmd)  
             self.w.send(cmd)  
   
-    def _cmd(self, cmd, redump=False):  
-        self._log("> " + cmd)  
-        self.w.send(cmd)  
-        if redump:  
-            self._pending += ["params dump", "state dump"]  
+    def _cmd(self, cmd, redump=False):    
+        self._log("> " + cmd)    
+        self.w.send(cmd)    
+        if redump:    
+            # Ответ на load — "# OK ...", не фрейм: _send_next по нему не сработает.    
+            # Ставим дампы в очередь и запускаем её сами — иначе зависнут.    
+            self._pending += ["params dump", "state dump"]    
+            self.after(300, self._send_next)   # дать плате ответить на load    
   
     def _send_manual(self):  
         cmd = self.cmd_var.get().strip()  
@@ -352,6 +359,5 @@ class Panel(tk.Tk):
         self.state_var.set("  ".join(parts))  
   
   
-if __name__ == "__main__":  
+if __name__ == "__main__":    
     Panel().mainloop()  
-    
