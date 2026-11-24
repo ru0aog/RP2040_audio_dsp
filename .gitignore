@@ -1,6 +1,8 @@
 .pio/
 .vscode/
 build/
+dist/
+__pycache__/
 *.zip
 *.tar.gz
 firmware.map

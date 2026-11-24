@@ -119,11 +119,10 @@ class Panel(tk.Tk):
             ttk.Button(bf, text=f"load {n}",  
                        command=lambda n=n: self._cmd(f"load {n}", redump=True)  
                        ).pack(side="left", padx=1)  
-            ttk.Button(bf, text=f"save {n}",  
-                       command=lambda n=n: self._cmd(f"save {n}")  
-                       ).pack(side="left", padx=1)  
-        self.state_var = tk.StringVar(value="")  
-        ttk.Label(bf, textvariable=self.state_var).pack(side="right")  
+            ttk.Button(bf, text=f"save {n}",    
+                       command=lambda n=n: self._cmd(f"save {n}")    
+                       ).pack(side="left", padx=1)    
+        self.state_var = tk.StringVar(value="")    
   
     def _build_table(self):  
         wrap = ttk.Frame(self)  
@@ -151,9 +150,11 @@ class Panel(tk.Tk):
         e = ttk.Entry(f, textvariable=self.cmd_var)  
         e.pack(side="left", fill="x", expand=True)  
         e.bind("<Return>", lambda _e: self._send_manual())  
-        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)  
-        self.log = tk.Text(self, height=8, state="disabled")  
-        self.log.pack(fill="x", padx=6, pady=(0, 6))  
+        ttk.Button(f, text="Отправить", command=self._send_manual).pack(side="left", padx=4)    
+        ttk.Label(self, textvariable=self.state_var,    
+                  anchor="w", foreground="#555").pack(fill="x", padx=6)    
+        self.log = tk.Text(self, height=8, state="disabled")    
+        self.log.pack(fill="x", padx=6, pady=(0, 6))    
   
     # --- helpers ------------------------------------------------------------  
     def _ports(self):  
