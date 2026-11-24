@@ -176,11 +176,9 @@ class Panel(tk.Tk):
         self.spec_fs = 44100    
         self.spec_on = False        
         self.spec_buf = None    
-        self.spec_peak = -100.0  
-        self.spec_peak_f = 0.0  
-        while not self.spec_q.empty():        
-        self.spec_peak_f = 0.0    # частота последнего пика, Гц  
-        self.protocol("WM_DELETE_WINDOW", self._on_close)      
+        self.spec_peak = -100.0     # peak-hold уровень, дБ  
+        self.spec_peak_f = 0.0      # частота последнего пика, Гц  
+        self.protocol("WM_DELETE_WINDOW", self._on_close)    
   
         self._build_top()      
         # Строка состояния (state dump) — на всю ширину внизу окна.  
@@ -453,9 +451,11 @@ class Panel(tk.Tk):
                 self.audio_q.get_nowait()    
             except queue.Empty:    
                 break    
-        self.spec_on = False      
-        self.spec_buf = None  
-        while not self.spec_q.empty():      
+        self.spec_on = False        
+        self.spec_buf = None    
+        self.spec_peak = -100.0  
+        self.spec_peak_f = 0.0  
+        while not self.spec_q.empty():        
             try:    
                 self.spec_q.get_nowait()    
             except queue.Empty:    
@@ -526,7 +526,7 @@ class Panel(tk.Tk):
                 self.rec_file = None  
         self.rec_btn.configure(text="Запись")  
 
-    SPEC_NFFT = 2048   # окно FFT; при 44100 это ~46 мс -> ~20 обновлений/с  
+    SPEC_NFFT = 4096   # окно FFT;  ~10.8 Гц/бин при fs=44100 
   
     def _spec_draw(self):    
         # Перерисовка ~12 раз/с: сетка дБ/Гц + маркеры ПФ + полилиния спектра.  
@@ -586,8 +586,8 @@ class Panel(tk.Tk):
             win = np.hanning(self.SPEC_NFFT)      
             mag = np.abs(np.fft.rfft(self.spec_buf[-self.SPEC_NFFT:] * win))      
             db = 20 * np.log10(mag / (self.SPEC_NFFT / 2) + 1e-9)    
-            freqs = np.fft.rfftfreq(self.SPEC_NFFT, 1.0 / self.spec_fs)    
-            m = freqs <= fmax    
+            freqs = np.fft.rfftfreq(self.SPEC_NFFT, 1.0 / self.spec_fs)      
+            m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем  
             pts = []    
             for x, y in zip(freqs[m] / fmax * w,    
                             np.clip(-db[m], 0, 100) / 100.0 * plot_h):    
@@ -596,11 +596,12 @@ class Panel(tk.Tk):
                 cv.create_line(*pts, fill="#00ff00", width=1, smooth=True)  
             # Peak-hold: жёлтый пунктир на уровне максимума, затухание  
             # 0.5 дБ/кадр (~6 дБ/с). Частота — у последнего пробившего пика.  
-            pk = int(np.argmax(db[m]))  
-            pk_db = float(db[m][pk])  
-            if pk_db >= self.spec_peak:  
-                self.spec_peak = pk_db  
-                self.spec_peak_f = float(freqs[m][pk])  
+            mpk = m   # <50 Гц уже отрезаны маской отрисовки  
+            pk = int(np.argmax(db[mpk]))    
+            pk_db = float(db[mpk][pk])    
+            if pk_db >= self.spec_peak:    
+                self.spec_peak = pk_db    
+                self.spec_peak_f = float(freqs[mpk][pk])    
             else:  
                 self.spec_peak = max(-100.0, self.spec_peak - 0.5)  
             py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h  
