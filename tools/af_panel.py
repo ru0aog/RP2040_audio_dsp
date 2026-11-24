@@ -88,19 +88,18 @@ GROUPS = [
 # Состояние читается из state dump (R|name|val). Порядок = порядок в рамке.  
 # (имя в state dump R|name|, команда CLI). Имя и команда различаются,  
 # где метка AF_PARAMS содержит пробел ("rx pres" -> R|rxpres|).  
-RUNTIME_MODES = [      
-    ("nt",      "nt"),      
-    ("nr",      "nr"),      
-    ("bypass",  "bypass"),      
-    ("cw",      "cw"),      
-    ("nb",      "nb"),      
-    ("rxexc",   "rx exc"),      
-    ("rtty",    "rtty"),      
-    ("ramp",    "ramp"),      
-    ("tx",      "tx"),      
-    ("tt",      "tt"),      
-    ("st",      "st"),      
-]      
+RUNTIME_MODES = [        
+    ("nt",      "nt"),        
+    ("nr",      "nr"),        
+    ("nb",      "nb"),        
+    ("bypass",  "bypass"),        
+    ("tx",      "tx"),        
+    ("cw",      "cw"),        
+    ("rtty",    "rtty"),        
+    ("ramp",    "ramp"),        
+    ("tt",      "tt"),        
+    ("st",      "st"),        
+]        
   
   
 # ---------------------------------------------------------------------------  
@@ -249,7 +248,7 @@ class Panel(tk.Tk):
             ttk.Checkbutton(      
                 mf, text=cmd, variable=var,      
                 command=lambda c=cmd, v=var: self._mode_set(c, v.get())      
-            ).grid(row=i // 6, column=i % 6, sticky="w", padx=6, pady=1)      
+            ).grid(row=i // 5, column=i % 5, sticky="w", padx=4)
             self.mode_vars[name] = var      
   
         # Аудиомонитор: UAC-устройство платы -> динамики ПК (справа в рамке).  
