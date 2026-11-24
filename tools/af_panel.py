@@ -23,10 +23,11 @@ try:
 except ImportError:    
     raise SystemExit("Нужен pyserial: pip install pyserial")    
   
-try:    
-    import sounddevice as sd    
-except ImportError:    
-    sd = None   # мониторинг недоступен, панель работает без звука    
+try:      
+    import sounddevice as sd  
+    import numpy as np  
+except ImportError:      
+    sd = None   # мониторинг и спектр недоступны, панель работает без звука        
   
 SCHEMA_SUPPORTED = 1    
 BAUD = 115200    
@@ -168,10 +169,15 @@ class Panel(tk.Tk):
         self.audio_out = None   # sd.OutputStream  
         self.audio_q = queue.Queue(maxsize=50)  # блоки вход->выход  
         self.audio_vol = 0.3      # громкость монитора 0.0..1.0 (читается из audio-потока)      
-        self.rec_stream = None    # sd.InputStream при активной записи  
-        self.rec_file = None      # wave.Wave_write  
-        self.rec_lock = threading.Lock()  
-        self.protocol("WM_DELETE_WINDOW", self._on_close)    
+        self.rec_stream = None    # sd.InputStream при активной записи    
+        self.rec_file = None      # wave.Wave_write    
+        self.rec_lock = threading.Lock()    
+        self.spec_stream = None   # sd.InputStream при включённом спектре  
+        self.spec_q = queue.Queue(maxsize=8)   # блоки float32 для FFT  
+        self.spec_fs = 44100  
+        self.spec_var = tk.IntVar(value=0)  
+        self.spec_span = tk.StringVar(value="0-4 кГц")  
+        self.protocol("WM_DELETE_WINDOW", self._on_close)      
   
         self._build_top()      
         # Строка состояния (state dump) — на всю ширину внизу окна.  
@@ -276,13 +282,30 @@ class Panel(tk.Tk):
         self.canvas.bind("<Leave>",      
             lambda _e: self.canvas.unbind_all("<MouseWheel>"))      
   
-    def _build_bottom(self):    
-        # Правая панель: лог на всю высоту + командная строка + статус снизу.  
-        right = ttk.Frame(self.paned)    
-        self.paned.add(right, weight=1)    
-        # height ограничивает высоту; bg — светло-серый фон лога.  
-        self.log = tk.Text(right, width=42, height=14, state="disabled",  
-                           bg="#f0f0f0")        
+    def _build_bottom(self):      
+        # Правая панель: спектр сверху, лог ниже + командная строка + статус.    
+        right = ttk.Frame(self.paned)      
+        self.paned.add(right, weight=1)      
+        # Спектр входа UAC: текущий срез FFT, маркеры band lo/hi.  
+        sf = ttk.LabelFrame(right, text="Спектр")  
+        sf.pack(fill="x", padx=(0, 6), pady=(4, 0))  
+        self.spec_chk = ttk.Checkbutton(  
+            sf, text="вкл", variable=self.spec_var,  
+            command=self._spec_toggle)  
+        self.spec_chk.pack(side="left", padx=4)  
+        self.spec_span_cb = ttk.Combobox(  
+            sf, textvariable=self.spec_span, width=9, state="readonly",  
+            values=("0-4 кГц", "0-8 кГц", "0-16 кГц"))  
+        self.spec_span_cb.pack(side="left", padx=4)  
+        self.spec_cv = tk.Canvas(sf, height=180, bg="#101010",  
+                                 highlightthickness=0)  
+        self.spec_cv.pack(fill="x", padx=4, pady=4)  
+        if sd is None:  
+            self.spec_chk.configure(state="disabled")  
+            self.spec_span_cb.configure(state="disabled")  
+        # height ограничивает высоту; bg — светло-серый фон лога.    
+        self.log = tk.Text(right, width=42, height=14, state="disabled",    
+                           bg="#f0f0f0")            
         self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)        
         f = ttk.Frame(right)      
         f.pack(fill="x", padx=(0, 6), pady=(0, 2))      
@@ -494,18 +517,135 @@ class Panel(tk.Tk):
                 self.rec_file = None  
         self.rec_btn.configure(text="Запись")  
 
-    def _on_close(self):      
-        # Освободить аудио и порт, иначе процесс может повиснуть.      
-        self._rec_stop()    
-        self._audio_stop()  
+    SPEC_NFFT = 2048   # окно FFT; при 44100 это ~46 мс -> ~20 обновлений/с  
+  
+    def _spec_toggle(self):  
+        if self.spec_stream is not None:  
+            self._spec_stop()  
+            self._log("# spec: выкл")  
+            return  
+        sel = self.audio_var.get()  
+        if not sel:  
+            self.spec_var.set(0)  
+            messagebox.showerror("Спектр", "Выберите аудиоустройство")  
+            return  
+        idx = int(sel.split(":")[0])  
+        try:  
+            info = sd.query_devices(idx)  
+            ch = min(2, int(info["max_input_channels"])) or 1  
+            fs = self._probe_fs(idx, "in",  
+                                (44100, 48000, int(info["default_samplerate"])))  
+            if fs is None:  
+                raise RuntimeError("нет поддерживаемой частоты")  
+  
+            def spec_cb(indata, frames, time_, status):  
+                try:  
+                    self.spec_q.put_nowait(indata[:, 0].copy())  
+                except queue.Full:  
+                    pass            # GUI не успевает — блок теряем  
+  
+            self.spec_stream = sd.InputStream(  
+                device=idx, samplerate=fs, channels=ch,  
+                dtype="float32", blocksize=self.SPEC_NFFT,  
+                callback=spec_cb)  
+            self.spec_stream.start()  
+            self.spec_fs = fs  
+        except Exception as ex:  
+            self._spec_stop()  
+            messagebox.showerror("Спектр", str(ex))  
+            return  
+        self._log(f"# spec: <- {sel} fs={fs}")  
+        self._spec_draw()  
+  
+    def _spec_stop(self):  
+        if self.spec_stream is not None:  
+            try:  
+                self.spec_stream.stop()  
+                self.spec_stream.close()  
+            except Exception:  
+                pass  
+            self.spec_stream = None  
+        self.spec_var.set(0)  
+        while not self.spec_q.empty():  
+            try:  
+                self.spec_q.get_nowait()  
+            except queue.Empty:  
+                break  
+        if hasattr(self, "spec_cv"):  
+            self.spec_cv.delete("all")  
+  
+    def _spec_fmax(self):  
+        return {"0-4 кГц": 4000, "0-8 кГц": 8000}.get(  
+            self.spec_span.get(), 16000)  
+  
+    def _spec_draw(self):  
+        # Перерисовка ~12 раз/с: сетка дБ/Гц + маркеры ПФ + полилиния спектра.  
+        if self.spec_stream is None:  
+            return  
+        cv = self.spec_cv  
+        blk = None  
+        try:  
+            while True:                     # берём только последний блок  
+                blk = self.spec_q.get_nowait()  
+        except queue.Empty:  
+            pass  
+        cv.delete("all")  
+        w = max(cv.winfo_width(), 100)  
+        h = max(cv.winfo_height(), 60)  
+        fmax = self._spec_fmax()  
+        plot_h = h - 14                     # нижние 14 px — подписи частот  
+        for db in (-20, -40, -60):          # сетка уровней, 0 дБ сверху  
+            y = -db / 80.0 * plot_h  
+            cv.create_line(0, y, w, y, fill="#303030")  
+            cv.create_text(2, y, text=str(db), anchor="nw", fill="#888",  
+                           font=("TkDefaultFont", 7))  
+        step = 1000 if fmax <= 4000 else 2000  
+        f = step  
+        while f < fmax:                     # сетка частот  
+            x = f / fmax * w  
+            cv.create_line(x, 0, x, plot_h, fill="#303030")  
+            cv.create_text(x, h - 12, text=f"{f // 1000}k", anchor="n",  
+                           fill="#888", font=("TkDefaultFont", 7))  
+            f += step  
+        for lbl in ("band lo", "band hi"):  # маркеры полосы ПФ  
+            p = self.params.get(lbl)  
+            if p:  
+                try:  
+                    fx = float(p["var"].get())  
+                    if 0 < fx < fmax:  
+                        x = fx / fmax * w  
+                        cv.create_line(x, 0, x, plot_h,  
+                                       fill="#ff5555", dash=(3, 2))  
+                except (ValueError, tk.TclError):  
+                    pass  
+        if blk is not None and len(blk) >= self.SPEC_NFFT:  
+            win = np.hanning(self.SPEC_NFFT)  
+            mag = np.abs(np.fft.rfft(blk[:self.SPEC_NFFT] * win))  
+            db = 20 * np.log10(mag / (self.SPEC_NFFT / 2) + 1e-9)  
+            freqs = np.fft.rfftfreq(self.SPEC_NFFT, 1.0 / self.spec_fs)  
+            m = freqs <= fmax  
+            pts = []  
+            for x, y in zip(freqs[m] / fmax * w,  
+                            np.clip(-db[m], 0, 80) / 80.0 * plot_h):  
+                pts += [x, y]  
+            if len(pts) >= 4:  
+                cv.create_line(*pts, fill="#40ff40")  
+        self.after(80, self._spec_draw)  
+
+    def _on_close(self):        
+        # Освободить аудио и порт, иначе процесс может повиснуть.        
+        self._rec_stop()      
+        self._audio_stop()    
+        self._spec_stop()  
         self.w.close()      
         self.destroy()      
 
     def _connect(self):  
-        if self.w.ser:        
-            self.w.close()        
-            self._rec_stop()    
-            self._audio_stop()  
+        if self.w.ser:          
+            self.w.close()          
+            self._rec_stop()      
+            self._audio_stop()    
+            self._spec_stop()  
             self.btn_conn["text"] = "Подключить"    
             self.status_var.set("не подключено")    
             return    
