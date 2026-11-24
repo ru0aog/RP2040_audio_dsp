@@ -22,13 +22,18 @@ void af_dsp_poll(void);
 // чтобы не было гонки с обработкой блока.    
 void af_dsp_reset_state(void);    
   
-// Полоса ПФ. Возвращает false, если команда отклонена  
-// (при включённом CW полоса следует за f0±250 Гц).  
-bool     af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz);  
-uint32_t af_dsp_af_lo_hz(void);  
-uint32_t af_dsp_af_hi_hz(void);  
-uint32_t af_dsp_band_lo_hz(void);  
-uint32_t af_dsp_band_hi_hz(void);  
+// Полоса ПФ. Возвращает false, если команда отклонена    
+// (при включённом CW полоса следует за f0±250 Гц).    
+bool     af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz);    
+uint32_t af_dsp_af_lo_hz(void);    
+uint32_t af_dsp_af_hi_hz(void);    
+uint32_t af_dsp_band_lo_hz(void);    
+uint32_t af_dsp_band_hi_hz(void);    
+  
+// Bypass полосового FIR RX (pre+post): 0 = сигнал идёт мимо фильтра.  
+// Коэффициенты и полоса сохраняются — включение возвращает фильтр в тракт.  
+void     af_dsp_set_rxband(bool on);  
+bool     af_dsp_rxband_on(void);  
   
 // Автонотч NT. При включении снимает NR (приоритет NT).  
 int      af_dsp_set_notch(bool on);  // rc: 0=off, 1=on, 2=on+NR снят, 3=отклонено (CW on).
@@ -141,12 +146,15 @@ int32_t af_dsp_nrmakeup(void);
 void    af_dsp_set_nrmode(uint8_t m);  // 0=LMS, 1=spectral    
 uint8_t af_dsp_nrmode(void);    
 
-void     af_dsp_set_rxshelf(int32_t db_x10);  
-void     af_dsp_set_rxshelff(uint32_t hz);  
-void     af_dsp_set_rxshelfq(uint32_t q_x100);  
-int32_t  af_dsp_rxshelf(void);  
-uint32_t af_dsp_rxshelff(void);  
-uint32_t af_dsp_rxshelfq(void);  
+void     af_dsp_set_rxshelf(int32_t db_x10);    
+void     af_dsp_set_rxshelff(uint32_t hz);    
+void     af_dsp_set_rxshelfq(uint32_t q_x100);    
+int32_t  af_dsp_rxshelf(void);    
+uint32_t af_dsp_rxshelff(void);    
+uint32_t af_dsp_rxshelfq(void);    
+// Bypass low-shelf «бас» RX: 0 = полка не применяется (db при этом хранится).  
+void     af_dsp_set_rxshelf_on(bool on);  
+bool     af_dsp_rxshelf_on(void);  
 void     af_dsp_set_rxexc(bool on);  
 bool     af_dsp_rxexc_on(void);  
 void     af_dsp_set_rxexcmix(int32_t q15);  
@@ -177,8 +185,12 @@ bool af_dsp_tt_start(uint32_t f1, uint32_t f2);
 void af_dsp_tt_stop(void);    
 bool af_dsp_tt_busy(void);    
 
-// 3-полосный EQ RX: band 0=lo(shelf) 1=mid(peak) 2=hi(shelf), дБx10 (-120..+120)  
-void     af_dsp_set_rxeq(uint8_t band, int32_t db_x10);  
-void     af_dsp_set_rxeqf(uint8_t band, uint32_t hz);  
-int32_t  af_dsp_rxeq(uint8_t band);  
+// 3-полосный EQ RX: band 0=lo(shelf) 1=mid(peak) 2=hi(shelf), дБx10 (-120..+120)    
+void     af_dsp_set_rxeq(uint8_t band, int32_t db_x10);    
+void     af_dsp_set_rxeqf(uint8_t band, uint32_t hz);    
+int32_t  af_dsp_rxeq(uint8_t band);    
 uint32_t af_dsp_rxeqf(uint8_t band);  
+// Bypass всего 3-полосного EQ RX: 0 = ни одна полоса не применяется  
+// (значения дБ/частот при этом хранятся).  
+void     af_dsp_set_rxeq_on(bool on);  
+bool     af_dsp_rxeq_on(void);  

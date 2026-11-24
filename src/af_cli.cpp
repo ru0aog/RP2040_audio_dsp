@@ -74,7 +74,10 @@ static void cli_help(void) {
     Serial.println("#   rx excmix <0..16384> — подмес эксайтера Q15 (3277 = ~10%)");  
     Serial.println("#   nb on|off         — noise blanker: подавитель импульсных помех RX");    
     Serial.println("#   nb thr <15..100>  — порог NB x10 над огибающей (30 = x3.0)");
-    Serial.println("#   rxeq lo|mid|hi <-120..120> — 3-полосный EQ RX, дБx10 (60=+6дБ, -60=-6дБ)");    
+    Serial.println("#   rx band on|off    — полосовой FIR RX (off = сигнал мимо фильтра)");  
+    Serial.println("#   rx shelf on|off   — low-shelf «бас» в тракте/мимо");  
+    Serial.println("#   rxeq on|off       — 3-полосный EQ RX целиком");  
+    Serial.println("#   rxeq lo|mid|hi <-120..120> — 3-полосный EQ RX, дБx10 (60=+6дБ, -60=-6дБ)");      
     Serial.println("#   rxeq lo|mid|hi f <Гц>      — частоты полос EQ RX");    
     Serial.println("#   cw on|off         — телеграфный фильтр");    
     Serial.println("#   cw freq <hz>      — центральная частота CW (300..3000)");    
@@ -141,7 +144,14 @@ static void cli_help(void) {
     Serial.println("#   txclip <0..32767> — порог клиппера TX (меньше = плотнее)");      
     Serial.println("#   txnotch on|off    — узкие нотчи против тонов-наводок");  
     Serial.println("#   txnotchf <f1> <f2> — частоты TX-нотчей, Гц (200..7000)");    
-    Serial.println("#   txeq lo|mid|hi <-120..120> — 3-полосный EQ TX, дБx10");    
+    Serial.println("#   tx band on|off    — речевой pre-FIR TX (post-FIR всегда — страховка)");  
+    Serial.println("#   tx agc on|off     — TX-АРУ (env считается — нужен гейту/presence)");  
+    Serial.println("#   tx gate on|off    — шумовой гейт TX");  
+    Serial.println("#   tx comp on|off    — компрессор TX целиком (1- и 2-полосный)");  
+    Serial.println("#   tx clip on|off    — клиппер TX");  
+    Serial.println("#   tx shelf on|off   — ВЧ-полка TX");  
+    Serial.println("#   txeq on|off       — 3-полосный EQ TX целиком");  
+    Serial.println("#   txeq lo|mid|hi <-120..120> — 3-полосный EQ TX, дБx10");      
     Serial.println("#   txeq lo|mid|hi f <Гц>      — частоты полос EQ TX");    
     Serial.println("#   txprof <1..7|имя> — профиль передачи: 1 flat, 2 natural, 3 dx, 4 bass, 5 whisper, 6 loud, 7 max");  
     Serial.println("#   txsetdef          — сброс профиля передачи к дефолтам");   
@@ -789,8 +799,9 @@ static void p_set_txeqf_hi (int32_t v){ af_tx_set_txeqf (2, (uint32_t)v); }
   
 static const af_param_t AF_PARAMS[] = {  
     // --- RX ---  
-    { "band lo",     PT_U16,   offsetof(af_bank_t, lo_hz),          p_set_band_lo },  
-    { "band hi",     PT_U16,   offsetof(af_bank_t, hi_hz),          p_set_band_hi },  
+    { "band lo",     PT_U16,   offsetof(af_bank_t, lo_hz),          p_set_band_lo },    
+    { "band hi",     PT_U16,   offsetof(af_bank_t, hi_hz),          p_set_band_hi },    
+    { "rx band",     PT_ONOFF, offsetof(af_bank_t, rxband_on),      P_SET(af_dsp_set_rxband) },  
     { "cw",          PT_ONOFF, offsetof(af_bank_t, cw_on),          P_SET(af_dsp_set_cw) },  
     { "cw f0",       PT_U16,   offsetof(af_bank_t, cw_f0),          P_SET(af_dsp_set_cw_freq) },  
     { "cw bw",       PT_U16,   offsetof(af_bank_t, cw_bw),          P_SET(af_dsp_set_cw_bw) },  
@@ -820,14 +831,16 @@ static const af_param_t AF_PARAMS[] = {
     { "rx presmax",  PT_U16,   offsetof(af_bank_t, rx_presmax),     P_SET(af_dsp_set_rxpresmax) },    
     { "rx pres f",   PT_U16,   offsetof(af_bank_t, rx_pres_freq),   P_SET(af_dsp_set_rxpresf) },    
     { "rx pres q",   PT_U16,   offsetof(af_bank_t, rx_pres_q),      P_SET(af_dsp_set_rxpresq) },      
-    { "rx shelf",    PT_U16,   offsetof(af_bank_t, rx_shelf_db),    P_SET(af_dsp_set_rxshelf) },  
+    { "rx shelf on", PT_ONOFF, offsetof(af_bank_t, rxshelf_on),     P_SET(af_dsp_set_rxshelf_on) },  
+    { "rx shelf",    PT_U16,   offsetof(af_bank_t, rx_shelf_db),    P_SET(af_dsp_set_rxshelf) },    
     { "rx shelf f",  PT_U16,   offsetof(af_bank_t, rx_shelf_freq),  P_SET(af_dsp_set_rxshelff) },  
     { "rx shelf q",  PT_U16,   offsetof(af_bank_t, rx_shelf_q),     P_SET(af_dsp_set_rxshelfq) },  
     { "rx exc",      PT_ONOFF, offsetof(af_bank_t, rx_exc_on),      P_SET(af_dsp_set_rxexc) },  
     { "rx excmix",   PT_U16,   offsetof(af_bank_t, rx_exc_mix),     P_SET(af_dsp_set_rxexcmix) },  
     { "nb",          PT_ONOFF, offsetof(af_bank_t, nb_on),          P_SET(af_dsp_set_nb) },      
     { "nb thr",      PT_U16,   offsetof(af_bank_t, nb_thr_x10),     P_SET(af_dsp_set_nbthr) },      
-    { "rxeq lo",     PT_I16,   offsetof(af_bank_t, rxeq_lo_db),     p_set_rxeq_lo },    
+    { "rxeq on",     PT_ONOFF, offsetof(af_bank_t, rxeq_on),        P_SET(af_dsp_set_rxeq_on) },  
+    { "rxeq lo",     PT_I16,   offsetof(af_bank_t, rxeq_lo_db),     p_set_rxeq_lo },      
     { "rxeq mid",    PT_I16,   offsetof(af_bank_t, rxeq_mid_db),    p_set_rxeq_mid },    
     { "rxeq hi",     PT_I16,   offsetof(af_bank_t, rxeq_hi_db),     p_set_rxeq_hi },    
     { "rxeq lo f",   PT_U16,   offsetof(af_bank_t, rxeq_lo_f),      p_set_rxeqf_lo },    
@@ -835,13 +848,18 @@ static const af_param_t AF_PARAMS[] = {
     { "rxeq hi f",   PT_U16,   offsetof(af_bank_t, rxeq_hi_f),      p_set_rxeqf_hi },    
     { "--- TX ---",  PT_SEP,   0, NULL },      
     // --- TX ---  
-    { "tx band lo",  PT_U16,   offsetof(af_bank_t, tx_lo_hz),       p_set_txband_lo },  
-    { "tx band hi",  PT_U16,   offsetof(af_bank_t, tx_hi_hz),       p_set_txband_hi },  
-    { "tx comp",     PT_U16,   offsetof(af_bank_t, tx_ratio_x10),   P_SET(af_tx_set_ratio) },  
-    { "tx clip",     PT_U16,   offsetof(af_bank_t, tx_clip),        P_SET(af_tx_set_clip) },  
-    { "tx agc tgt",  PT_U16,   offsetof(af_bank_t, tx_agc_target),  P_SET(af_tx_set_agc) },  
-    { "tx agc max",  PT_U16,   offsetof(af_bank_t, tx_agc_max_x10), P_SET(af_tx_set_agcmax) },  
-    { "tx gate",     PT_U16,   offsetof(af_bank_t, tx_gate_thr),    P_SET(af_tx_set_gate) },  
+    { "tx band on",  PT_ONOFF, offsetof(af_bank_t, txband_on),      P_SET(af_tx_set_band_on) },  
+    { "tx band lo",  PT_U16,   offsetof(af_bank_t, tx_lo_hz),       p_set_txband_lo },    
+    { "tx band hi",  PT_U16,   offsetof(af_bank_t, tx_hi_hz),       p_set_txband_hi },    
+    { "tx comp on",  PT_ONOFF, offsetof(af_bank_t, txcomp_on),      P_SET(af_tx_set_comp_on) },  
+    { "tx comp",     PT_U16,   offsetof(af_bank_t, tx_ratio_x10),   P_SET(af_tx_set_ratio) },    
+    { "tx clip on",  PT_ONOFF, offsetof(af_bank_t, txclip_on),      P_SET(af_tx_set_clip_on) },  
+    { "tx clip",     PT_U16,   offsetof(af_bank_t, tx_clip),        P_SET(af_tx_set_clip) },    
+    { "tx agc on",   PT_ONOFF, offsetof(af_bank_t, txagc_on),       P_SET(af_tx_set_agc_on) },  
+    { "tx agc tgt",  PT_U16,   offsetof(af_bank_t, tx_agc_target),  P_SET(af_tx_set_agc) },    
+    { "tx agc max",  PT_U16,   offsetof(af_bank_t, tx_agc_max_x10), P_SET(af_tx_set_agcmax) },    
+    { "tx gate on",  PT_ONOFF, offsetof(af_bank_t, txgate_on),      P_SET(af_tx_set_gate_on) },  
+    { "tx gate",     PT_U16,   offsetof(af_bank_t, tx_gate_thr),    P_SET(af_tx_set_gate) },    
     { "tx gate hld", PT_U16,   offsetof(af_bank_t, tx_gate_hold_ms),P_SET(af_tx_set_gatehold) },  
     { "tx gate hys", PT_U8,    offsetof(af_bank_t, tx_gate_hyst_x10),P_SET(af_tx_set_gatehyst) },    
     { "tx gfloor",   PT_U16,   offsetof(af_bank_t, tx_gfloor),      P_SET(af_tx_set_gfloor) },  
@@ -863,7 +881,8 @@ static const af_param_t AF_PARAMS[] = {
     { "tx presmax",  PT_U16,   offsetof(af_bank_t, tx_presmax),     P_SET(af_tx_set_presmax) },  
     { "tx pres f",   PT_U16,   offsetof(af_bank_t, tx_pres_freq),   P_SET(af_tx_set_presfreq) },  
     { "tx pres q",   PT_U16,   offsetof(af_bank_t, tx_pres_q),      P_SET(af_tx_set_presq) },  
-    { "tx shelf",    PT_U16,   offsetof(af_bank_t, tx_shelf_db),   P_SET(af_tx_set_shelf) },    
+    { "tx shelf on", PT_ONOFF, offsetof(af_bank_t, txshelf_on),     P_SET(af_tx_set_shelf_on) },  
+    { "tx shelf",    PT_U16,   offsetof(af_bank_t, tx_shelf_db),   P_SET(af_tx_set_shelf) },      
     { "tx shelf f",  PT_U16,   offsetof(af_bank_t, tx_shelf_freq),  P_SET(af_tx_set_shelffreq) },  
     { "tx shelf q",  PT_U16,   offsetof(af_bank_t, tx_shelf_q),     P_SET(af_tx_set_shelfq) },  
     { "tx exc",      PT_ONOFF, offsetof(af_bank_t, tx_exc_on),      P_SET(af_tx_set_exc) },  
@@ -871,7 +890,8 @@ static const af_param_t AF_PARAMS[] = {
     { "tx notch",    PT_ONOFF, offsetof(af_bank_t, tx_notch_on),    P_SET(af_tx_set_notch) },  
     { "tx notch f1", PT_U16,   offsetof(af_bank_t, tx_notch1_hz),   p_set_notch1 },  
     { "tx notch f2", PT_U16,   offsetof(af_bank_t, tx_notch2_hz),   p_set_notch2 },    
-    { "txeq lo",     PT_I16,   offsetof(af_bank_t, txeq_lo_db),     p_set_txeq_lo },    
+    { "txeq on",     PT_ONOFF, offsetof(af_bank_t, txeq_on),        P_SET(af_tx_set_txeq_on) },  
+    { "txeq lo",     PT_I16,   offsetof(af_bank_t, txeq_lo_db),     p_set_txeq_lo },      
     { "txeq mid",    PT_I16,   offsetof(af_bank_t, txeq_mid_db),    p_set_txeq_mid },    
     { "txeq hi",     PT_I16,   offsetof(af_bank_t, txeq_hi_db),     p_set_txeq_hi },    
     { "txeq lo f",   PT_U16,   offsetof(af_bank_t, txeq_lo_f),      p_set_txeqf_lo },    

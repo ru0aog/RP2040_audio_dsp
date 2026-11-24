@@ -161,8 +161,12 @@ static int32_t af_fir_buf[AF_FIR_N] = {};
 static int     af_fir_idx = 0;  
 // Второй экземпляр FIR — постфильтр после АРУ: режет внеполосный мусор,  
 // который NR/makeup/АРУ поднимают за пределами полосы. Те же тапы.  
-static int32_t af_fir_buf2[AF_FIR_N] = {};  
-static int     af_fir_idx2 = 0;  
+static int32_t af_fir_buf2[AF_FIR_N] = {};    
+static int     af_fir_idx2 = 0;    
+  
+// Bypass полосового FIR RX (pre + post): 0 = сигнал идёт мимо фильтра.  
+// Тапы и полоса сохраняются — включение возвращает фильтр в тракт.  
+static volatile bool rxband_on = true;  
     
 static void af_fir_init(void) {    
     const int   M     = (AF_FIR_N - 1) / 2;    
@@ -423,9 +427,10 @@ static void __not_in_flash_func(rx_pres_block_update)(void) {
 // подъём НЧ не попадает в контур АРУ и не съедается лимитером.  
 // При rx_shelf_db_x10 == 0 — байпас без нагрузки.  
 // ---------------------------------------------------------------------------  
-static volatile int32_t  rx_shelf_db_x10  = AF_RX_SHELF_DB_X10_DEFAULT;  
-static volatile uint32_t rx_shelf_freq_hz = AF_RX_SHELF_FREQ_HZ;  
-static volatile uint32_t rx_shelf_q_x100  = AF_RX_SHELF_Q_X100;  
+static volatile int32_t  rx_shelf_db_x10  = AF_RX_SHELF_DB_X10_DEFAULT;    
+static volatile uint32_t rx_shelf_freq_hz = AF_RX_SHELF_FREQ_HZ;    
+static volatile uint32_t rx_shelf_q_x100  = AF_RX_SHELF_Q_X100;    
+static volatile bool     rxshelf_on       = true;   // 0 = полка не применяется  
   
 static int32_t rxs_b0 = 32768, rxs_b1 = 0, rxs_b2 = 0,  
                rxs_a1 = 0,     rxs_a2 = 0;   // старт = байпас  
@@ -469,7 +474,8 @@ static volatile int32_t  rxeq_hi_db_x10  = 0;
 static volatile uint32_t rxeq_lo_f  = 300;    // НЧ-полка, Гц  
 static volatile uint32_t rxeq_mid_f = 1000;   // центр пика, Гц  
 static volatile uint32_t rxeq_hi_f  = 2500;   // ВЧ-полка, Гц  
-static volatile uint32_t rxeq_mid_q = 100;    // Q пика x100  
+static volatile uint32_t rxeq_mid_q = 100;    // Q пика x100    
+static volatile bool     rxeq_on    = true;   // 0 = весь 3-полосный EQ мимо  
   
 typedef struct { int32_t b0,b1,b2,a1,a2, x1,x2,y1,y2; } eq_biquad_t;  
 static eq_biquad_t rxeq[3];   // 0=low-shelf 1=peaking 2=high-shelf  
@@ -1079,8 +1085,11 @@ bool af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz) {
     return true;  
 }
   
-uint32_t af_dsp_af_lo_hz(void) { return af_lo_hz; }  
-uint32_t af_dsp_af_hi_hz(void) { return af_hi_hz; }  
+uint32_t af_dsp_af_lo_hz(void) { return af_lo_hz; }    
+uint32_t af_dsp_af_hi_hz(void) { return af_hi_hz; }    
+  
+void af_dsp_set_rxband(bool on) { rxband_on = on; }    
+bool af_dsp_rxband_on(void)     { return rxband_on; }    
   
 // Возврат: 0 = выключено, 1 = включено, 2 = включено и NR снят (приоритет NT),  
 //          3 = отклонено (CW on — NT в узкой полосе бесполезен и перегружает Core 1).  
@@ -1171,9 +1180,11 @@ void af_dsp_set_rxshelfq(uint32_t q_x100) {
     rx_shelf_q_x100 = q_x100;  
     rx_shelf_design();  
 }  
-int32_t  af_dsp_rxshelf(void)  { return rx_shelf_db_x10; }  
-uint32_t af_dsp_rxshelff(void) { return rx_shelf_freq_hz; }  
-uint32_t af_dsp_rxshelfq(void) { return rx_shelf_q_x100; }  
+int32_t  af_dsp_rxshelf(void)  { return rx_shelf_db_x10; }    
+uint32_t af_dsp_rxshelff(void) { return rx_shelf_freq_hz; }    
+uint32_t af_dsp_rxshelfq(void) { return rx_shelf_q_x100; }    
+void     af_dsp_set_rxshelf_on(bool on) { rxshelf_on = on; }    
+bool     af_dsp_rxshelf_on(void)        { return rxshelf_on; }    
 
 void af_dsp_set_rxeq(uint8_t band, int32_t db_x10) {   // band 0=lo 1=mid 2=hi  
     if (db_x10 < -120) db_x10 = -120;  
@@ -1189,8 +1200,10 @@ void af_dsp_set_rxeqf(uint8_t band, uint32_t hz) {     // частоты пол�
     else                { if (hz<1500) hz=1500; if (hz>5000) hz=5000; rxeq_hi_f=hz; }  
     rxeq_design();  
 }  
-int32_t  af_dsp_rxeq(uint8_t band)  { return band==0?rxeq_lo_db_x10:band==1?rxeq_mid_db_x10:rxeq_hi_db_x10; }  
-uint32_t af_dsp_rxeqf(uint8_t band) { return band==0?rxeq_lo_f:band==1?rxeq_mid_f:rxeq_hi_f; }  
+int32_t  af_dsp_rxeq(uint8_t band)  { return band==0?rxeq_lo_db_x10:band==1?rxeq_mid_db_x10:rxeq_hi_db_x10; }    
+uint32_t af_dsp_rxeqf(uint8_t band) { return band==0?rxeq_lo_f:band==1?rxeq_mid_f:rxeq_hi_f; }    
+void     af_dsp_set_rxeq_on(bool on) { rxeq_on = on; }    
+bool     af_dsp_rxeq_on(void)        { return rxeq_on; }    
 
 void af_dsp_set_rxexc(bool on) {  
     if (on && !rx_exc_on) {              // чистый старт — без щелчка  
@@ -1671,8 +1684,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 out_emit(t);      
                 continue;        
             }        
-            y = af_fir_push(y);  
-            {   // S-meter: EMA |y| Q16, ~10 мс — уровень в полосе до АРУ  
+            if (rxband_on) y = af_fir_push(y);   // bypass: сигнал мимо FIR  
+            {   // S-meter: EMA |y| Q16, ~10 мс — уровень в полосе до АРУ    
                 int32_t ay = (y < 0) ? -y : y;  
                 rx_in_lvl_q16 += (((int64_t)ay << 16) - rx_in_lvl_q16) >> 6;  
                 if (ay > rx_in_peak) rx_in_peak = ay;   // пик за интервал чтения  
@@ -1696,24 +1709,25 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // предельный цикл Q15-нотчей звенит на частотах 3/4/5 кГц вне полосы —  
             // постфильтр этот звон отрезает. Нотчи 1/2 кГц внутри полосы работают.  
             if (rx_notch_on) s = (int16_t)rx_notch_push(s);  
-            s = sat16(af_fir_push2(s));   // пост-FIR: срез внеполосного мусора после АРУ/NR  
+            if (rxband_on) s = sat16(af_fir_push2(s));   // пост-FIR: срез внеполосного  
+                                                       // мусора после АРУ/NR  
             if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —    
                                                            // подъём до +6 дБ может превысить int16    
             // Хвост RX: shelf + exciter стоят ПОСЛЕ лимитера — их подъём  
             // не контролируется контуром B. Вместо жёсткого sat16 на каждом  
             // каскаде — один мягкий клиппер в конце: пики плавно прижимаются  
             // к ~−3.5 dBFS, clip_count не растёт, щелчков нет.  
-            if (rx_shelf_db_x10 || (rx_exc_on && !cw_on)) {    
-                int32_t s32 = s;    
-                if (rx_shelf_db_x10)       s32 = rx_shelf_push(s32); // low-shelf: «бас»    
-                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);   // эксайтер: только речь    
-                s = rx_soft_clip(s32);    
-            }    
+            if ((rxshelf_on && rx_shelf_db_x10) || (rx_exc_on && !cw_on)) {      
+                int32_t s32 = s;      
+                if (rxshelf_on && rx_shelf_db_x10) s32 = rx_shelf_push(s32); // low-shelf: «бас»      
+                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);   // эксайтер: только речь      
+                s = rx_soft_clip(s32);      
+            }      
             // 3-полосный EQ — последним в RX-цепочке, после лимитера и    
             // soft-clip: его подъём до +12 дБ тоже может превысить int16,    
             // поэтому свой мягкий клиппер на выходе.    
-            if (rxeq_lo_db_x10 || rxeq_mid_db_x10 || rxeq_hi_db_x10)    
-                s = rx_soft_clip(rxeq_push(s));    
+            if (rxeq_on && (rxeq_lo_db_x10 || rxeq_mid_db_x10 || rxeq_hi_db_x10))      
+                s = rx_soft_clip(rxeq_push(s));      
             if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса      
             s = af_voice_mix(s);                       // голосовые сообщения          
             if (af_rec_active == 2) s = af_rec_mix(s); // подмес воспроизведения слота

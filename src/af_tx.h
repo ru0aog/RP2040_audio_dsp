@@ -11,21 +11,40 @@
 void    af_tx_init(void);    
 int16_t af_tx_process(int32_t y);          // один отсчёт @AF_FS_OUT_HZ    
     
-void     af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz);    
-uint32_t af_tx_lo_hz(void);    
-uint32_t af_tx_hi_hz(void);    
+void     af_tx_set_band(uint32_t lo_hz, uint32_t hi_hz);      
+uint32_t af_tx_lo_hz(void);      
+uint32_t af_tx_hi_hz(void);      
+  
+// Bypass речевого pre-FIR TX: 0 = сигнал идёт мимо фильтра.  
+// post-FIR (антигармониковый, после клиппера) не гейтится — страховка.  
+void     af_tx_set_band_on(bool on);  
+bool     af_tx_band_on(void);  
     
 void     af_tx_set_ratio(uint32_t r_x10);  // компрессия x10: 20=2:1, 40=4:1    
 uint32_t af_tx_ratio(void);    
     
-void     af_tx_set_clip(uint32_t thr);     // порог клиппера 0..32767    
-uint32_t af_tx_clip(void);
-
-void     af_tx_set_agc(uint32_t target);   // целевой уровень АРУ 0..32767  
-uint32_t af_tx_agc(void);  
+void     af_tx_set_clip(uint32_t thr);     // порог клиппера 0..32767      
+uint32_t af_tx_clip(void);  
   
-void     af_tx_set_gate(uint32_t thr);     // порог гейта 0..32767 (0 = off)  
-uint32_t af_tx_gate(void);  
+// Bypass клиппера TX: 0 = ни hard, ни soft клиппер не применяется.  
+void     af_tx_set_clip_on(bool on);  
+bool     af_tx_clip_on(void);  
+
+void     af_tx_set_agc(uint32_t target);   // целевой уровень АРУ 0..32767    
+uint32_t af_tx_agc(void);    
+  
+// Bypass TX-АРУ: 0 = gain не применяется, но agc_env продолжает  
+// считаться (нужен гейту и sidechain presence EQ).  
+void     af_tx_set_agc_on(bool on);  
+bool     af_tx_agc_on(void);  
+  
+void     af_tx_set_gate(uint32_t thr);     // порог гейта 0..32767 (0 = off)    
+uint32_t af_tx_gate(void);    
+  
+// Bypass шумового гейта TX: 0 = гейт не применяется  
+// (при thr==0 гейт и так выключен — флаг для явного bypass).  
+void     af_tx_set_gate_on(bool on);  
+bool     af_tx_gate_on(void);  
 
 void     af_tx_set_ap(bool on);        // all-pass симметризатор on/off  
 bool     af_tx_ap(void);  
@@ -33,8 +52,13 @@ bool     af_tx_ap(void);
 void     af_tx_set_softclip(bool on);  // кубический клиппер (off = hard)  
 bool     af_tx_softclip(void);  
 
-void     af_tx_set_2band(bool on);   // 2-полосная компрессия (split ~900 Гц)  
-bool     af_tx_2band(void);  
+void     af_tx_set_2band(bool on);   // 2-полосная компрессия (split ~900 Гц)    
+bool     af_tx_2band(void);    
+  
+// Bypass компрессора TX целиком: 0 = ни 1-полосная, ни 2-полосная  
+// компрессия не применяется (hi_band при этом = 0).  
+void     af_tx_set_comp_on(bool on);  
+bool     af_tx_comp_on(void);  
 
 void     af_tx_set_gfloor(uint32_t q16);  // нижняя ступень гейта Q16 (0..65536)    
 uint32_t af_tx_gfloor(void);    
@@ -80,8 +104,12 @@ void     af_tx_set_intel(bool on);
 bool     af_tx_intel(void);  
 uint32_t af_tx_g_intel(void);  
 
-void     af_tx_set_shelf(uint32_t db_x10);   // подъём ВЧ, дБ x10 (0 = off)    
-uint32_t af_tx_shelf(void);    
+void     af_tx_set_shelf(uint32_t db_x10);   // подъём ВЧ, дБ x10 (0 = off)      
+uint32_t af_tx_shelf(void);      
+  
+// Bypass ВЧ-полки TX: 0 = полка не применяется (db при этом хранится).  
+void     af_tx_set_shelf_on(bool on);  
+bool     af_tx_shelf_on(void);  
   
 // Пороги компрессора (1-полосный / НЧ / ВЧ), 256..32767    
 void     af_tx_set_compthr(int32_t v);    
@@ -134,8 +162,13 @@ int16_t af_tx_rtty_fir_push(int32_t x);   // полосовой 200..1800 для
 
 int16_t af_tx_tt_fir_push(int32_t x);     // двухтон: каскад FIR 400..3200 + DC-block  
 
-// --- Этап 8: 3-полосный TX EQ (после tx_pre, до АРУ) ---  
-void     af_tx_set_txeq (uint8_t band, int32_t db_x10);  // -120..+120, 0=off  
-int32_t  af_tx_txeq     (uint8_t band);  
-void     af_tx_set_txeqf(uint8_t band, uint32_t hz);  
+// --- 3-полосный TX EQ (после tx_pre, до АРУ) ---    
+void     af_tx_set_txeq (uint8_t band, int32_t db_x10);  // -120..+120, 0=off    
+int32_t  af_tx_txeq     (uint8_t band);    
+void     af_tx_set_txeqf(uint8_t band, uint32_t hz);    
 uint32_t af_tx_txeqf    (uint8_t band);  
+  
+// Bypass всего 3-полосного TX EQ: 0 = ни одна полоса не применяется  
+// (значения дБ/частот при этом хранятся).  
+void     af_tx_set_txeq_on(bool on);  
+bool     af_tx_txeq_on(void);  

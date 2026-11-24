@@ -16,10 +16,12 @@
 #define AF_CW_MSGS     4  
 #define AF_CW_MSG_LEN  64    // включая '\0' — строка до 63 символов  
   
-#define AF_STORE_VER      11  // было 10: +rxeq_*/txeq_* (3-полосный EQ) в af_bank_t.    
-                            // Старые банки невалидны.      
-                            // CW.TXT живёт в том же секторе по смещению 0x800      
-                            // со своим magic 'CW'+ver+crc — версию банков не меняет.   
+#define AF_STORE_VER      12  // было 11: +флаги bypass блоков (rxband_on, rxeq_on,  
+                            // rxshelf_on, txband_on, txeq_on, txagc_on, txgate_on,  
+                            // txcomp_on, txclip_on, txshelf_on) в af_bank_t.  
+                            // Старые банки невалидны.        
+                            // CW.TXT живёт в том же секторе по смещению 0x800        
+                            // со своим magic 'CW'+ver+crc — версию банков не меняет.     
 
 extern char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];  
   
@@ -64,9 +66,12 @@ struct af_bank_t {
     uint16_t rx_shelf_db;   // RX low-shelf «бас», дБ x10 (0 = off, 30 = +3 дБ)    
     uint16_t rx_shelf_freq; // частота полки, Гц (200..800)    
     uint16_t rx_shelf_q;    // добротность x100 (70 = 0.70)    
-    uint8_t  rx_exc_on;     // RX гармонический эксайтер T2 (0/1)    
-    uint16_t rx_exc_mix;    // подмес эксайтера, Q15 (3277 = ~10%)    
-    // --- TX ---    
+    uint8_t  rx_exc_on;     // RX гармонический эксайтер T2 (0/1)      
+    uint16_t rx_exc_mix;    // подмес эксайтера, Q15 (3277 = ~10%)      
+    uint8_t  rxband_on;     // полосовой FIR RX (pre+post) (0/1, 1 = в тракте)  
+    uint8_t  rxeq_on;       // 3-полосный EQ RX (0/1)  
+    uint8_t  rxshelf_on;    // low-shelf «бас» RX (0/1; при 0 db не применяется)  
+    // --- TX ---      
     uint16_t tx_lo_hz;      // речевая полоса TX    
     uint16_t tx_hi_hz;    
     uint16_t tx_ratio_x10;  // компрессия x10 (40 = 4:1)    
@@ -100,10 +105,19 @@ struct af_bank_t {
     uint16_t tx_shelf_q;    // добротность x100    
     uint8_t  tx_exc_on;     // ВЧ-эксайтер    
     uint16_t tx_excmix;     // подмес эксайтера, Q15    
-    uint8_t  tx_notch_on;   // TX-нотчи    
-    uint16_t tx_notch1_hz;    
-    uint16_t tx_notch2_hz;    
-    // Этап 8: 3-полосный EQ (дБx10, -120..+120, 0=off; частоты Гц)    
+    uint8_t  tx_notch_on;   // TX-нотчи      
+    uint16_t tx_notch1_hz;      
+    uint16_t tx_notch2_hz;      
+    uint8_t  txband_on;     // речевой pre-FIR TX (0/1; post-FIR не гейтится —  
+                          // антигармониковая страховка после клиппера)  
+    uint8_t  txeq_on;       // 3-полосный EQ TX (0/1)  
+    uint8_t  txagc_on;      // TX-АРУ (0/1; при 0 agc_env считается — нужен  
+                          // гейту и sidechain presence, gain не применяется)  
+    uint8_t  txgate_on;     // шумовой гейт TX (0/1)  
+    uint8_t  txcomp_on;     // компрессор TX (0/1)  
+    uint8_t  txclip_on;     // клиппер TX (0/1)  
+    uint8_t  txshelf_on;    // ВЧ-полка TX (0/1)  
+    // Этап 8: 3-полосный EQ (дБx10, -120..+120, 0=off; частоты Гц)      
     int16_t  rxeq_lo_db, rxeq_mid_db, rxeq_hi_db;    
     uint16_t rxeq_lo_f,  rxeq_mid_f,  rxeq_hi_f;    
     int16_t  txeq_lo_db, txeq_mid_db, txeq_hi_db;    

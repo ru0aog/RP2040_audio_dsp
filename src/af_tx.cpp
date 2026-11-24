@@ -165,8 +165,19 @@ static volatile uint8_t  tx_2band_on = AF_TX_2BAND_ON_DEFAULT;
 static volatile uint8_t  tx_notch_on = AF_TX_NOTCH_ON_DEFAULT;    
 static volatile uint32_t tx_split_hz    = AF_TX_SPLIT_HZ;      // частота кроссовера    
 static volatile int32_t  tx_split_k_q15 = AF_TX_SPLIT_K_Q15;   // k старого split, Q15    
-static volatile uint32_t tx_notch1_hz   = AF_TX_NOTCH1_HZ;     // частота 1-го нотча    
-static volatile uint32_t tx_notch2_hz   = AF_TX_NOTCH2_HZ;     // частота 2-го нотча    
+static volatile uint32_t tx_notch1_hz   = AF_TX_NOTCH1_HZ;     // частота 1-го нотча      
+static volatile uint32_t tx_notch2_hz   = AF_TX_NOTCH2_HZ;     // частота 2-го нотча      
+  
+// Bypass-флаги блоков (1 = в тракте). post-FIR и DC-blocker не гейтятся —  
+// антигармониковая страховка после клиппера.  
+static volatile uint8_t  txband_on  = 1;   // речевой pre-FIR  
+static volatile uint8_t  txeq_on    = 1;   // 3-полосный EQ  
+static volatile uint8_t  txagc_on   = 1;   // АРУ (env считается всегда —  
+                                         // нужен гейту и sidechain presence)  
+static volatile uint8_t  txgate_on  = 1;   // шумовой гейт  
+static volatile uint8_t  txcomp_on  = 1;   // компрессор (1- и 2-полосный)  
+static volatile uint8_t  txclip_on  = 1;   // клиппер  
+static volatile uint8_t  txshelf_on = 1;   // ВЧ-полка  
 // Коэффициенты нотчей Q15: b = {1, -2cos(w), 1}, a = {1, -2r cos(w), r^2}    
 static int32_t n1_b1 = 0, n1_a1 = 0, n1_a2 = 0;    
 static int32_t n2_b1 = 0, n2_a1 = 0, n2_a2 = 0;    
@@ -707,32 +718,34 @@ static int32_t __not_in_flash_func(tx_agc)(int32_t x) {
         tx_agc_gain_blk = (int32_t)g;  
         tx_agc_gain_q15 = (int32_t)g;                  // для stats (этап 0)  
     }  
-    return (int32_t)(((int64_t)x * tx_agc_gain_blk) >> 15);  
-}  
-  
-// Шумовой гейт: env < thr -> gain -> AF_TX_GATE_FLOOR_Q16 (-24 дБ),  
-// иначе -> 1.0. Плавные фронты убирают щелчки на границах; нижняя  
-// ступень вместо нуля убирает «мёртвые паузы» и уменьшает скачок  
-// gain при открытии (0.063->1.0 вместо 0->1.0) — выброс FIR слабее.  
-// Шумовой гейт с гистерезисом и hangover (этап 1):  
-//   env > thr        -> открыть мгновенно, перезарядить hold  
-//   env < thr*0.7    -> отсчитывать hangover, потом закрыть на floor  
-//   между порогами   -> держать текущее состояние (нет болтанки)  
-// Открытие мгновенное — начала слов не съедаются; EMA gate_gain  
-// даёт плавные фронты без щелчков.  
-static int32_t __not_in_flash_func(tx_gate)(int32_t x) {  
-    if (tx_gate_thr == 0) return x;                  // гейт выключен  
-    uint32_t env = agc_env >> 8;                     // та же огибающая  
-    const uint32_t thr_close = (tx_gate_thr * tx_gate_hyst_x10) / 10;    
-    const uint16_t hold_n = (uint16_t)((tx_gate_hold_ms * AF_FS_OUT_HZ) / 1000u);    
-  
-    if (env > tx_gate_thr) {  
-        tx_gate_hold = hold_n;                       // открытие мгновенное  
-    } else if (env < thr_close) {  
-        if (tx_gate_hold > 0) --tx_gate_hold;        // hangover  
-    }  
-    // env в [thr_close, thr] — hold не трогаем: гистерезис  
-  
+    if (!txagc_on) return x;   // bypass: env выше уже посчитана —  
+                             // гейт и sidechain presence работают  
+    return (int32_t)(((int64_t)x * tx_agc_gain_blk) >> 15);    
+}
+
+// Шумовой гейт: env < thr -> gain -> AF_TX_GATE_FLOOR_Q16 (-24 дБ),
+// иначе -> 1.0. Плавные фронты убирают щелчки на границах; нижняя
+// ступень вместо нуля убирает «мёртвые паузы» и уменьшает скачок
+// gain при открытии (0.063->1.0 вместо 0->1.0) — выброс FIR слабее.
+// Шумовой гейт с гистерезисом и hangover (этап 1):
+//   env > thr        -> открыть мгновенно, перезарядить hold
+//   env < thr*0.7    -> отсчитывать hangover, потом закрыть на floor
+//   между порогами   -> держать текущее состояние (нет болтанки)
+// Открытие мгновенное — начала слов не съедаются; EMA gate_gain
+// даёт плавные фронты без щелчков.
+static int32_t __not_in_flash_func(tx_gate)(int32_t x) {    
+    if (!txgate_on || tx_gate_thr == 0) return x;    // гейт выключен    
+    uint32_t env = agc_env >> 8;                     // та же огибающая
+    const uint32_t thr_close = (tx_gate_thr * tx_gate_hyst_x10) / 10;
+    const uint16_t hold_n = (uint16_t)((tx_gate_hold_ms * AF_FS_OUT_HZ) / 1000u);
+
+    if (env > tx_gate_thr) {
+        tx_gate_hold = hold_n;                       // открытие мгновенное
+    } else if (env < thr_close) {
+        if (tx_gate_hold > 0) --tx_gate_hold;        // hangover
+    }
+    // env в [thr_close, thr] — hold не трогаем: гистерезис
+
     uint32_t tgt = (tx_gate_hold > 0) ? 65536u : (uint32_t)tx_gate_floor;  
     uint32_t c = (tx_gate_hold > 0) ? AF_TX_GATE_ATT_Q24 : AF_TX_GATE_REL_Q24;  
     gate_gain += (uint32_t)(((int64_t)((int32_t)tgt - (int32_t)gate_gain) * c) >> 24);  
@@ -786,27 +799,32 @@ int16_t __not_in_flash_func(af_tx_tt_fir_push)(int32_t x) {
     return (int16_t)d;  
 }  
   
-int16_t __not_in_flash_func(af_tx_process)(int32_t y) {          
-    y = tx_fir_push(&tx_pre, y);      // речевая полоса          
-    // 3-полосный EQ — тембр микрофона до АРУ/компрессии  
-    if (txeq_db_x10[0]) y = txeq_push(&txeq_bq[0], y);  
-    if (txeq_db_x10[1]) y = txeq_push(&txeq_bq[1], y);  
-    if (txeq_db_x10[2]) y = txeq_push(&txeq_bq[2], y);  
-    if (tx_ap_on) y = tx_allpass(y);  // симметризатор пиков речи    
-    y = tx_agc(y);                    // АРУ: выравнивание уровня к target      
-    tx_pres_sidechain(y);             // env_hi_pre/nf/k_dyn — ДО гейта  
-    y = tx_gate(y);                   // шумовой гейт: паузы -> тишина      
-    int32_t hi_band = 0;      
-    y = tx_compress(y, &hi_band);     // компрессия + отвод ВЧ-полосы      
-    y = tx_presence(y);               // dyn-presence EQ (этап 2)      
-    // вместо y = tx_shelf(y):  
-    const int32_t sh = tx_shelf(y);  
-    y += (int32_t)(((int64_t)(sh - y) * k_dyn_q15) >> 15);  // подмес полки по k_dyn  
-    y = tx_exciter(y, hi_band);       // ВЧ-эксайтер (этап 6)      
-    y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)        
-                    : tx_clip(y);     // жёсткий клиппер      
-    y = tx_dc_block(y);               // ФВЧ ~20 Гц: страховка от DC    
-    y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга    
+int16_t __not_in_flash_func(af_tx_process)(int32_t y) {            
+    if (txband_on) y = tx_fir_push(&tx_pre, y);  // речевая полоса            
+    // 3-полосный EQ — тембр микрофона до АРУ/компрессии    
+    if (txeq_on) {  
+        if (txeq_db_x10[0]) y = txeq_push(&txeq_bq[0], y);    
+        if (txeq_db_x10[1]) y = txeq_push(&txeq_bq[1], y);    
+        if (txeq_db_x10[2]) y = txeq_push(&txeq_bq[2], y);    
+    }  
+    if (tx_ap_on) y = tx_allpass(y);  // симметризатор пиков речи      
+    y = tx_agc(y);                    // АРУ: выравнивание уровня к target        
+    tx_pres_sidechain(y);             // env_hi_pre/nf/k_dyn — ДО гейта    
+    y = tx_gate(y);                   // шумовой гейт: паузы -> тишина        
+    int32_t hi_band = 0;        
+    if (txcomp_on) y = tx_compress(y, &hi_band);  // компрессия + отвод ВЧ-полосы        
+    y = tx_presence(y);               // dyn-presence EQ (этап 2)        
+    // вместо y = tx_shelf(y):    
+    if (txshelf_on) {  
+        const int32_t sh = tx_shelf(y);    
+        y += (int32_t)(((int64_t)(sh - y) * k_dyn_q15) >> 15);  // подмес полки по k_dyn    
+    }  
+    y = tx_exciter(y, hi_band);       // ВЧ-эксайтер (этап 6)        
+    if (txclip_on)  
+        y = tx_softclip ? tx_soft_clip(y) // кубический клиппер (мягкий)          
+                        : tx_clip(y);     // жёсткий клиппер        
+    y = tx_dc_block(y);               // ФВЧ ~20 Гц: страховка от DC      
+    y = tx_fir_push(&tx_post, y);     // срез гармоник клиппинга      
     if (tx_notch_on) {                // узкие нотчи против тонов-наводок  
         y = tx_notch(y, n1_b1, n1_a1, n1_a2, &n1_x1, &n1_x2, &n1_y1, &n1_y2);  
         y = tx_notch(y, n2_b1, n2_a1, n2_a2, &n2_x1, &n2_x2, &n2_y1, &n2_y2);  
@@ -1237,3 +1255,19 @@ void af_tx_set_txeqf(uint8_t band, uint32_t hz) {
 uint32_t af_tx_txeqf(uint8_t band) {  
     return (band <= 2) ? txeq_freq_hz[band] : 0;  
 }  
+
+// --- Bypass-флаги блоков (1 = в тракте) ---  
+void af_tx_set_band_on(bool on)  { txband_on  = on ? 1 : 0; }  
+bool af_tx_band_on(void)         { return txband_on != 0; }  
+void af_tx_set_txeq_on(bool on)  { txeq_on    = on ? 1 : 0; }  
+bool af_tx_txeq_on(void)         { return txeq_on != 0; }  
+void af_tx_set_agc_on(bool on)   { txagc_on   = on ? 1 : 0; }  
+bool af_tx_agc_on(void)          { return txagc_on != 0; }  
+void af_tx_set_gate_on(bool on)  { txgate_on  = on ? 1 : 0; }  
+bool af_tx_gate_on(void)         { return txgate_on != 0; }  
+void af_tx_set_comp_on(bool on)  { txcomp_on  = on ? 1 : 0; }  
+bool af_tx_comp_on(void)         { return txcomp_on != 0; }  
+void af_tx_set_clip_on(bool on)  { txclip_on  = on ? 1 : 0; }  
+bool af_tx_clip_on(void)         { return txclip_on != 0; }  
+void af_tx_set_shelf_on(bool on) { txshelf_on = on ? 1 : 0; }  
+bool af_tx_shelf_on(void)        { return txshelf_on != 0; }  
