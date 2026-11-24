@@ -184,7 +184,15 @@ class Panel(tk.Tk):
         self.spec_peak = -80.0      # peak-hold уровень, дБ  
         self.spec_peak_f = 0.0      # частота последнего пика, Гц    
         self.spec_hold = None       # послесвечение: max по бинам с затуханием (np.array)      
-        self.spec_last = None       # (freqs, db) последнего кадра — для кнопки "Скрин"    
+        self.spec_last = None       # (freqs, db) последнего кадра — для кнопки "Скрин"      
+        self.snr_avg = None         # EMA-сглаженный SNR (~3 кадра)    
+        self.snr_disp = None        # отображаемое значение, обновляется раз в 1 с    
+        self.snr_next_ms = 0        # время следующего обновления цифр SNR и M/S    
+        self.ms_avg = None          # EMA-сглаженные (mark, space) RTTY    
+        self.ms_disp = None         # отображаемые (mark, space), раз в 1 с    
+        self.thd_avg = None         # EMA THD, дБ    
+        self.sinad_avg = None       # EMA SINAD, дБ    
+        self.ts_disp = None         # отображаемые (thd, sinad), раз в 1 с    
         self.spec_full = False      # спектр развёрнут на всё окно (dblclick)    
         self.cmd_hist = []          # история введённых команд (стрелки вверх/вниз)  
         self.cmd_hist_i = 0         # позиция в истории; len = после последней  
@@ -527,7 +535,15 @@ class Panel(tk.Tk):
         self.spec_buf = None    
         self.spec_peak = -80.0      
         self.spec_peak_f = 0.0    
-        self.spec_hold = None  
+        self.spec_hold = None    
+        self.snr_avg = None      
+        self.snr_disp = None    
+        self.snr_next_ms = 0    
+        self.ms_avg = None    
+        self.ms_disp = None    
+        self.thd_avg = None    
+        self.sinad_avg = None    
+        self.ts_disp = None    
         while not self.spec_q.empty():        
             try:    
                 self.spec_q.get_nowait()    
@@ -688,9 +704,9 @@ class Panel(tk.Tk):
                 band_on = (int(p_band["var"].get()) == 1)  
             except (ValueError, tk.TclError):  
                 band_on = True  
-        if band_on:    
-            lo = hi = None  
-            for lbl in ("band lo", "band hi"):  # маркеры полосы ПФ        
+        lo = hi = None    
+        if band_on:      
+            for lbl in ("band lo", "band hi"):  # маркеры полосы ПФ              
                 p = self.params.get(lbl)        
                 if p:        
                     try:        
@@ -748,21 +764,124 @@ class Panel(tk.Tk):
                 self.spec_peak_f = float(freqs[mpk][pk])    
             else:  
                 self.spec_peak = max(-80.0, self.spec_peak - 0.5)    
-            py = np.clip(-self.spec_peak, 0, 80) / 80.0 * plot_h      
-            cv.create_line(0, py, w, py, fill="#ffff00", dash=(2, 4))    
-            cv.create_rectangle(w - 62, 2, w - 2, 30, fill="#101010",    
-                                outline="")   # подложка под подписи    
-            cv.create_text(w - 4, 4, text=f"{self.spec_peak:.0f} dB",    
-                           fill="#ffff00", anchor="ne",    
+            py = np.clip(-self.spec_peak, 0, 80) / 80.0 * plot_h        
+            cv.create_line(0, py, w, py, fill="#ffff00", dash=(2, 4))      
+            cv.create_rectangle(w - 62, 2, w - 2, 30, fill="#101010",      
+                                outline="")   # подложка под подписи      
+            cv.create_text(w - 4, 4, text=f"{self.spec_peak:.0f} dB",      
+                           fill="#ffff00", anchor="ne",      
+                           font=("TkDefaultFont", 8))      
+            cv.create_text(w - 4, 18, text=f"{self.spec_peak_f:.0f} Гц",      
+                           fill="#ffff00", anchor="ne",      
+                           font=("TkDefaultFont", 8))      
+  
+            # SNR: пик к медианному шуму. Полоса измерения — ПФ с отступом    
+            # 10% от краёв (скаты фильтра не считаем сигналом); если фильтр    
+            # выключен или границ нет — вся полоса отрисовки 0..6 кГц.    
+            fm = freqs[m]      
+            dbu = db[m]                       # необрезанный — для медианы шума  
+            if lo is not None and hi is not None and hi > lo:      
+                pad = 0.1 * (hi - lo)      
+                sm = (fm >= lo + pad) & (fm <= hi - pad)      
+            else:      
+                sm = np.ones(len(fm), dtype=bool)      
+            if sm.any():        
+                snr = float(dbu[sm].max() - np.median(dbu[sm]))        
+            else:        
+                snr = float(dbu.max() - np.median(dbu))            
+            # EMA только на число: спектр мгновенный, подпись не пляшет    
+            if self.snr_avg is None:    
+                self.snr_avg = snr    
+            else:    
+                self.snr_avg = 0.3 * snr + 0.7 * self.snr_avg   # ~3 кадра    
+            now_ms = int(time.monotonic() * 1000)    
+            tick = False    
+            if self.snr_disp is None or now_ms >= self.snr_next_ms:      
+                self.snr_disp = self.snr_avg      
+                self.snr_next_ms = now_ms + 1000          # цифра — раз в 1 с      
+                tick = True    
+            cv.create_rectangle(2, 20, 78, 34, fill="#101010", outline="")    
+            cv.create_text(4, 22, text=f"SNR {self.snr_disp:.0f} дБ",    
+                           fill="#00ccff", anchor="nw",    
+                           font=("TkDefaultFont", 8))        
+  
+            # THD / SINAD — второй столбец, от мгновенного пика (тот же    
+            # бин, что цифра в правом верхнем углу).    
+            magm = mag[m]    
+            i0 = int(np.argmax(magm))    
+            f0 = fm[i0]    
+            # Мощность сигнала: ±3 бина вокруг пика (главный лепесток окна).    
+            i_lo, i_hi = max(0, i0 - 3), min(len(magm), i0 + 4)    
+            p_sig = float(np.sum(magm[i_lo:i_hi] ** 2))    
+            # THD: гармоники 2f0..Nf0 в полосе измерения sm.    
+            p_harm = 0.0    
+            k = 2    
+            while k * f0 <= fm[-1]:    
+                ih = int(np.argmin(np.abs(fm - k * f0)))    
+                h_lo, h_hi = max(0, ih - 1), min(len(magm), ih + 2)    
+                p_harm += float(np.sum(magm[h_lo:h_hi] ** 2))    
+                k += 1    
+            thd_db = 10.0 * np.log10((p_harm + 1e-12) / (p_sig + 1e-12))    
+            # SINAD: сигнал / (всё остальное в полосе измерения).    
+            p_band = float(np.sum(magm[sm] ** 2)) if sm.any() \
+                else float(np.sum(magm ** 2))    
+            sinad_db = 10.0 * np.log10((p_sig + 1e-12)      
+                                       / max(p_band - p_sig, 1e-12))      
+            if self.thd_avg is None:    
+                self.thd_avg, self.sinad_avg = thd_db, sinad_db    
+            else:    
+                self.thd_avg = 0.3 * thd_db + 0.7 * self.thd_avg    
+                self.sinad_avg = 0.3 * sinad_db + 0.7 * self.sinad_avg    
+            if self.ts_disp is None or tick:    
+                self.ts_disp = (self.thd_avg, self.sinad_avg)    
+            cv.create_rectangle(82, 20, 160, 48, fill="#101010", outline="")    
+            cv.create_text(84, 22, text=f"THD {self.ts_disp[0]:.0f} дБ",    
+                           fill="#00ccff", anchor="nw",    
                            font=("TkDefaultFont", 8))    
-            cv.create_text(w - 4, 18, text=f"{self.spec_peak_f:.0f} Гц",    
-                           fill="#ffff00", anchor="ne",    
-                           font=("TkDefaultFont", 8))    
-        self.after(80, self._spec_draw)      
+            cv.create_text(84, 36, text=f"SINAD {self.ts_disp[1]:.0f} дБ",    
+                           fill="#00ccff", anchor="nw",    
+                           font=("TkDefaultFont", 8))        
+  
+            # Частоты режимов — справа внизу, над подписями сетки.      
+            if self.mode_vars.get("rtty") and self.mode_vars["rtty"].get():      
+                # RTTY: два сильнейших пика с разносом >= 100 Гц -> mark/space.      
+                i1 = int(np.argmax(dbm))      
+                far = np.abs(fm - fm[i1]) >= 100.0      
+                if far.any():      
+                    i2 = int(np.argmax(np.where(far, dbm, -80.0)))      
+                    f_mark, f_space = max(fm[i1], fm[i2]), min(fm[i1], fm[i2])      
+                    # EMA ~3 кадра на обе частоты — как у SNR  
+                    if self.ms_avg is None:  
+                        self.ms_avg = (f_mark, f_space)  
+                    else:  
+                        self.ms_avg = (0.3 * f_mark + 0.7 * self.ms_avg[0],  
+                                       0.3 * f_space + 0.7 * self.ms_avg[1])  
+                    # Цифры — раз в 1 с, на том же тике, что и SNR    
+                    if self.ms_disp is None or tick:    
+                        self.ms_disp = self.ms_avg    
+                    cv.create_rectangle(w - 92, plot_h - 30, w - 2, plot_h - 2,      
+                                        fill="#101010", outline="")      
+                    cv.create_text(w - 4, plot_h - 28,      
+                                   text=f"M {self.ms_disp[0]:.0f} Гц",      
+                                   fill="#ffaa00", anchor="ne",      
+                                   font=("TkDefaultFont", 8))      
+                    cv.create_text(w - 4, plot_h - 14,      
+                                   text=f"S {self.ms_disp[1]:.0f} Гц",      
+                                   fill="#ffaa00", anchor="ne",      
+                                   font=("TkDefaultFont", 8))       
+            elif self.mode_vars.get("cw") and self.mode_vars["cw"].get():    
+                # CW: частота тона = частота пика спектра.    
+                cv.create_rectangle(w - 92, plot_h - 16, w - 2, plot_h - 2,    
+                                    fill="#101010", outline="")    
+                cv.create_text(w - 4, plot_h - 14,    
+                               text=f"CW {self.spec_peak_f:.0f} Гц",    
+                               fill="#ffaa00", anchor="ne",    
+                               font=("TkDefaultFont", 8))    
+        self.after(80, self._spec_draw)            
 
     def _spec_shot(self):  
         # Снимок спектра в высоком разрешении: перерисовка последнего  
-        # кадра через Pillow в PNG 1920x720. Без Pillow — fallback на  
+        # кадра через Pillow в 1920x1080. Без Pillow — fallback на  
         # postscript виджета (вектор, конвертируется в PDF/PNG).  
         fname = time.strftime("spec_%Y%m%d_%H%M%S")  
         try:  
@@ -860,15 +979,56 @@ class Panel(tk.Tk):
                 tw2 = dr.textlength(t, font=fnt_sm)  
                 dr.rectangle([4, y, 12 + tw2, y + 24], fill="#101010")  
                 dr.text((6, y + 2), t, fill="#888888", font=fnt_sm)  
-            for fk in range(1000, fmax, 1000):  
-                x = fk / fmax * W  
-                t = f"{fk // 1000} кГц"  
-                tw2 = dr.textlength(t, font=fnt_sm)  
-                dr.rectangle([x + 2, plot_h + 4, x + 8 + tw2, plot_h + 30],  
-                             fill="#101010")  
+            for fk in range(1000, fmax, 1000):    
+                x = fk / fmax * W    
+                t = f"{fk // 1000} кГц"    
+                tw2 = dr.textlength(t, font=fnt_sm)    
+                dr.rectangle([x + 2, plot_h + 4, x + 8 + tw2, plot_h + 30],    
+                             fill="#101010")    
                 dr.text((x + 4, plot_h + 6), t, fill="#888888", font=fnt_sm)  
-            try:    
-                img.save(fname + ".png")    
+            # SNR — слева вверху под подписью полосы, шрифтом маркеров (fnt)      
+            if self.snr_avg is not None:      
+                t = f"SNR {self.snr_avg:.0f} дБ"      
+                tw2 = dr.textlength(t, font=fnt)      
+                dr.rectangle([4, 40, 14 + tw2, 70], fill="#101010")      
+                dr.text((6, 42), t, fill="#00ccff", font=fnt)      
+            # THD / SINAD — вторым столбцом, как на экране  
+            if self.ts_disp is not None:  
+                t1 = f"THD {self.ts_disp[0]:.0f} дБ"  
+                t2 = f"SINAD {self.ts_disp[1]:.0f} дБ"  
+                tw = max(dr.textlength(t1, font=fnt),  
+                         dr.textlength(t2, font=fnt))  
+                dr.rectangle([160, 40, 170 + tw, 104], fill="#101010")  
+                dr.text((164, 42), t1, fill="#00ccff", font=fnt)  
+                dr.text((164, 74), t2, fill="#00ccff", font=fnt)    
+            # Частоты режимов — справа внизу, над подписями сетки  
+            if self.mode_vars.get("rtty") and self.mode_vars["rtty"].get():  
+                i1 = int(np.argmax(dbv))  
+                far = np.abs(fr - fr[i1]) >= 100.0  
+                if far.any():  
+                    i2 = int(np.argmax(np.where(far, dbv, -80.0)))    
+                    f_mark, f_space = max(fr[i1], fr[i2]), min(fr[i1], fr[i2])    
+                    if self.ms_avg is not None:    
+                        f_mark, f_space = self.ms_avg   # сглаженные, как на экране    
+                    t1 = f"M {f_mark:.0f} Гц"      
+                    t2 = f"S {f_space:.0f} Гц"    
+                    tw = max(dr.textlength(t1, font=fnt),    
+                             dr.textlength(t2, font=fnt))    
+                    dr.rectangle([W - 16 - tw, plot_h - 64, W - 6, plot_h - 4],    
+                                 fill="#101010")    
+                    dr.text((W - 10 - dr.textlength(t1, font=fnt),    
+                             plot_h - 60), t1, fill="#ffaa00", font=fnt)    
+                    dr.text((W - 10 - dr.textlength(t2, font=fnt),    
+                             plot_h - 32), t2, fill="#ffaa00", font=fnt)    
+            elif self.mode_vars.get("cw") and self.mode_vars["cw"].get():    
+                t = f"CW {self.spec_peak_f:.0f} Гц"    
+                tw2 = dr.textlength(t, font=fnt)    
+                dr.rectangle([W - 16 - tw2, plot_h - 36, W - 6, plot_h - 4],    
+                             fill="#101010")    
+                dr.text((W - 10 - tw2, plot_h - 32), t,    
+                        fill="#ffaa00", font=fnt)    
+            try:      
+                img.save(fname + ".png")      
                 self._log(f"# скрин: {fname}.png ({W}x{H})")  
             except Exception as e:  
                 self._log(f"# скрин не удался: {e}")  
