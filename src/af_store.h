@@ -16,6 +16,11 @@
 #define AF_CW_MSGS     4  
 #define AF_CW_MSG_LEN  64    // включая '\0' — строка до 63 символов  
   
+#define AF_STORE_VER      11  // было 10: +rxeq_*/txeq_* (3-полосный EQ) в af_bank_t.    
+                            // Старые банки невалидны.      
+                            // CW.TXT живёт в том же секторе по смещению 0x800      
+                            // со своим magic 'CW'+ver+crc — версию банков не меняет.   
+
 extern char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];  
   
 void af_store_cw_init(void);   // чтение из образа сектора (в af_store_init)  

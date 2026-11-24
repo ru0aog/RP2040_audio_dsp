@@ -51,14 +51,10 @@
 #include "hardware/flash.h"  
 #include "pico/flash.h"  
 #include "pico/multicore.h"
-  
+
 #define AF_STORE_MAGIC0   'A'    
 #define AF_STORE_MAGIC1   'F'    
-#define AF_STORE_VER      11  // было 10: +rxeq_*/txeq_* (3-полосный EQ) в af_bank_t.    
-                            // Старые банки невалидны.      
-                            // CW.TXT живёт в том же секторе по смещению 0x800      
-                            // со своим magic 'CW'+ver+crc — версию банков не меняет.       
-  
+
 // Смещение сектора банков от начала flash — последний сектор чипа.  
 // Активный вариант: от PICO_FLASH_SIZE_BYTES (совпадает с сектором  
 // EEPROM-эмуляции ядра Philhower). ВНИМАНИЕ: при сборке под 4 МБ  

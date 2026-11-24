@@ -6,6 +6,14 @@
 #pragma once  
   
 #include <Arduino.h>  
+
+
+// Версия прошивки и схемы params dump — для handshake внешней панели (tools/af_panel.py).  
+#define AF_FW_NAME            "RP2040_audio_dsp"  
+#define AF_FW_VER             "2026.11.24"   // дата релиза, править вручную  
+#define AF_PARAMS_SCHEMA_VER  1              // формат 'params dump'; bump при смене полей  
+
+
   
 // ---------------------------------------------------------------------------
 // Захват: ADC + DMA

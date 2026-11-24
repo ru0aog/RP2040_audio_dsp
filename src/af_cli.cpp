@@ -1109,6 +1109,39 @@ static void cli_exec(char* line) {
     }
     else if (strcmp(cmd, "stats") == 0) {    
         cli_stats();    
+    }
+    else if (strcmp(cmd, "version") == 0) {  
+        Serial.printf("# version: %s %s (schema=%u store=%u)\n",  
+                      AF_FW_NAME, AF_FW_VER,  
+                      (unsigned)AF_PARAMS_SCHEMA_VER, (unsigned)AF_STORE_VER);  
+    }  
+    else if (strcmp(cmd, "params") == 0) {  
+        char* sub = strtok(NULL, " \t");  
+        if (sub && strcmp(sub, "dump") == 0) {  
+            // cur = значение ЖИВОГО тракта (af_store_snapshot), не банковской ячейки.  
+            // После load N дамп устаревает — программа должна перезапросить.  
+            af_bank_t cur;  
+            af_store_snapshot(&cur);  
+            Serial.printf("# params begin count=%u\n", (unsigned)AF_PARAMS_COUNT);  
+            for (size_t i = 0; i < AF_PARAMS_COUNT; i++) {  
+                const af_param_t* p = &AF_PARAMS[i];  
+                if (p->type == PT_SEP) {  
+                    Serial.printf("# S|%s\n", p->label);   // разделитель секций  
+                    continue;  
+                }  
+                const char* tn =  
+                    (p->type == PT_ONOFF) ? "onoff" :  
+                    (p->type == PT_U8)    ? "u8"    :  
+                    (p->type == PT_I16)   ? "i16"   :  
+                    (p->type == PT_X100)  ? "x100"  :  
+                    (p->type == PT_GAIN)  ? "gain"  : "u16";  
+                Serial.printf("P|%s|%s|%ld|1\n",  
+                              p->label, tn, (long)bank_field(&cur, p));  
+            }  
+            Serial.println("# params end");  
+        } else {  
+            Serial.println("# ERR: params dump");  
+        }  
     }  
     else if (strcmp(cmd, "fmap") == 0) {  
         cli_fmap();  
