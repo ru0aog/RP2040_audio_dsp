@@ -25,13 +25,15 @@ git rm --cached firmware.map
 git commit -m "Remove firmware.map build artifact"
 git push --force
 
+
+
 Принудительно забрать изменения с гитхаб
 git reset --hard HEAD
 git clean -fd
 git pull origin main
 
-Забрать изменения с гитхаб
-git pull origin main
+Пересборка exe
+tools\build_exe.bat
 
 Залить локальные изменения на GitHub
 git add .

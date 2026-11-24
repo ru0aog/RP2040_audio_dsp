@@ -78,7 +78,7 @@ class SerialWorker:
 class Panel(tk.Tk):  
     def __init__(self):  
         super().__init__()  
-        self.title("RP2040 audio DSP — панель настроек")  
+        self.title("RP2040 audio DSP by RU0AOG 2026 — панель настроек")  
         self.geometry("980x640")  
   
         self.w = SerialWorker()  
