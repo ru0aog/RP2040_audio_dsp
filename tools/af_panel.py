@@ -593,10 +593,12 @@ class Panel(tk.Tk):
                                            fill="#ff5555", dash=(3, 2))        
                     except (ValueError, tk.TclError):        
                         pass  
-            if lo is not None and hi is not None:  
-                cv.create_text(4, 4, text=f"{lo:.0f}–{hi:.0f} Гц",  
-                               fill="#ff5555", anchor="nw",  
-                               font=("TkDefaultFont", 8))  
+            if lo is not None and hi is not None:    
+                cv.create_rectangle(2, 2, 92, 16, fill="#101010",    
+                                    outline="")   # подложка под подпись    
+                cv.create_text(4, 4, text=f"{lo:.0f}–{hi:.0f} Гц",    
+                               fill="#ff5555", anchor="nw",    
+                               font=("TkDefaultFont", 8))    
         if self.spec_buf is not None and len(self.spec_buf) >= self.SPEC_NFFT:      
             win = np.hanning(self.SPEC_NFFT)  
             seg = self.spec_buf[-self.SPEC_NFFT:]  
@@ -634,14 +636,16 @@ class Panel(tk.Tk):
                 self.spec_peak_f = float(freqs[mpk][pk])    
             else:  
                 self.spec_peak = max(-100.0, self.spec_peak - 0.5)  
-            py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h  
-            cv.create_line(0, py, w, py, fill="#ffff00", dash=(2, 4))  
-            cv.create_text(w - 4, 4, text=f"{self.spec_peak:.0f} dB",  
-                           fill="#ffff00", anchor="ne",  
-                           font=("TkDefaultFont", 8))  
-            cv.create_text(w - 4, 18, text=f"{self.spec_peak_f:.0f} Гц",  
-                           fill="#ffff00", anchor="ne",  
-                           font=("TkDefaultFont", 8))  
+            py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h    
+            cv.create_line(0, py, w, py, fill="#ffff00", dash=(2, 4))    
+            cv.create_rectangle(w - 62, 2, w - 2, 30, fill="#101010",    
+                                outline="")   # подложка под подписи    
+            cv.create_text(w - 4, 4, text=f"{self.spec_peak:.0f} dB",    
+                           fill="#ffff00", anchor="ne",    
+                           font=("TkDefaultFont", 8))    
+            cv.create_text(w - 4, 18, text=f"{self.spec_peak_f:.0f} Гц",    
+                           fill="#ffff00", anchor="ne",    
+                           font=("TkDefaultFont", 8))    
         self.after(80, self._spec_draw)      
 
     def _spec_shot(self):  
@@ -653,19 +657,35 @@ class Panel(tk.Tk):
             from PIL import Image, ImageDraw  
         except ImportError:  
             Image = None  
-        if Image is not None and self.spec_last is not None:  
-            W, H, fmax = 1920, 720, 6000  
-            plot_h = H - 40  
-            img = Image.new("RGB", (W, H), "#101010")  
-            dr = ImageDraw.Draw(img)  
-            for dbv in (-20, -40, -60, -80):  
-                y = -dbv / 100.0 * plot_h  
-                dr.line([(0, y), (W, y)], fill="#303030")  
-                dr.text((4, y + 2), str(dbv), fill="#888888")  
-            for f in range(1000, fmax, 1000):  
-                x = f / fmax * W  
-                dr.line([(x, 0), (x, plot_h)], fill="#303030")  
-                dr.text((x + 2, H - 36), f"{f // 1000}k", fill="#888888")  
+        if Image is not None and self.spec_last is not None:    
+            W, H, fmax = 1920, 1080, 6000    
+            plot_h = H - 40    
+            img = Image.new("RGB", (W, H), "#101010")    
+            dr = ImageDraw.Draw(img)    
+            # TrueType с кириллицей; без него — дефолтный bitmap (мелкий, без рус.)    
+            try:    
+                from PIL import ImageFont    
+                fnt = ImageFont.truetype("arial.ttf", 22)    
+                fnt_sm = ImageFont.truetype("arial.ttf", 18)    
+            except Exception:    
+                try:    
+                    fnt = ImageFont.truetype("DejaVuSans.ttf", 22)    
+                    fnt_sm = ImageFont.truetype("DejaVuSans.ttf", 18)    
+                except Exception:    
+                    fnt = fnt_sm = ImageFont.load_default()    
+            def dash_line(x0, y0, x1, y1, fill, dash=8, gap=6, width=2):    
+                # PIL не умеет пунктир — рисуем штрихи вручную (вертикаль)    
+                y = y0    
+                while y < y1:    
+                    dr.line([(x0, y), (x1, min(y + dash, y1))],    
+                            fill=fill, width=width)    
+                    y += dash + gap    
+            for dbv in (-20, -40, -60, -80):      
+                y = -dbv / 100.0 * plot_h      
+                dr.line([(0, y), (W, y)], fill="#303030")      
+            for f in range(1000, fmax, 1000):      
+                x = f / fmax * W      
+                dr.line([(x, 0), (x, plot_h)], fill="#303030")       
             p_band = self.params.get("rx band")  
             band_on = True  
             if p_band:  
@@ -684,27 +704,59 @@ class Panel(tk.Tk):
                                 lo = fx  
                             else:  
                                 hi = fx  
-                            if 0 < fx < fmax:  
-                                x = fx / fmax * W  
-                                dr.line([(x, 0), (x, plot_h)], fill="#ff5555")  
-                        except (ValueError, tk.TclError):  
-                            pass  
-                if lo is not None and hi is not None:  
-                    dr.text((8, 6), f"{lo:.0f}-{hi:.0f} Гц", fill="#ff5555")  
-            fr, dbv = self.spec_last  
-            pts = [(float(f / fmax * W),  
-                    float(np.clip(-d, 0, 100) / 100.0 * plot_h))  
-                   for f, d in zip(fr, dbv)]  
-            if len(pts) >= 2:  
-                dr.line(pts, fill="#00ff00", width=3)  
-            py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h  
-            dr.line([(0, py), (W, py)], fill="#ffff00")  
-            t1 = f"{self.spec_peak:.0f} dB"  
-            t2 = f"{self.spec_peak_f:.0f} Гц"  
-            dr.text((W - 8 - dr.textlength(t1), 6), t1, fill="#ffff00")  
-            dr.text((W - 8 - dr.textlength(t2), 22), t2, fill="#ffff00")  
-            try:  
-                img.save(fname + ".png")  
+                            if 0 < fx < fmax:    
+                                x = fx / fmax * W    
+                                dash_line(x, 0, x, plot_h, "#7a2a2a")      
+                        except (ValueError, tk.TclError):    
+                            pass    
+                if lo is not None and hi is not None:      
+                    t = f"{lo:.0f}–{hi:.0f} Гц"    
+                    tw = dr.textlength(t, font=fnt)    
+                    dr.rectangle([6, 4, 14 + tw, 34], fill="#101010")    
+                    dr.text((10, 8), t, fill="#ff5555", font=fnt)      
+            fr, dbv = self.spec_last    
+            # послесвечение — тёмно-зелёным под живой линией  
+            if self.spec_hold is not None and len(self.spec_hold) == len(dbv):  
+                hpts = [(float(f / fmax * W),  
+                         float(np.clip(-d, 0, 100) / 100.0 * plot_h))  
+                        for f, d in zip(fr, self.spec_hold)]  
+                if len(hpts) >= 2:  
+                    dr.line(hpts, fill="#0a5a0a", width=2)  
+            pts = [(float(f / fmax * W),    
+                    float(np.clip(-d, 0, 100) / 100.0 * plot_h))    
+                   for f, d in zip(fr, dbv)]    
+            if len(pts) >= 2:    
+                dr.line(pts, fill="#00ff00", width=3)    
+            py = np.clip(-self.spec_peak, 0, 100) / 100.0 * plot_h    
+            x = 0    
+            while x < W:   # горизонтальный пунктир    
+                dr.line([(x, py), (min(x + 8, W), py)], fill="#8a8a20", width=2)      
+                x += 14    
+            t1 = f"{self.spec_peak:.0f} дБ"      
+            t2 = f"{self.spec_peak_f:.0f} Гц"      
+            tw = max(dr.textlength(t1, font=fnt),    
+                     dr.textlength(t2, font=fnt))    
+            dr.rectangle([W - 18 - tw, 4, W - 6, 66], fill="#101010")    
+            dr.text((W - 10 - dr.textlength(t1, font=fnt), 8),      
+                    t1, fill="#ffff00", font=fnt)      
+            dr.text((W - 10 - dr.textlength(t2, font=fnt), 40),        
+                    t2, fill="#ffff00", font=fnt)        
+            # Подписи сетки — последними, поверх всех линий, на подложках  
+            for dbv in (-20, -40, -60, -80):  
+                y = -dbv / 100.0 * plot_h  
+                t = f"{dbv} дБ"  
+                tw2 = dr.textlength(t, font=fnt_sm)  
+                dr.rectangle([4, y, 12 + tw2, y + 24], fill="#101010")  
+                dr.text((6, y + 2), t, fill="#888888", font=fnt_sm)  
+            for fk in range(1000, fmax, 1000):  
+                x = fk / fmax * W  
+                t = f"{fk // 1000} кГц"  
+                tw2 = dr.textlength(t, font=fnt_sm)  
+                dr.rectangle([x + 2, plot_h + 4, x + 8 + tw2, plot_h + 30],  
+                             fill="#101010")  
+                dr.text((x + 4, plot_h + 6), t, fill="#888888", font=fnt_sm)  
+            try:    
+                img.save(fname + ".png")    
                 self._log(f"# скрин: {fname}.png ({W}x{H})")  
             except Exception as e:  
                 self._log(f"# скрин не удался: {e}")  
