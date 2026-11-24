@@ -622,9 +622,9 @@ class Panel(tk.Tk):
         if self.spec_buf is not None and len(self.spec_buf) >= self.SPEC_NFFT:      
             win = np.hanning(self.SPEC_NFFT)  
             seg = self.spec_buf[-self.SPEC_NFFT:]  
-            seg = seg - np.mean(seg)          # убрать DC до окна  
-            mag = np.abs(np.fft.rfft(seg * win))   
-            db = 20 * np.log10(mag / (self.SPEC_NFFT / 2) + 1e-9)    
+            seg = seg - np.mean(seg)  
+            mag = np.abs(np.fft.rfft(seg * win))  
+            db = 20 * np.log10(mag / (win.sum() / 2) + 1e-9)   # компенсация ~6 дБ окна  
             freqs = np.fft.rfftfreq(self.SPEC_NFFT, 1.0 / self.spec_fs)      
             m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем      
             dbm = np.clip(db[m], -80.0, 0.0)      

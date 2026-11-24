@@ -1,12 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
+binaries = []
+binaries += collect_dynamic_libs('sounddevice')
 
 
 a = Analysis(
     ['tools\\af_panel.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=[],
-    hiddenimports=[],
+    hiddenimports=['sounddevice', 'numpy', 'PIL'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
