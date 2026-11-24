@@ -6,9 +6,9 @@
 //   RX:  band nt nr rxnotch cw agc gain bypass      
 //        agcref agcmax agcmin limceil nrdepth nrmakeup ntmu nrmu      
 //        "rx pres" "rx presmax" "rx pres f" "rx pres q" (метки AF_PARAMS)    
-//        "rx shelf" "rx shelf f" "rx shelf q" "rx exc" "rx excmix" (AF_PARAMS)  
-//        "nb" "nb thr" (метки AF_PARAMS)        
-//        cw dec|wpm — CW-декодер (морзянка -> текст в Serial)    
+//        "rx shelf" "rx shelf f" "rx shelf q" "rx exc" "rx excmix" (AF_PARAMS)
+//        "nb" "nb thr" (метки AF_PARAMS)
+//        cw dec|wpm — CW-декодер (морзянка -> текст в Serial)
 //   TX:  tx txband txap txagc txagcmax txgate txgatehold txgatehyst txgfloor  
 //        tx2band txsplit txlr2 txcomp txcompthr txcompthrlo txcompthrhi  
 //        txduck txduckmax txintel txinteltgt txintelcut txintelboost  
@@ -165,7 +165,7 @@ static void cli_help(void) {
     Serial.println("#   rec               — запись в RAM (~7.8 с, источник = активный тракт)");      
     Serial.println("#   play              — воспроизведение (запись — в активный тракт; пусто — voice_14 в TX+PTT)");        
     Serial.println("#   stop              — стоп записи/воспроизведения");    
-    Serial.println("#   recs              — состояние слота");    
+    Serial.println("#   recs              — состояние слотов 1..4 (слот = селектор GP13/GP28)");      
     Serial.println("#   help / h / ?      — эта справка");      
     Serial.println("# === GPIO ===");    
     Serial.println("# GPIO: GP2-4=банк GP5=NR GP6=NT GP7=bypass GP8=PTT GP9=rec GP10=play");  
@@ -749,7 +749,7 @@ static void tx_apply_profile(uint8_t idx) {
 // off — смещение поля в af_bank_t (для печати колонок cur/1..7).  
 // set — сеттер DSP (для команд вида "<метка> <значение>").  
 // ---------------------------------------------------------------------------  
-typedef enum { PT_U16, PT_U8, PT_I16, PT_ONOFF, PT_X100, PT_GAIN, PT_SEP } ptype_t;    
+typedef enum { PT_U16, PT_U8, PT_I16, PT_ONOFF, PT_X100, PT_GAIN, PT_SEP, PT_U32 } ptype_t;
   
 typedef struct {  
     const char* label;                 // "band lo", "tx pres f" — и команда  
@@ -813,7 +813,7 @@ static const af_param_t AF_PARAMS[] = {
     { "agc min",     PT_X100,  offsetof(af_bank_t, agc_min_x100),   p_set_agcmin },  
     { "lim ceil",    PT_U16,   offsetof(af_bank_t, lim_ceil),       P_SET(af_dsp_set_limceil) },  
     { "nr depth",    PT_U16,   offsetof(af_bank_t, nr_depth),       P_SET(af_dsp_set_nrdepth) },  
-    { "nr makeup",   PT_U16,   offsetof(af_bank_t, nr_makeup),      P_SET(af_dsp_set_nrmakeup) },  
+    { "nr makeup",   PT_U32,   offsetof(af_bank_t, nr_makeup),      P_SET(af_dsp_set_nrmakeup) },    
     { "nt mu",       PT_U16,   offsetof(af_bank_t, nt_mu),          P_SET(af_dsp_set_ntmu) },  
     { "nr mu",       PT_U16,   offsetof(af_bank_t, nr_mu),          P_SET(af_dsp_set_nrmu) },  
     { "rx pres",     PT_ONOFF, offsetof(af_bank_t, rx_pres_on),     P_SET(af_dsp_set_rxpres) },    
@@ -880,27 +880,29 @@ static const af_param_t AF_PARAMS[] = {
 };    
 #define AF_PARAMS_COUNT  (sizeof(AF_PARAMS) / sizeof(AF_PARAMS[0]))  
   
-// Чтение поля банка по смещению (тип задаёт размер: u8/i16/u16).  
+// Чтение поля банка по смещению (тип задаёт размер: u8/i16/u16/u32).  
 static int32_t bank_field(const af_bank_t* b, const af_param_t* p) {  
     const uint8_t* base = (const uint8_t*)b;  
     switch (p->type) {    
         case PT_ONOFF:    
         case PT_U8:    return (int32_t)*(const uint8_t*)(base + p->off);    
-        case PT_I16:   return (int32_t)*(const int16_t*)(base + p->off);    
-        default:       return (int32_t)*(const uint16_t*)(base + p->off);    
+        case PT_I16:   return (int32_t)*(const int16_t*)(base + p->off);      
+        case PT_U32:   return (int32_t)*(const uint32_t*)(base + p->off);      
+        default:       return (int32_t)*(const uint16_t*)(base + p->off);      
     }    
 }  
 
 // Запись поля банка по смещению (зеркало bank_field).        
-static void bank_field_set(af_bank_t* b, const af_param_t* p, int32_t v) {      
-    uint8_t* base = (uint8_t*)b;      
-    switch (p->type) {      
-        case PT_ONOFF:      
-        case PT_U8:    *(uint8_t*)(base + p->off)  = (uint8_t)v;  break;      
-        case PT_I16:   *(int16_t*)(base + p->off)  = (int16_t)v;  break;      
-        default:       *(uint16_t*)(base + p->off) = (uint16_t)v; break;      
-    }      
-}      
+static void bank_field_set(af_bank_t* b, const af_param_t* p, int32_t v) {        
+    uint8_t* base = (uint8_t*)b;        
+    switch (p->type) {        
+        case PT_ONOFF:        
+        case PT_U8:    *(uint8_t*)(base + p->off)  = (uint8_t)v;  break;        
+        case PT_I16:   *(int16_t*)(base + p->off)  = (int16_t)v;  break;        
+        case PT_U32:   *(uint32_t*)(base + p->off) = (uint32_t)v; break;        
+        default:       *(uint16_t*)(base + p->off) = (uint16_t)v; break;        
+    }        
+}        
 
 // Диспетчер команд-меток: "<label> <value>" — longest match по таблице.  
 // Вызывается до strtok (строка ещё целая). true = команда обработана.  
@@ -1127,19 +1129,24 @@ static void cli_exec(char* line) {
             // После load N дамп устаревает — программа должна перезапросить.  
             af_bank_t cur;  
             af_store_snapshot(&cur);  
-            Serial.printf("# params begin count=%u\n", (unsigned)AF_PARAMS_COUNT);  
+            // count = число строк P| (PT_SEP выводится как S| и не считается).  
+            uint32_t count = 0;  
+            for (uint16_t i = 0; i < AF_PARAMS_COUNT; i++)  
+                if (AF_PARAMS[i].type != PT_SEP) ++count;  
+            Serial.printf("# params begin count=%lu\n", (unsigned long)count);  
             for (size_t i = 0; i < AF_PARAMS_COUNT; i++) {  
                 const af_param_t* p = &AF_PARAMS[i];  
                 if (p->type == PT_SEP) {  
                     Serial.printf("# S|%s\n", p->label);   // разделитель секций  
                     continue;  
                 }  
-                const char* tn =  
-                    (p->type == PT_ONOFF) ? "onoff" :  
-                    (p->type == PT_U8)    ? "u8"    :  
-                    (p->type == PT_I16)   ? "i16"   :  
-                    (p->type == PT_X100)  ? "x100"  :  
-                    (p->type == PT_GAIN)  ? "gain"  : "u16";  
+                const char* tn =    
+                    (p->type == PT_ONOFF) ? "onoff" :    
+                    (p->type == PT_U8)    ? "u8"    :    
+                    (p->type == PT_I16)   ? "i16"   :    
+                    (p->type == PT_X100)  ? "x100"  :    
+                    (p->type == PT_GAIN)  ? "gain"  :    
+                    (p->type == PT_U32)   ? "u32"   : "u16";    
                 Serial.printf("P|%s|%s|%ld|1\n",  
                               p->label, tn, (long)bank_field(&cur, p));  
             }  
