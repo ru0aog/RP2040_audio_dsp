@@ -186,7 +186,9 @@ class Panel(tk.Tk):
         self.spec_peak_f = 0.0      # частота последнего пика, Гц    
         self.spec_hold = None       # послесвечение: max по бинам с затуханием (np.array)      
         self.spec_last = None       # (freqs, db) последнего кадра — для кнопки "Скрин"    
-        self.spec_full = False      # спектр развёрнут на всё окно (dblclick)  
+        self.spec_full = False      # спектр развёрнут на всё окно (dblclick)    
+        self.cmd_hist = []          # история введённых команд (стрелки вверх/вниз)  
+        self.cmd_hist_i = 0         # позиция в истории; len = после последней  
         self.protocol("WM_DELETE_WINDOW", self._on_close)    
   
         self._build_top()      
@@ -308,16 +310,26 @@ class Panel(tk.Tk):
                                  highlightthickness=0)      
         self.spec_cv.pack(fill="x", padx=4, pady=4)      
         self.spec_cv.bind("<Double-Button-1>", lambda _e: self._spec_toggle_full())  
-        # height ограничивает высоту; bg — светло-серый фон лога.      
-        self.log = tk.Text(self.right_fr, width=42, height=14, state="disabled",      
-                           bg="#f0f0f0")              
-        self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)          
-        self.cmd_fr = ttk.Frame(self.right_fr)        
-        self.cmd_fr.pack(fill="x", padx=(0, 6), pady=(0, 2))        
-        self.cmd_var = tk.StringVar()        
-        e = ttk.Entry(self.cmd_fr, textvariable=self.cmd_var)        
-        e.pack(side="left", fill="x", expand=True)      
-        e.bind("<Return>", lambda _e: self._send_manual())      
+        # height ограничивает высоту; bg — светло-серый фон лога.  
+        # state="normal" + блокировка ввода: текст можно выделять и  
+        # копировать (Ctrl+C / ПКМ-выделение), но не редактировать.  
+        self.log = tk.Text(self.right_fr, width=42, height=14,  
+                           bg="#f0f0f0")  
+        self.log.pack(fill="both", expand=True, padx=(0, 6), pady=4)  
+        self.log.bind("<Key>", lambda _e: "break")          # read-only  
+        for ev in ("<<Paste>>", "<<Cut>>", "<<Clear>>"):  
+            self.log.bind(ev, lambda _e: "break")  
+        self.cmd_fr = ttk.Frame(self.right_fr)          
+        self.cmd_fr.pack(fill="x", padx=(0, 6), pady=(0, 2))          
+        self.cmd_var = tk.StringVar()          
+        e = ttk.Entry(self.cmd_fr, textvariable=self.cmd_var)          
+        e.pack(side="left", fill="x", expand=True)        
+        e.bind("<Return>", lambda _e: self._send_manual())  
+        # ПКМ — вставить из буфера (как Ctrl+V); стрелки — история команд.  
+        e.bind("<Button-3>", lambda _e: (e.event_generate("<<Paste>>"), "break")[1])  
+        e.bind("<Up>",   lambda _e: self._cmd_hist_move(-1))  
+        e.bind("<Down>", lambda _e: self._cmd_hist_move(+1))  
+        self.cmd_entry = e    
         ttk.Button(self.cmd_fr, text="Отправить", command=self._send_manual).pack(side="left", padx=4)             
         ttk.Button(self.cmd_fr, text="Очистить", command=self._log_clear).pack(side="left")      
         ttk.Button(self.cmd_fr, text="Скопировать", command=self._log_copy).pack(side="left", padx=(4, 0))      
@@ -329,16 +341,12 @@ class Panel(tk.Tk):
     def _refresh_ports(self):  
         self.port_cb["values"] = self._ports()  
   
-    def _log(self, s):    
-        self.log.configure(state="normal")    
-        self.log.insert("end", s + "\n")    
-        self.log.see("end")    
-        self.log.configure(state="disabled")    
-    
-    def _log_clear(self):    
-        self.log.configure(state="normal")    
-        self.log.delete("1.0", "end")    
-        self.log.configure(state="disabled")    
+    def _log(self, s):      
+        self.log.insert("end", s + "\n")      
+        self.log.see("end")      
+      
+    def _log_clear(self):      
+        self.log.delete("1.0", "end")      
     
     def _log_copy(self):    
         # Весь лог в буфер обмена (Text в disabled — читаем напрямую).    
@@ -864,11 +872,25 @@ class Panel(tk.Tk):
             self._pending += ["params dump", "state dump"]    
             self.after(300, self._send_next)   # дать плате ответить на load    
   
-    def _send_manual(self):  
-        cmd = self.cmd_var.get().strip()  
-        if cmd:  
-            self._cmd(cmd)  
-            self.cmd_var.set("")  
+    def _send_manual(self):    
+        cmd = self.cmd_var.get().strip()    
+        if cmd:    
+            self._cmd(cmd)    
+            if not self.cmd_hist or self.cmd_hist[-1] != cmd:  # без дублей подряд  
+                self.cmd_hist.append(cmd)  
+                del self.cmd_hist[:-100]                       # не более 100  
+            self.cmd_hist_i = len(self.cmd_hist)  
+            self.cmd_var.set("")    
+  
+    def _cmd_hist_move(self, d):  
+        # Стрелки вверх/вниз по истории команд; Down за последней — пустая строка.  
+        if not self.cmd_hist:  
+            return "break"  
+        self.cmd_hist_i = min(max(self.cmd_hist_i + d, 0), len(self.cmd_hist))  
+        self.cmd_var.set(self.cmd_hist[self.cmd_hist_i]  
+                         if self.cmd_hist_i < len(self.cmd_hist) else "")  
+        self.cmd_entry.icursor("end")   # курсор в конец подставленной строки  
+        return "break"  
   
     # --- rx processing --------------------------------------------------------  
     def _poll_rx(self):  
