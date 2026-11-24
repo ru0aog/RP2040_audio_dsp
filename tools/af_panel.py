@@ -200,8 +200,9 @@ class Panel(tk.Tk):
         self.paned = ttk.PanedWindow(self, orient="horizontal")    
         self.paned.pack(fill="both", expand=True)    
         self._build_table()    
-        self._build_bottom()    
-        self.after(50, self._poll_rx)    
+        self._build_bottom()      
+        self.after(50, self._poll_rx)      
+        self.after(400, self._auto_start)   # автовыбор порта/микрофона + старт  
   
     # --- layout -------------------------------------------------------------  
     def _build_top(self):  
@@ -347,6 +348,27 @@ class Panel(tk.Tk):
   
     def _refresh_ports(self):  
         self.port_cb["values"] = self._ports()  
+
+    def _auto_start(self):  
+        # Автостарт: первый порт кроме COM1 + USB-микрофон -> connect + монитор.  
+        # Порт: пропускаем COM1 (системный), берём первый оставшийся.  
+        if self.w.ser is None:  
+            ports = self._ports()  
+            port = next((p for p in ports if p.upper() != "COM1"), None)  
+            if port:  
+                self.port_var.set(port)  
+                self._connect()  
+            else:  
+                self._log("# auto: COM-порт не найден (кроме COM1)")  
+        # Микрофон: первое устройство с "usb" в имени.  
+        if sd is not None and self.audio_in is None:  
+            devs = self.audio_cb["values"]  
+            mic = next((d for d in devs if "usb" in d.lower()), None)  
+            if mic:  
+                self.audio_var.set(mic)  
+                self._audio_toggle()  
+            else:  
+                self._log("# auto: USB-микрофон не найден")  
 
     def _log(self, s):      
         self.log.insert("end", s + "\n")      
