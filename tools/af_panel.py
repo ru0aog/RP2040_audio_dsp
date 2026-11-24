@@ -721,12 +721,12 @@ class Panel(tk.Tk):
                                            fill="#ff5555", dash=(3, 2))        
                     except (ValueError, tk.TclError):        
                         pass  
-            if lo is not None and hi is not None:      
-                cv.create_rectangle(30, 2, 120, 16, fill="#101010",      
-                                    outline="")   # подложка под подпись      
-                cv.create_text(32, 4, text=f"{lo:.0f}–{hi:.0f} Гц",      
-                               fill="#ff5555", anchor="nw",      
-                               font=("TkDefaultFont", 8))      
+            if lo is not None and hi is not None:        
+                cv.create_rectangle(w - 120, 2, w - 2, 16, fill="#101010",        
+                                    outline="")   # подложка под подпись        
+                cv.create_text(w - 4, 4, text=f"{lo:.0f}–{hi:.0f} Гц",        
+                               fill="#ff5555", anchor="ne",        
+                               font=("TkDefaultFont", 8))          
         if self.spec_buf is not None and len(self.spec_buf) >= nfft:        
             win = np.hanning(nfft)    
             seg = self.spec_buf[-nfft:]    
@@ -766,14 +766,14 @@ class Panel(tk.Tk):
                 self.spec_peak = max(-80.0, self.spec_peak - 0.5)    
             py = np.clip(-self.spec_peak, 0, 80) / 80.0 * plot_h        
             cv.create_line(0, py, w, py, fill="#ffff00", dash=(2, 4))      
-            cv.create_rectangle(w - 62, 2, w - 2, 30, fill="#101010",      
-                                outline="")   # подложка под подписи      
-            cv.create_text(w - 4, 4, text=f"{self.spec_peak:.0f} dB",      
-                           fill="#ffff00", anchor="ne",      
-                           font=("TkDefaultFont", 8))      
-            cv.create_text(w - 4, 18, text=f"{self.spec_peak_f:.0f} Гц",      
-                           fill="#ffff00", anchor="ne",      
-                           font=("TkDefaultFont", 8))      
+            cv.create_rectangle(w - 62, 20, w - 2, 48, fill="#101010",        
+                                outline="")   # подложка под подписи        
+            cv.create_text(w - 4, 22, text=f"{self.spec_peak:.0f} dB",        
+                           fill="#ffff00", anchor="ne",        
+                           font=("TkDefaultFont", 8))        
+            cv.create_text(w - 4, 36, text=f"{self.spec_peak_f:.0f} Гц",        
+                           fill="#ffff00", anchor="ne",        
+                           font=("TkDefaultFont", 8))        
   
             # SNR: пик к медианному шуму. Полоса измерения — ПФ с отступом    
             # 10% от краёв (скаты фильтра не считаем сигналом); если фильтр    
@@ -806,10 +806,10 @@ class Panel(tk.Tk):
                 self.snr_disp = self.snr_avg      
                 self.snr_next_ms = now_ms + 1000          # цифра — раз в 1 с      
                 tick = True    
-            cv.create_rectangle(30, 20, 106, 34, fill="#101010", outline="")      
-            cv.create_text(32, 22, text=f"SNR {self.snr_disp:.0f} дБ",      
-                           fill="#00ccff", anchor="nw",      
-                           font=("TkDefaultFont", 8))               
+            cv.create_rectangle(w - 92, 52, w - 2, 66, fill="#101010", outline="")        
+            cv.create_text(w - 4, 54, text=f"SNR {self.snr_disp:.0f} дБ",        
+                           fill="#00ccff", anchor="ne",        
+                           font=("TkDefaultFont", 8))                          
   
             # THD / SINAD — второй столбец, от мгновенного пика (тот же      
             # бин, что цифра в правом верхнем углу).      
@@ -860,13 +860,13 @@ class Panel(tk.Tk):
                 self.sinad_avg = 0.3 * sinad_db + 0.7 * self.sinad_avg    
             if self.ts_disp is None or tick:    
                 self.ts_disp = (self.thd_avg, self.sinad_avg)    
-            cv.create_rectangle(110, 20, 192, 48, fill="#101010", outline="")      
-            cv.create_text(112, 22, text=f"THD {self.ts_disp[0]:.0f} дБ",      
-                           fill="#00ccff", anchor="nw",      
-                           font=("TkDefaultFont", 8))      
-            cv.create_text(112, 36, text=f"SINAD {self.ts_disp[1]:.0f} дБ",      
-                           fill="#00ccff", anchor="nw",      
-                           font=("TkDefaultFont", 8))              
+            cv.create_rectangle(w - 92, 70, w - 2, 98, fill="#101010", outline="")        
+            cv.create_text(w - 4, 72, text=f"THD {self.ts_disp[0]:.0f} дБ",        
+                           fill="#00ccff", anchor="ne",        
+                           font=("TkDefaultFont", 8))        
+            cv.create_text(w - 4, 86, text=f"SINAD {self.ts_disp[1]:.0f} дБ",        
+                           fill="#00ccff", anchor="ne",        
+                           font=("TkDefaultFont", 8))                        
   
             # Частоты режимов — справа внизу, над подписями сетки.      
             if self.mode_vars.get("rtty") and self.mode_vars["rtty"].get():      
@@ -966,11 +966,11 @@ class Panel(tk.Tk):
                                 dash_line(x, 0, x, plot_h, "#7a2a2a")      
                         except (ValueError, tk.TclError):    
                             pass    
-                if lo is not None and hi is not None:        
-                    t = f"{lo:.0f}–{hi:.0f} Гц"      
-                    tw = dr.textlength(t, font=fnt)      
-                    dr.rectangle([96, 4, 104 + tw, 34], fill="#101010")      
-                    dr.text((100, 8), t, fill="#ff5555", font=fnt)          
+                if lo is not None and hi is not None:          
+                    t = f"{lo:.0f}–{hi:.0f} Гц"        
+                    tw = dr.textlength(t, font=fnt)        
+                    dr.rectangle([W - 18 - tw, 4, W - 6, 34], fill="#101010")        
+                    dr.text((W - 10 - tw, 8), t, fill="#ff5555", font=fnt)                  
             fr, dbv = self.spec_last    
             # послесвечение — тёмно-зелёным под живой линией  
             if self.spec_hold is not None and len(self.spec_hold) == len(dbv):  
@@ -993,11 +993,11 @@ class Panel(tk.Tk):
             t2 = f"{self.spec_peak_f:.0f} Гц"      
             tw = max(dr.textlength(t1, font=fnt),    
                      dr.textlength(t2, font=fnt))    
-            dr.rectangle([W - 18 - tw, 4, W - 6, 66], fill="#101010")    
-            dr.text((W - 10 - dr.textlength(t1, font=fnt), 8),      
-                    t1, fill="#ffff00", font=fnt)      
-            dr.text((W - 10 - dr.textlength(t2, font=fnt), 40),        
-                    t2, fill="#ffff00", font=fnt)        
+            dr.rectangle([W - 18 - tw, 40, W - 6, 102], fill="#101010")      
+            dr.text((W - 10 - dr.textlength(t1, font=fnt), 44),        
+                    t1, fill="#ffff00", font=fnt)        
+            dr.text((W - 10 - dr.textlength(t2, font=fnt), 76),          
+                    t2, fill="#ffff00", font=fnt)           
             # Подписи сетки — последними, поверх всех линий, на подложках  
             for dbv in range(-10, -80, -10):      
                 y = -dbv / 80.0 * plot_h      
@@ -1013,20 +1013,22 @@ class Panel(tk.Tk):
                              fill="#101010")    
                 dr.text((x + 4, plot_h + 6), t, fill="#888888", font=fnt_sm)  
             # SNR — слева вверху под подписью полосы, шрифтом маркеров (fnt)      
-            if self.snr_avg is not None:        
-                t = f"SNR {self.snr_avg:.0f} дБ"        
-                tw2 = dr.textlength(t, font=fnt)        
-                dr.rectangle([96, 40, 104 + tw2, 70], fill="#101010")        
-                dr.text((100, 42), t, fill="#00ccff", font=fnt)           
+            if self.snr_avg is not None:          
+                t = f"SNR {self.snr_avg:.0f} дБ"          
+                tw2 = dr.textlength(t, font=fnt)          
+                dr.rectangle([W - 18 - tw2, 108, W - 6, 138], fill="#101010")          
+                dr.text((W - 10 - tw2, 112), t, fill="#00ccff", font=fnt)             
             # THD / SINAD — вторым столбцом, как на экране  
             if self.ts_disp is not None:  
                 t1 = f"THD {self.ts_disp[0]:.0f} дБ"  
                 t2 = f"SINAD {self.ts_disp[1]:.0f} дБ"  
                 tw = max(dr.textlength(t1, font=fnt),  
                          dr.textlength(t2, font=fnt))  
-                dr.rectangle([260, 40, 270 + tw, 104], fill="#101010")    
-                dr.text((264, 42), t1, fill="#00ccff", font=fnt)    
-                dr.text((264, 74), t2, fill="#00ccff", font=fnt)      
+                dr.rectangle([W - 18 - tw, 144, W - 6, 206], fill="#101010")      
+                dr.text((W - 10 - dr.textlength(t1, font=fnt), 148),      
+                        t1, fill="#00ccff", font=fnt)      
+                dr.text((W - 10 - dr.textlength(t2, font=fnt), 180),      
+                        t2, fill="#00ccff", font=fnt)          
             # Частоты режимов — справа внизу, над подписями сетки  
             if self.mode_vars.get("rtty") and self.mode_vars["rtty"].get():  
                 i1 = int(np.argmax(dbv))  
