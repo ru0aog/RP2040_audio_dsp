@@ -112,9 +112,15 @@ def _unit(label):
         return "Гц"  
     if last == "q":                                  # добротность x100  
         return "x100"  
-    if last in ("lo", "mid", "hi") and "eq" in label:  # EQ gain, дБx10  
-        return "x0.1 дБ"  
-    if last in ("ref", "ceil", "tgt", "thr", "cthr", "gfloor", "depth",  
+    if last in ("lo", "mid", "hi") and "eq" in label:  # EQ gain, дБx10    
+        return "x0.1 дБ"    
+    if label in ("band lo", "band hi"):  # полоса приёма, Гц    
+        return "Гц"    
+    if label == "agc ref":          # целевой уровень АРУ, нормированный    
+        return "норм"    
+    if label == "lim ceil":         # потолок лимитера, пиковый уровень    
+        return "пик"    
+    if last in ("ref", "ceil", "tgt", "thr", "cthr", "gfloor", "depth",    
                 "makeup", "max", "min", "presmax", "duckmax", "bst",  
                 "cut", "shelf", "exc", "excmix", "clip", "soft", "ap",  
                 "lr2", "split", "2band", "intel", "noise", "dec", "sql",  
@@ -1321,14 +1327,17 @@ class Panel(tk.Tk):
                 parent, variable=var,      
                 command=lambda l=label, v=var: self._set(l, v.get())      
             ).grid(row=row, column=col0 + 1, sticky="w")      
-        else:        
-            if ptype == "gain":    
-                # поле — множитель (1.5), дамп отдаёт raw Q8 (384)    
-                try:    
-                    cur = f"{float(cur) / 256.0:g}"    
-                except ValueError:    
-                    pass    
-            var = tk.StringVar(value=cur)        
+        else:          
+            try:      
+                if ptype == "gain":      
+                    # поле — множитель (1.5), дамп отдаёт raw Q8 (384)      
+                    cur = f"{float(cur) / 256.0:g}"      
+                elif ptype == "x100":      
+                    # поле — множитель (100), дамп отдаёт raw x100 (10000)      
+                    cur = f"{float(cur) / 100.0:g}"      
+            except ValueError:      
+                pass      
+            var = tk.StringVar(value=cur)             
             e = ttk.Entry(parent, textvariable=var, width=9)        
             e.grid(row=row, column=col0 + 1, sticky="w")      
             e.bind("<Return>",      
@@ -1336,7 +1345,7 @@ class Panel(tk.Tk):
             e.bind("<FocusOut>",      
                    lambda _e, l=label, v=var: self._set(l, v.get()))      
         hint = _unit(label) or \
-            {"x100": "x100", "gain": "x", "u32": "u32"}.get(ptype, "")    
+            {"x100": "x1", "gain": "x1", "u32": "u32"}.get(ptype, "")      
         if hint:  
             ttk.Label(parent, text=hint, foreground="#888").grid(  
                 row=row, column=col0 + 2, sticky="w")  
@@ -1352,15 +1361,14 @@ class Panel(tk.Tk):
         p = self.params.get(label)  
         if p and p["type"] == "onoff":  
             val = "on" if str(val) in ("1", "on") else "off"  
-        elif p and p["type"] == "x100":      
-            # поле хранит raw (x100), команда ждёт множитель —      
-            # иначе каждый FocusOut умножает значение (runaway до int32-max)      
-            try:      
-                f = float(val)      
-            except ValueError:      
-                self._log(f"# {label}: '{val}' не число — не отправлено")      
-                return      
-            val = f"{f / 100.0:g}"      
+        elif p and p["type"] == "x100":        
+            # поле — множитель, команда ждёт множитель: шлём как есть,      
+            # только проверка на число      
+            try:        
+                float(val)        
+            except ValueError:        
+                self._log(f"# {label}: '{val}' не число — не отправлено")        
+                return        
         elif p and p["type"] == "gain":    
             # поле — множитель, команда ждёт множитель: шлём как есть,    
             # только проверка на число    
@@ -1383,11 +1391,13 @@ class Panel(tk.Tk):
         val = parts[0]
         p = self.params.get(label)      
         if p:      
-            try:      
-                f = float(val)      
-                if p["type"] == "gain":    
-                    f /= 256.0          # OK отдаёт raw Q8 -> множитель    
-                p["var"].set(int(f) if f == int(f) else f)      
+            try:        
+                f = float(val)        
+                if p["type"] == "gain":      
+                    f /= 256.0          # OK отдаёт raw Q8 -> множитель      
+                elif p["type"] == "x100":      
+                    f /= 100.0          # OK отдаёт raw x100 -> множитель      
+                p["var"].set(int(f) if f == int(f) else f)         
             except ValueError:      
                 p["var"].set(val)      
   
