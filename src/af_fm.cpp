@@ -1,12 +1,12 @@
 // src/af_fm.cpp  
 //  
-// FAT12-диск ~1.6 МБ, RAM-образ ~14 КБ (метаданные + SET.TXT). Раскладка:    
-//   LBA 0      boot sector    
-//   LBA 1..10  FAT (10 секторов, кластер = 1 сектор)    
-//   LBA 11     root dir (SET.TXT + CW.TXT + REC1..REC4.WAV)        
-//   LBA 12..27 data: SET.TXT (RAM)        
-//   LBA 28     data: CW.TXT (RAM, 4 строки сообщений магнитофона)      
-//   LBA 29..   REC1..REC4.WAV — виртуальные, синтез в af_fm_msc_read        
+// FAT12-диск ~2 МБ, RAM-образ ~16 КБ (метаданные + SET.TXT + CW.TXT). Раскладка:      
+//   LBA 0      boot sector      
+//   LBA 1..12  FAT (12 секторов, кластер = 1 сектор)      
+//   LBA 13     root dir (SET.TXT + CW.TXT + REC1..REC4.WAV)          
+//   LBA 14..29 data: SET.TXT (RAM)          
+//   LBA 30     data: CW.TXT (RAM, 4 строки сообщений магнитофона)        
+//   LBA 31..   REC1..REC4.WAV — виртуальные, синтез в af_fm_msc_read          
 //  
 // SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.      
 // Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.      
@@ -38,7 +38,7 @@ extern size_t af_cli_format_banks(char* buf, size_t cap);
   
 #include "af_rec.h"          // af_rec_slot_len/data — WAV-экспорт    
     
-static uint8_t  fm_disk[AF_FM_RAM_SECTORS][AF_FM_SECTOR_SIZE];  // ~14 КБ    
+static uint8_t  fm_disk[AF_FM_RAM_SECTORS][AF_FM_SECTOR_SIZE];  // ~16 КБ    
 static uint32_t fm_set_len = 0;        // байт в SET.TXT  
 static bool     fm_dirty   = false;    // ПК писал — ждёт парсера    
 static bool     fm_stale   = true;     // SET.TXT устарел — регенерировать      
@@ -140,7 +140,7 @@ static void fm_build_boot(void) {
     b[14] = 1;  b[15] = 0;               // reserved    
     b[16] = 1;                           // FAT count    
     b[17] = 16; b[18] = 0;               // root entries = 16 (1 сектор)    
-    const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;   // ~3199 < 65536    
+    const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;   // ~3935 < 65536
     memcpy(&b[19], &ts16, 2);      
     b[21] = 0xF8;                        // media      
     const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;      
@@ -167,13 +167,16 @@ static void fat12_set(uint8_t* fat, uint16_t n, uint16_t v) {
     }  
 }  
   
-// Цепочка из n кластеров начиная с first; FAT лежит в fm_disk[1..10].    
+// Цепочка из n кластеров начиная с first; FAT лежит в fm_disk[1..12]
 static void fat_chain(uint8_t* f, uint16_t first, uint16_t n) {    
     for (uint16_t c = 0; c < n; c++)    
         fat12_set(f, first + c, (c == n - 1) ? 0xFFF : (uint16_t)(first + c + 1));    
 }    
     
-// Полная перестройка FAT: SET.TXT (set_clusters) + 4 WAV по их размерам.      
+// Полная перестройка FAT: SET.TXT + CW.TXT + 4 WAV. Цепочки RECn.WAV    
+// всегда строятся на AF_FM_WAV_CLUSTERS кластеров (фиксированная сетка    
+// = dir-записи = AF_FM_WAV_LBA(i)), независимо от фактического размера    
+// слота — иначе сетки FAT и dir расходятся (cross-link, chkdsk).        
 static void fm_build_fat(uint16_t set_clusters, const uint16_t* wav_clusters) {    
     uint8_t* f = &fm_disk[1][0];    
     memset(f, 0, AF_FM_FAT_SECTORS * AF_FM_SECTOR_SIZE);    
@@ -239,7 +242,7 @@ void af_fm_init(void) {
 void af_fm_request_sync(void) { fm_stale = true; }  
   
 void af_fm_sync(void) {    
-    // SET.TXT рендерится в RAM-область (LBA 12..27).    
+    // SET.TXT рендерится в RAM-область (LBA 12..29)
     char* txt = (char*)&fm_disk[AF_FM_SET_LBA][0];    
     size_t cap = AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE;    
     size_t n = af_cli_format_banks(txt, cap);    
@@ -377,7 +380,7 @@ static void wav_header(uint8_t* h, uint32_t data_bytes, uint32_t rate) {
 // --- IMA-ADPCM декодер для экспорта (локальное состояние — не делить    
 // с декодером воспроизведения в af_rec.cpp, тот на Core 1).    
 // Хост читает файл последовательно: кэшируем позицию; при скачке    
-// назад — сброс и декод с нуля (до ~229К отсчётов, миллисекунды).    
+// назад — сброс и декод с нуля (до ~224 отсчётов, миллисекунды)
 static const int16_t fm_adpcm_step[89] = {    
     7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,    
     50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,    
@@ -798,7 +801,7 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
         dir_track(fm_disk[lba]);  
     }  
 
-    // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..27).    
+    // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..29)
     // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    
     // не должны триггерить парсинг и перемонтирование — иначе цикл.    
     if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {      

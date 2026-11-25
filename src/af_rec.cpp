@@ -4,12 +4,13 @@
 //        
 // Запись: af_rec_push (Core 1) кодирует IMA-ADPCM на лету — каждый        
 // AF_REC_DECIM-й отсчёт (децимация ×2: 15464 -> 7732 Гц) -> ниббл        
-// в ram_buf (224000 отсчётов = 112 КБ, ~29 с).        
-// На стопе буфер сбрасывается во flash-слот активного банка через        
-// flash-окно (park Core1 -> mute -> 125 МГц -> capture pause -> pwm off        
-// -> IRQ-off -> erase+program -> restore), как в af_store_save.        
-// Слот 224 КБ вмещает ~29.7 с ADPCM (229376 отсчётов).        
-// Формат слота ver 0x02: codec 0=PCM16 (legacy/voice_14), 1=IMA-ADPCM.        
+// в ram_buf (224000 отсчётов = 112 КБ, ~29 с).
+// На стопе буфер сбрасывается во flash-слот активного банка через
+// flash-окно (park Core1 -> mute -> 125 МГц -> capture pause -> pwm off
+// -> IRQ-off -> erase+program -> restore), как в af_store_save.
+// Слот 224 КБ вмещает ~59.2 с ADPCM (458240 отсчётов);          
+// лимит записи — ram_buf 112 КБ (~29 с).          
+// Формат слота ver 0x02: codec 0=PCM16 (legacy/voice_14), 1=IMA-ADPCM.
 // Воспроизведение: чтение слота напрямую из XIP с интерполяцией ×2.    
 // Пустой слот -> клип-заглушка voice_14 (1:1, без интерполяции).    
 // Активный слот = код селектора GP13/GP28 + 1 (af_gpio_msg_sel, 1..4).        
@@ -250,7 +251,7 @@ static void __not_in_flash_func(do_rec_flash_write)(void* param) {
     flash_range_erase(w->off, AF_REC_SLOT_SIZE);      
     flash_range_program(w->off, w->src, AF_REC_HDR_SIZE);              // заголовок      
     flash_range_program(w->off + AF_REC_HDR_SIZE,      
-                        (const uint8_t*)ram_buf, w->bytes);            // PCM      
+                        (const uint8_t*)ram_buf, w->bytes);            // данные (PCM/ADPCM)
 }       
   
 // Сброс ram_buf в слот bank. Вызывается из af_rec_stop (Core 0).      
@@ -382,9 +383,9 @@ bool af_rec_start(void) {
     rec_src_tx = af_dsp_tx_on() ? 1 : 0;          
     state = ST_REC;  
     af_rec_active = 1;  
-    Serial.printf("# rec: recording (%s) bank=%u, ram buf %lu samp\n",    
-                  rec_src_tx ? "tx" : "rx", (unsigned)rec_bank(),  
-                  (unsigned long)AF_REC_RAM_SAMP);        
+    Serial.printf("# rec: recording (%s) bank=%u, ram buf %lu adpcm samp\n",      
+                  rec_src_tx ? "tx" : "rx", (unsigned)rec_bank(),    
+                  (unsigned long)AF_REC_RAM_SAMP);          
     return true;        
 }        
   
@@ -428,8 +429,8 @@ bool af_rec_play(void) {
     } else {        
         play_src = 0;        
         play_len = slot_len;        
-        Serial.printf("# rec: play %lu samp (flash bank=%u)\n",    
-                      (unsigned long)play_len, (unsigned)rec_bank());        
+        Serial.printf("# rec: play %lu samp (flash bank=%u, codec=%u)\n",    
+                      (unsigned long)play_len, (unsigned)rec_bank(),(unsigned)slot_codec);        
         // Prefetch: декодируем отсчёт pos=0 заранее — adpcm_dec stateful,    
         // в горячем пути декодируем ровно 1 раз на отсчёт (при pos++).    
         cur_samp = (slot_codec == AF_REC_CODEC_ADPCM)    
