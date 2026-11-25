@@ -112,13 +112,13 @@ static void fm_build_boot(void) {
     memcpy(&b[19], &ts16, 2);      
     b[21] = 0xF8;                        // media      
     const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;      
-    memcpy(&b[22], &fat_sz, 2);          // sectors/FAT = 10    
+    memcpy(&b[22], &fat_sz, 2);          // sectors/FAT = 12
     b[24] = 1;  b[25] = 0;               // spt  
     b[26] = 1;  b[27] = 0;               // heads  
     b[36] = 0x80; b[38] = 0x29;  
-    const uint32_t vid = 0xA0D5F000;  
-    memcpy(&b[39], &vid, 4);  
-    memcpy(&b[43], "AUDIO_DSP  ", 11);  
+    const uint32_t vid = 0xA0D5F002;   // bump: новый volume serial ->    
+    memcpy(&b[39], &vid, 4);           // Windows не подставит кэш старого диска    
+    memcpy(&b[43], "AUDIO_DSP2 ", 11); // + метка для надёжности    
     memcpy(&b[54], "FAT12   ", 8);  
     b[510] = 0x55; b[511] = 0xAA;  
 }  
@@ -231,12 +231,12 @@ void af_fm_sync(void) {
             out_samp = AF_FM_WAV_MAX_SAMP;          // RECn.WAV на виртуальном диске    
         wav_sizes[i] = 44 + out_samp * 2;            
         wav_clusters[i] = (uint16_t)((wav_sizes[i] + 511) / 512);        
-        // Re-enumerate только при появлении файла (пусто -> непусто):    
-        // заливка voice14, первая запись в слот. Изменение размера    
-        // существующего файла — без перемонтирования.    
-        if (!first_sync && prev_sizes[i] == 44 && wav_sizes[i] != 44)      
-            fm_sizes_changed = true;      
-        prev_sizes[i] = wav_sizes[i];    
+        // Re-enumerate при ЛЮБОЙ смене размера: у хоста закэшированы  
+        // старые dir+FAT — без перемонтирования он читает/пишет по  
+        // устаревшей раскладке (cross-link при записи 28-с записи).  
+        if (!first_sync && prev_sizes[i] != wav_sizes[i])        
+            fm_sizes_changed = true;        
+        prev_sizes[i] = wav_sizes[i];      
     }        
     first_sync = false;    
     // CW.TXT: 4 строки из af_cw_msgs, CRLF, хвост — пробелы (чистый вид    
@@ -310,9 +310,9 @@ void af_fm_poll(void) {
         Serial.println("# fm: CW.TXT parsed -> msgs written");    
     }    
     if (fm_stale) af_fm_sync();            
-    // Пере-энумерация только при появлении файла (пусто -> непусто:    
-    // заливка voice14, первая запись) и после аплоада с ПК.    
-    // Обычный старт и перезапись существующего слота — без мигания.    
+    // Пере-энумерация при любой смене размеров RECn.WAV (запись,  
+    // заливка voice14, аплоад): у хоста закэшированы dir+FAT —  
+    // без перемонтирования он работает по устаревшей раскладке.  
     if (fm_sizes_changed) {  
         fm_sizes_changed = false;  
         af_usb_reenumerate();  
@@ -750,9 +750,17 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
                       (unsigned long)lba, (unsigned long)AF_FM_RAM_SECTORS);  
         return -1;                                  // зазоры — read-only  
     }  
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);              
-    // Перехват root dir: хост создал/обновил RECn.WAV — запомнить кластер.  
-    if (lba == AF_FM_DIR_LBA) dir_track(fm_disk[lba]);  
+    // FAT (LBA 1..AF_FM_FAT_SECTORS) — read-only для хоста: наша FAT  
+    // описывает виртуальную раскладку RECn.WAV, а хост при записи файла  
+    // отдаёт обратно свою (закэшированную/переразмеченную) версию и  
+    // затирает цепочки — отсюда cross-link/truncated у RECn.WAV.  
+    // Проглатываем с OK: отказ провоцирует ретраи и remount.  
+    if (lba >= 1 && lba <= AF_FM_FAT_SECTORS)  
+        return (int32_t)AF_FM_SECTOR_SIZE;  
+  
+    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);                
+    // Перехват root dir: хост создал/обновил RECn.WAV — запомнить кластер.    
+    if (lba == AF_FM_DIR_LBA) dir_track(fm_disk[lba]);    
 
     // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..27).    
     // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    
