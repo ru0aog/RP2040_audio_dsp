@@ -12,16 +12,16 @@
     
 // Виртуальный диск: в RAM только boot+FAT+dir+SET.TXT+CW.TXT, WAV-данные      
 // синтезируются в af_fm_msc_read из flash-слотов магнитофона.      
-//   LBA 0        boot        
-//   LBA 1..12    FAT (12 секторов — цепочки 4 WAV по ~876 кластеров)          
-//   LBA 13       root dir (6 записей: SET.TXT + CW.TXT + REC1..REC4.WAV)          
-//   LBA 14..29   SET.TXT (16 кластеров резерв, ~8 КБ)          
-//   LBA 30       CW.TXT (1 кластер, 4 строки сообщений магнитофона)        
-//   LBA 31..     REC1..REC4.WAV, каждый по AF_FM_WAV_CLUSTERS кластеров     
-
-#define AF_FM_FAT_SECTORS   12u    // 12×512/1.5 = 4096 записей >= ~3521 кластеров  
-#define AF_FM_DIR_LBA       (1u + AF_FM_FAT_SECTORS)          // 13      
-#define AF_FM_DATA_START    (AF_FM_DIR_LBA + 1u)              // 14      
+//   LBA 0        boot          
+//   LBA 1..14    FAT (14 секторов — цепочки 4 WAV по ~876 кластеров + пул)            
+//   LBA 15       root dir (6 записей: SET.TXT + CW.TXT + REC1..REC4.WAV)            
+//   LBA 16..31   SET.TXT (16 кластеров резерв, ~8 КБ)            
+//   LBA 32       CW.TXT (1 кластер, 4 строки сообщений магнитофона)          
+//   LBA 33..     REC1..REC4.WAV, каждый по AF_FM_WAV_CLUSTERS кластеров       
+  
+#define AF_FM_FAT_SECTORS   14u    // 14×512/1.5 = 4778 записей >= ~4421 кластеров    
+#define AF_FM_DIR_LBA       (1u + AF_FM_FAT_SECTORS)          // 15        
+#define AF_FM_DATA_START    (AF_FM_DIR_LBA + 1u)              // 16        
 #define AF_FM_SET_CLUSTERS  16u                               // резерв под SET.TXT    
 #define AF_FM_SET_LBA       AF_FM_DATA_START    
     
@@ -34,18 +34,18 @@
 #define AF_FM_REC_RATE      7732u      // частота слота (и ADPCM-экспорта)    
 // Размер RECn.WAV привязан к RAM-буферу (224000 отсчётов ~29 с ADPCM),  
 // а не к ёмкости слота (~59 с): больше буфера записать/залить нельзя.  
-// 897 кластеров × 4 файла — FAT 12 секторов (4096 записей) хватает.  
+// 876 кластеров × 4 файла + пул 900 — FAT 14 секторов (4778 записей) хватает.    
 #define AF_FM_WAV_MAX_SAMP  (AF_REC_RAM_SAMP + 2u)  
 #define AF_FM_WAV_MAX_BYTES (44u + AF_FM_WAV_MAX_SAMP * 2u)      
 #define AF_FM_WAV_CLUSTERS  ((AF_FM_WAV_MAX_BYTES + 511u) / 512u)   // ~876        
 #define AF_FM_WAV_FILES     4    // 4 слота магнитофона = 4 сообщения (селектор GP13/GP28)      
-//   LBA 30       CW.TXT (1 кластер, 4 строки сообщений магнитофона)        
-//   LBA 31..     REC1..REC4.WAV        
-#define AF_FM_CW_CLUSTERS   1u      
-#define AF_FM_CW_LBA        (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)   // 30   
-#define AF_FM_WAV_LBA(i)    (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)   // 31+    
-//#define AF_FM_SECTOR_COUNT  (AF_FM_WAV_LBA(AF_FM_WAV_FILES))   // ~3535        
-#define AF_FM_RAM_SECTORS   (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS)   // 31 — boot+FAT+dir+SET+CW в RAM    
+//   LBA 32       CW.TXT (1 кластер, 4 строки сообщений магнитофона)          
+//   LBA 33..     REC1..REC4.WAV          
+#define AF_FM_CW_CLUSTERS   1u        
+#define AF_FM_CW_LBA        (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)   // 32     
+#define AF_FM_WAV_LBA(i)    (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)   // 33+      
+//#define AF_FM_SECTOR_COUNT  (AF_FM_WAV_LBA(AF_FM_WAV_FILES))   // ~3537          
+#define AF_FM_RAM_SECTORS   (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS)   // 33 — boot+FAT+dir+SET+CW в RAM      
   
 void    af_fm_init(void);              // образ диска, пустой SET.TXT  
 void    af_fm_poll(void);              // отложенная регенерация (stale)  
@@ -64,6 +64,9 @@ void    af_fm_msc_flush(void);
 #define AF_FM_WAV_HDR_MAX        512u    // заголовок WAV в пределах 1 сектора    
 
 // af_fm.h  
-#define AF_FM_FREE_SECTORS   400u  // ~200 КБ пул: сюда хост пишет данные новых файлов  
+// Пул >= макс. RECn.WAV (~438 КБ): Explorer проверяет свободное место  
+// до копирования и отказывает, если файла больше, чем свободных кластеров,  
+// даже при перезаписи существующего RECn.WAV.  
+#define AF_FM_FREE_SECTORS   900u  // ~450 КБ пул: сюда хост пишет данные новых файлов    
 #define AF_FM_FREE_LBA       AF_FM_WAV_LBA(AF_FM_WAV_FILES)  
 #define AF_FM_SECTOR_COUNT   (AF_FM_FREE_LBA + AF_FM_FREE_SECTORS)  

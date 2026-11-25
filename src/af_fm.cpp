@@ -1,12 +1,15 @@
 // src/af_fm.cpp  
 //  
-// FAT12-диск ~2 МБ, RAM-образ ~16 КБ (метаданные + SET.TXT + CW.TXT). Раскладка:      
-//   LBA 0      boot sector      
-//   LBA 1..12  FAT (12 секторов, кластер = 1 сектор)      
-//   LBA 13     root dir (SET.TXT + CW.TXT + REC1..REC4.WAV)          
-//   LBA 14..29 data: SET.TXT (RAM)          
-//   LBA 30     data: CW.TXT (RAM, 4 строки сообщений магнитофона)        
-//   LBA 31..   REC1..REC4.WAV — виртуальные, синтез в af_fm_msc_read          
+// FAT12-диск ~2.2 МБ, RAM-образ ~17 КБ (метаданные + SET.TXT + CW.TXT). Раскладка:        
+//   LBA 0      boot sector        
+//   LBA 1..14  FAT (14 секторов, кластер = 1 сектор)        
+//   LBA 15     root dir (SET.TXT + CW.TXT + REC1..REC4.WAV)            
+//   LBA 16..31 data: SET.TXT (RAM)            
+//   LBA 32     data: CW.TXT (RAM, 4 строки сообщений магнитофона)          
+//   LBA 33..   REC1..REC4.WAV — виртуальные, синтез в af_fm_msc_read            
+//   LBA 3537.. свободный пул 900 секторов (~450 КБ): сюда хост пишет            
+//              данные новых файлов; >= макс. RECn.WAV, иначе Explorer            
+//              откажет в копировании по проверке свободного места              
 //  
 // SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.      
 // Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.      
@@ -14,8 +17,8 @@
 // CW.TXT — 4 строки вызовов (af_cw_msgs, af_store.cpp). Пустая строка =      
 // голосовой слот. Запись с ПК: дебаунс 800 мс -> парсер -> af_store_cw_save.    
 //      
-// Аплоад: перезапись RECn.WAV -> стриминг-конвертер -> ram_buf (PCM-стейджинг    
-// ~7.2 с) -> encode ADPCM -> слот n. Любой WAV (PCM 8/16/24/32 бит,    
+// Аплоад: перезапись RECn.WAV -> стриминг-конвертер -> инкрементальный      
+// ADPCM-encode -> ram_buf (нибблы, ~29 с) -> слот n. Любой WAV (PCM 8/16/24/32 бит,      
 // mono/stereo, любая частота): ресемплинг в 7732 Гц mono int16. Коммит —    
 // по таймауту 1.5 с после последнего сектора (flash-окно в af_rec_slot_write).    
 // Экспорт: codec=0 — PCM WAV 8000 Гц (ресемплинг), codec=1 — декод ADPCM    
@@ -63,8 +66,14 @@ static uint32_t ul_in_pos   = 0;       // позиция во входном п�
 static uint32_t ul_out_pos  = 0;       // записано выходных отсчётов в ram_buf    
 static int16_t  ul_prev     = 0;       // предыдущий входной отсчёт (интерполяция)    
 static bool     ul_trunc    = false;   // ram_buf заполнен — хвост отброшен    
-static uint8_t  ul_tail[8];            // недошедший кусок фрейма между секторами    
-static uint8_t  ul_tail_len = 0;    
+static uint8_t  ul_tail[8];            // недошедший кусок фрейма между секторами      
+static uint8_t  ul_tail_len = 0;      
+// Инкрементальный IMA-ADPCM энкодер аплоада: ul_push пишет нибблы      
+// в ram_buf по мере ресемплинга — буфер вмещает ~29 с (224000 отсчётов),      
+// а не 7.2 с PCM-стейджинга. Состояние локальное — не делить с      
+// энкодером записи в af_rec.cpp (тот на Core 1).      
+static int16_t  ul_enc_pred = 0;      
+static int8_t   ul_enc_idx  = 0;      
 
 // --- Перехват dir-записей: первый кластер файла -> банк ----------------------  
 // Windows при замене делает delete+create: dir-запись с именем RECn.WAV и  
@@ -140,15 +149,15 @@ static void fm_build_boot(void) {
     b[14] = 1;  b[15] = 0;               // reserved    
     b[16] = 1;                           // FAT count    
     b[17] = 16; b[18] = 0;               // root entries = 16 (1 сектор)    
-    const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;   // ~3935 < 65536
-    memcpy(&b[19], &ts16, 2);      
-    b[21] = 0xF8;                        // media      
-    const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;      
-    memcpy(&b[22], &fat_sz, 2);          // sectors/FAT = 12
-    b[24] = 1;  b[25] = 0;               // spt  
-    b[26] = 1;  b[27] = 0;               // heads  
-    b[36] = 0x80; b[38] = 0x29;  
-    const uint32_t vid = 0xA0D5F002;   // bump: новый volume serial ->    
+    const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;   // ~4437 < 65536  
+    memcpy(&b[19], &ts16, 2);        
+    b[21] = 0xF8;                        // media        
+    const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;        
+    memcpy(&b[22], &fat_sz, 2);          // sectors/FAT = 14  
+    b[24] = 1;  b[25] = 0;               // spt    
+    b[26] = 1;  b[27] = 0;               // heads    
+    b[36] = 0x80; b[38] = 0x29;    
+    const uint32_t vid = 0xA0D5F003;   // bump: новый volume serial ->      
     memcpy(&b[39], &vid, 4);           // Windows не подставит кэш старого диска    
     memcpy(&b[43], "AUDIO_DSP2 ", 11); // + метка для надёжности    
     memcpy(&b[54], "FAT12   ", 8);  
@@ -167,7 +176,7 @@ static void fat12_set(uint8_t* fat, uint16_t n, uint16_t v) {
     }  
 }  
   
-// Цепочка из n кластеров начиная с first; FAT лежит в fm_disk[1..12]
+// Цепочка из n кластеров начиная с first; FAT лежит в fm_disk[1..14]
 static void fat_chain(uint8_t* f, uint16_t first, uint16_t n) {    
     for (uint16_t c = 0; c < n; c++)    
         fat12_set(f, first + c, (c == n - 1) ? 0xFFF : (uint16_t)(first + c + 1));    
@@ -242,7 +251,7 @@ void af_fm_init(void) {
 void af_fm_request_sync(void) { fm_stale = true; }  
   
 void af_fm_sync(void) {    
-    // SET.TXT рендерится в RAM-область (LBA 12..29)
+    // SET.TXT рендерится в RAM-область (LBA 16..31)
     char* txt = (char*)&fm_disk[AF_FM_SET_LBA][0];    
     size_t cap = AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE;    
     size_t n = af_cli_format_banks(txt, cap);    
@@ -380,7 +389,7 @@ static void wav_header(uint8_t* h, uint32_t data_bytes, uint32_t rate) {
 // --- IMA-ADPCM декодер для экспорта (локальное состояние — не делить    
 // с декодером воспроизведения в af_rec.cpp, тот на Core 1).    
 // Хост читает файл последовательно: кэшируем позицию; при скачке    
-// назад — сброс и декод с нуля (до ~224 отсчётов, миллисекунды)
+// назад — сброс и декод с нуля (до ~224К отсчётов, миллисекунды)
 static const int16_t fm_adpcm_step[89] = {    
     7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,    
     50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,    
@@ -428,7 +437,26 @@ static int16_t fm_adpcm_sample(uint8_t bank, const uint8_t* data, uint32_t k) {
     return v;    
 }    
     
-// Синтез одного сектора WAV-файла слота (bank = 1..4) в buffer.        
+// IMA-ADPCM энкодер аплоада: один отсчёт -> ниббл.      
+// Таблицы fm_adpcm_step/fm_adpcm_idx общие с декодером экспорта.      
+static uint8_t ul_adpcm_enc(int16_t s) {      
+    int32_t step = fm_adpcm_step[ul_enc_idx];      
+    int32_t diff = (int32_t)s - ul_enc_pred;      
+    uint8_t nib = 0;      
+    if (diff < 0) { nib = 8; diff = -diff; }      
+    int32_t delta = step >> 3;      
+    if (diff >= step)      { nib |= 4; diff -= step;      delta += step; }      
+    if (diff >= (step>>1)) { nib |= 2; diff -= (step>>1); delta += (step>>1); }      
+    if (diff >= (step>>2)) { nib |= 1;                    delta += (step>>2); }      
+    ul_enc_pred += (nib & 8) ? -delta : delta;      
+    if (ul_enc_pred > 32767) ul_enc_pred = 32767;      
+    else if (ul_enc_pred < -32768) ul_enc_pred = -32768;      
+    ul_enc_idx += fm_adpcm_idx[nib & 15];      
+    if (ul_enc_idx < 0) ul_enc_idx = 0; else if (ul_enc_idx > 88) ul_enc_idx = 88;      
+    return nib;      
+}      
+      
+// Синтез одного сектора WAV-файла слота (bank = 1..4) в buffer.
 // off_in_file = (lba - file_lba) * 512.      
 // codec=0: PCM-слот -> ресемплинг 7732->8000. codec=1: ADPCM -> декод,    
 // экспорт PCM на родных 7732 Гц (без ресемплинга).    
@@ -509,9 +537,11 @@ static bool ul_begin(uint8_t bank, uint32_t lba) {
     ul_file_off = 0;    
     ul_data_end = 0;    
     ul_rate = 0; ul_channels = 0; ul_bits = 0; ul_balign = 0; ul_codec = 1;      
-    ul_in_pos = 0; ul_out_pos = 0; ul_prev = 0;    
-    ul_trunc = false; ul_tail_len = 0;    
-    return true;    
+    ul_in_pos = 0; ul_out_pos = 0; ul_prev = 0;      
+    ul_enc_pred = 0; ul_enc_idx = 0;   // ADPCM-энкодер с нуля —      
+                                       // как dec.pred=0 в af_rec_play      
+    ul_trunc = false; ul_tail_len = 0;      
+    return true;      
 }    
   
 // Разбор WAV-заголовка из первых байт файла (пришли в первом секторе).    
@@ -599,22 +629,26 @@ static int16_t ul_sample(const uint8_t* p) {
   
 // Ресемплер: входной отсчёт -> выходные отсчёты в ram_buf (линейная интерполяция).    
 // Шаг: in_pos продвигается на ul_rate за каждый выходной отсчёт 7732 Гц.    
-static void ul_push(int16_t cur) {    
-    if (ul_out_pos >= AF_REC_UL_MAX_SAMP) { ul_trunc = true; return; }
-    // Интерполяция между ul_prev (in_pos-1) и cur (in_pos):  
-    // окно [cur_in, cur_in + REC_RATE) соответствует входному интервалу.  
-    uint64_t cur_in  = (ul_in_pos > 0) ? (uint64_t)(ul_in_pos - 1) * AF_FM_REC_RATE : 0;  
-    uint64_t next_in = (uint64_t)ul_out_pos * ul_rate;  
-    while (next_in < cur_in + AF_FM_REC_RATE) {  
-        uint32_t fr = (uint32_t)(next_in - cur_in);  
-        int32_t v = ul_prev + (int32_t)(((int64_t)(cur - ul_prev) * fr) / AF_FM_REC_RATE);  
-        af_rec_ram_buf()[ul_out_pos++] = (int16_t)v;  
-        if (ul_out_pos >= AF_REC_UL_MAX_SAMP) { ul_trunc = true; break; } 
-        next_in = (uint64_t)ul_out_pos * ul_rate;  
-    }  
-    ul_prev = cur;  
-    ul_in_pos++;  
-}  
+static void ul_push(int16_t cur) {      
+    if (ul_out_pos >= AF_REC_RAM_SAMP) { ul_trunc = true; return; }  
+    // Интерполяция между ul_prev (in_pos-1) и cur (in_pos):    
+    // окно [cur_in, cur_in + REC_RATE) соответствует входному интервалу.    
+    uint64_t cur_in  = (ul_in_pos > 0) ? (uint64_t)(ul_in_pos - 1) * AF_FM_REC_RATE : 0;    
+    uint64_t next_in = (uint64_t)ul_out_pos * ul_rate;    
+    uint8_t* rb = (uint8_t*)af_rec_ram_buf();   // ADPCM-поток: 2 отсчёта/байт    
+    while (next_in < cur_in + AF_FM_REC_RATE) {    
+        uint32_t fr = (uint32_t)(next_in - cur_in);    
+        int32_t v = ul_prev + (int32_t)(((int64_t)(cur - ul_prev) * fr) / AF_FM_REC_RATE);    
+        uint8_t nib = ul_adpcm_enc((int16_t)v);    
+        if (ul_out_pos & 1) rb[ul_out_pos >> 1] |= (uint8_t)(nib << 4);    
+        else                rb[ul_out_pos >> 1]  = nib;   // чётный — младший ниббл    
+        ul_out_pos++;    
+        if (ul_out_pos >= AF_REC_RAM_SAMP) { ul_trunc = true; break; }   
+        next_in = (uint64_t)ul_out_pos * ul_rate;    
+    }    
+    ul_prev = cur;    
+    ul_in_pos++;    
+}    
   
 // Обработка одного записанного сектора WAV-файла.    
 static void ul_feed(const uint8_t* buf) {    
@@ -683,8 +717,9 @@ static void ul_commit(void) {
     Serial.printf("# fm: REC%u.WAV -> slot %u, %lu samples%s\n",      
                   (unsigned)bank, (unsigned)bank, (unsigned long)n,      
                   ul_trunc ? " (truncated)" : "");      
-    af_rec_adpcm_encode_buf(n);          // PCM -> ADPCM in-place в ram_buf    
-    if (af_rec_slot_write(bank, n, AF_REC_CODEC_ADPCM)) {          
+    // ram_buf уже содержит ADPCM-поток (инкрементальный encode в ul_push) —      
+    // batch-encode не нужен.      
+    if (af_rec_slot_write(bank, n, AF_REC_CODEC_ADPCM)) {            
         af_fm_request_sync();      
         fm_sizes_changed = true;   // аплоад — всегда re-enumerate (содержимое новое)      
         dir_first_cl[bank] = 0;    // кластер отработан — не оставлять stale    
@@ -801,7 +836,7 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
         dir_track(fm_disk[lba]);  
     }  
 
-    // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..29)
+    // Парсер запускаем только при записи в data-область SET.TXT (LBA 16..31)
     // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    
     // не должны триггерить парсинг и перемонтирование — иначе цикл.    
     if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {      
