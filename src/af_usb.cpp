@@ -14,6 +14,8 @@
 #include <Arduino.h>  
 #include <math.h>  
 #include <string.h>  
+#include "hardware/flash.h"
+
 #include "af_usb.h"  
 #include "af_dsp.h"
 #include "af_fm.h"                   // af_fm_read/write_sector — образ диска

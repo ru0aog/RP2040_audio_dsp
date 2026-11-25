@@ -23,7 +23,8 @@
   
 #include <Arduino.h>  
 #include <string.h>  
-#include <stdio.h>  
+#include <stdio.h>
+#include "hardware/flash.h"
 
 #include "af_config.h"  
 #include "af_fm.h"

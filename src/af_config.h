@@ -6,7 +6,8 @@
 #pragma once  
   
 #include <Arduino.h>  
-
+#include "hardware/flash.h"   // FLASH_SECTOR_SIZE — нужен AF_REC_SLOT_SIZE,  
+                              // раскрывается через af_fm.h в TU без Pico SDK headers
 
 // Версия прошивки и схемы params dump — для handshake внешней панели (tools/af_panel.py).  
 #define AF_FW_NAME            "RP2040_audio_dsp"  
