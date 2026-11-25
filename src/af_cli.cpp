@@ -1136,7 +1136,12 @@ static void cli_exec(char* line) {
         cli_help();    
     }
     else if (strcmp(cmd, "stats") == 0) {    
-        cli_stats();    
+        cli_stats();
+        Serial.printf("# fm: fat=%u dir=%u data=%u wav_cl=%u free=%u total=%u maxsamp=%lu\n",  
+    AF_FM_FAT_SECTORS, AF_FM_DIR_LBA, AF_FM_DATA_START,  
+    AF_FM_WAV_CLUSTERS, AF_FM_FREE_LBA, AF_FM_SECTOR_COUNT,  
+    (unsigned long)AF_FM_WAV_MAX_SAMP);  
+
     }
     else if (strcmp(cmd, "version") == 0) {  
         Serial.printf("# version: %s %s (schema=%u store=%u)\n",  

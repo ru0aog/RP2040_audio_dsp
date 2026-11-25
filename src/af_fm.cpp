@@ -94,9 +94,32 @@ static void dir_track(const uint8_t* d) {
     }  
 }  
 
-// ---------------------------------------------------------------------------  
-// Построение образа  
-// ---------------------------------------------------------------------------  
+// Чужие записи в root dir (System Volume Information, корзина и т.п.):    
+// хост выделяет им кластеры из нашей разметки — они указывают внутрь    
+// цепочек RECn.WAV, и chkdsk видит "первая единица распределения    
+// повреждена" / "неустранимая ошибка в каталоге". Помечаем такие записи    
+// удалёнными (0xE5): chkdsk их не видит, Windows при необходимости    
+// создаст каталог заново — цикл безвредный.    
+// Вызывается после memcpy dir-сектора в af_fm_msc_write, до dir_track. 
+static void dir_fix_foreign(uint8_t* d) {  
+    static const char known[6][12] = {  
+        "SET     TXT", "CW      TXT",  
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };  
+    for (uint8_t e = 0; e < 16; e++) {  
+        uint8_t* p = d + e * 32;  
+        if (p[0] == 0xE5 || p[0] == 0x00 || p[0] == 0x05) continue;  // удалённая/пустая  
+        if (p[11] == 0x0F) continue;                                 // LFN-запись  
+        bool ours = false;    
+        for (uint8_t i = 0; i < 6; i++)    
+            if (memcmp(p, known[i], 11) == 0) { ours = true; break; }    
+        if (ours) continue;    
+        p[0] = 0xE5;    // удалённая запись — chkdsk пропускает    
+    }    
+}    
+  
+// ---------------------------------------------------------------------------    
+// Построение образа    
+// ---------------------------------------------------------------------------    
   
 static void fm_build_boot(void) {  
     uint8_t* b = fm_disk[0];  
@@ -758,9 +781,13 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
     if (lba >= 1 && lba <= AF_FM_FAT_SECTORS)  
         return (int32_t)AF_FM_SECTOR_SIZE;  
   
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);                
-    // Перехват root dir: хост создал/обновил RECn.WAV — запомнить кластер.    
-    if (lba == AF_FM_DIR_LBA) dir_track(fm_disk[lba]);    
+    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);                  
+    // Перехват root dir: чужим записям (SVI и т.п.) — кластер из пула,  
+    // затем хост создал/обновил RECn.WAV — запомнить кластер.      
+    if (lba == AF_FM_DIR_LBA) {  
+        dir_fix_foreign(fm_disk[lba]);  
+        dir_track(fm_disk[lba]);  
+    }  
 
     // Парсер запускаем только при записи в data-область SET.TXT (LBA 12..27).    
     // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    

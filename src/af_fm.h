@@ -32,7 +32,10 @@
 // Экспорт капается в af_fm_sync/wav_sector до AF_FM_WAV_MAX_SAMP.          
 #define AF_FM_WAV_RATE      8000u      // частота PCM-экспорта legacy-слотов    
 #define AF_FM_REC_RATE      7732u      // частота слота (и ADPCM-экспорта)    
-#define AF_FM_WAV_MAX_SAMP  (AF_REC_SLOT_SAMP + 2u)      
+// Размер RECn.WAV привязан к RAM-буферу (224000 отсчётов ~29 с ADPCM),  
+// а не к ёмкости слота (~59 с): больше буфера записать/залить нельзя.  
+// 897 кластеров × 4 файла — FAT 12 секторов (4096 записей) хватает.  
+#define AF_FM_WAV_MAX_SAMP  (AF_REC_RAM_SAMP + 2u)  
 #define AF_FM_WAV_MAX_BYTES (44u + AF_FM_WAV_MAX_SAMP * 2u)      
 #define AF_FM_WAV_CLUSTERS  ((AF_FM_WAV_MAX_BYTES + 511u) / 512u)   // ~896      
 #define AF_FM_WAV_FILES     4    // 4 слота магнитофона = 4 сообщения (селектор GP13/GP28)    
