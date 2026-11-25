@@ -190,6 +190,7 @@ class Panel(tk.Tk):
         self._dump_active = False  
         self._dump_count = -1  
         self._dump_got = 0  
+        self._dump_retries = 0
         self._state_lines = []  
         self._state_active = False  
         self._pending = []        # очередь команд после connect      
@@ -512,14 +513,18 @@ class Panel(tk.Tk):
                 except queue.Full:    
                     pass    
   
-            def out_cb(outdata, frames, time_, status):  
-                try:  
-                    data = self.audio_q.get_nowait()  
-                    n = min(len(data), len(outdata))  
-                    outdata[:n] = data[:n] * self.audio_vol  
-                    outdata[n:] = 0  
-                except queue.Empty:  
-                    outdata[:] = 0  
+            def out_cb(outdata, frames, time_, status):    
+                try:    
+                    data = self.audio_q.get_nowait()    
+                    # Вход ch может отличаться от выхода (моно-микрофон    
+                    # -> стерео-выход): привести каналы до копирования.    
+                    if data.ndim > 1 and data.shape[1] != outdata.shape[1]:    
+                        data = np.repeat(data[:, :1], outdata.shape[1], axis=1)    
+                    n = min(len(data), len(outdata))    
+                    outdata[:n] = data[:n] * self.audio_vol    
+                    outdata[n:] = 0    
+                except queue.Empty:    
+                    outdata[:] = 0    
   
             self.audio_out = sd.OutputStream(  
                 samplerate=fs_out, channels=ch, dtype="float32",  
@@ -944,16 +949,16 @@ class Panel(tk.Tk):
             img = Image.new("RGB", (W, H), "#101010")    
             dr = ImageDraw.Draw(img)    
             # TrueType с кириллицей; без него — дефолтный bitmap (мелкий, без рус.)    
-            try:
-                from PIL import ImageFont
-                fnt = ImageFont.truetype("arial.ttf", 22)
-                fnt_sm = ImageFont.truetype("arial.ttf", 18)
-            except Exception:    
-                try:    
-                    fnt = ImageFont.truetype("DejaVuSans.ttf", 22)    
-                    fnt_sm = ImageFont.truetype("DejaVuSans.ttf", 18)    
-                except Exception:    
-                    fnt = fnt_sm = ImageFont.load_default()    
+            try:  
+                from PIL import ImageFont  
+                try:  
+                    fnt = ImageFont.truetype("arial.ttf", 22)  
+                    fnt_sm = ImageFont.truetype("arial.ttf", 18)  
+                except Exception:  
+                    fnt = ImageFont.truetype("DejaVuSans.ttf", 22)  
+                    fnt_sm = ImageFont.truetype("DejaVuSans.ttf", 18)  
+            except Exception:  
+                fnt = fnt_sm = ImageFont.load_default() 
             def dash_line(x0, y0, x1, y1, fill, dash=8, gap=6, width=2):    
                 # PIL не умеет пунктир — рисуем штрихи вручную (вертикаль)    
                 y = y0    
@@ -1180,18 +1185,28 @@ class Panel(tk.Tk):
             self._dump_lines = []  
             self._dump_got = 0  
             self._dump_count = -1  
-            if "count=" in line:  
-                self._dump_count = int(line.split("count=")[1])  
+            if "count=" in line:    
+                try:    
+                    self._dump_count = int(line.split("count=")[1].split()[0])    
+                except (ValueError, IndexError):    
+                    self._dump_count = -1    
             return  
         if self._dump_active:  
             if line.startswith("# params end"):  
                 self._dump_active = False  
-                if self._dump_count >= 0 and self._dump_got != self._dump_count:  
-                    self._log(f"# дамп обрезан: {self._dump_got}/{self._dump_count} — повтор")  
-                    self.w.send("params dump")  
-                else:  
-                    self._build_params(self._dump_lines)  
-                    self._send_next()  
+                if (self._dump_count >= 0    
+                        and self._dump_got != self._dump_count    
+                        and self._dump_retries < 3):    
+                    self._dump_retries += 1    
+                    self._log(f"# дамп обрезан: {self._dump_got}/{self._dump_count}"    
+                              f" — повтор {self._dump_retries}/3")    
+                    self.w.send("params dump")    
+                else:    
+                    if self._dump_got != self._dump_count and self._dump_count >= 0:    
+                        self._log("# дамп обрезан — строю по тому, что есть")    
+                    self._dump_retries = 0    
+                    self._build_params(self._dump_lines)    
+                    self._send_next()    
                 return  
             if line.startswith("P|"):  
                 self._dump_got += 1  
@@ -1296,8 +1311,12 @@ class Panel(tk.Tk):
     
     def _add_param(self, parent, row, label, ptype, cur, col0=0):      
         ttk.Label(parent, text=label).grid(row=row, column=col0, sticky="w", padx=4)      
-        if ptype == "onoff":      
-            var = tk.IntVar(value=int(cur))      
+        if ptype == "onoff":        
+            try:    
+                cur_i = int(cur)    
+            except ValueError:    
+                cur_i = 0    
+            var = tk.IntVar(value=cur_i) 
             ttk.Checkbutton(      
                 parent, variable=var,      
                 command=lambda l=label, v=var: self._set(l, v.get())      
@@ -1327,21 +1346,34 @@ class Panel(tk.Tk):
         p = self.params.get(label)  
         if p and p["type"] == "onoff":  
             val = "on" if str(val) in ("1", "on") else "off"  
+        elif p and p["type"] in ("gain", "x100"):    
+            # поле хранит raw (Q8 / x100), команда ждёт множитель —    
+            # иначе каждый FocusOut умножает значение (runaway до int32-max)    
+            try:    
+                f = float(val)    
+            except ValueError:    
+                self._log(f"# {label}: '{val}' не число — не отправлено")    
+                return    
+            val = f"{f / (256.0 if p['type'] == 'gain' else 100.0):g}"    
         self._cmd(f"{label} {val}")    
   
     def _refresh_param(self, ok_text):  
         # "# OK band lo=100" -> обновить var, если метка совпала  
         if "=" not in ok_text:  
             return  
-        label, val = ok_text.rsplit("=", 1)  
-        label = label.strip()  
-        val = val.strip().split()[0]  
-        p = self.params.get(label)  
-        if p:  
-            try:  
-                p["var"].set(int(float(val)))  
-            except ValueError:  
-                p["var"].set(val)  
+        label, val = ok_text.rsplit("=", 1)    
+        label = label.strip()    
+        parts = val.strip().split()    
+        if not parts:    
+            return    
+        val = parts[0]
+        p = self.params.get(label)    
+        if p:    
+            try:    
+                f = float(val)    
+                p["var"].set(int(f) if f == int(f) else f)    
+            except ValueError:    
+                p["var"].set(val)    
   
     def _mode_set(self, cmd, val):    
         # Флажок runtime-режима: команда немедленно, в банк не пишется.    
