@@ -44,6 +44,7 @@ static volatile uint8_t     rec_src_tx = 0;
 static volatile uint32_t    decim_phase = 0;   // фаза дециматора (запись)  
 static volatile uint32_t    interp_phase = 0;  // фаза интерполятора (play)  
 static int16_t              prev_samp = 0;     // предыдущий отсчёт для интерполяции  
+static int16_t              cur_samp  = 0;     // декодированный отсчёт на позиции pos (prefetch)  
 static volatile uint8_t     play_src = 0;      // 0 = ram_buf (×2 interp), 1 = voice_14 (1:1)    
 static volatile uint32_t    play_len = 0;      // длина текущего воспроизведения
 
@@ -411,29 +412,34 @@ void af_rec_stop(void) {
     }    
 }    
   
-bool af_rec_play(void) {      
-    if (state != ST_IDLE) return false;      
-    pos = 0;    
-    interp_phase = 0;    
-    prev_samp = 0;    
-    slot_off = rec_slot_off(rec_bank());    // слот активного банка      
-    slot_len = rec_slot_len_codec(rec_bank(), &slot_codec);      
-    dec.pred = 0; dec.idx = 0;              // сброс ADPCM-декодера    
-    if (slot_len == 0) {                    // слот пуст — клип-заглушка      
-        play_src = 1;      
-        play_len = clip_voice_14_len;      
-        Serial.printf("# rec: play %lu samp (voice14, bank=%u empty)\n",  
-                      (unsigned long)play_len, (unsigned)rec_bank());      
-    } else {      
-        play_src = 0;      
-        play_len = slot_len;      
-        Serial.printf("# rec: play %lu samp (flash bank=%u)\n",  
-                      (unsigned long)play_len, (unsigned)rec_bank());      
-    }      
-    state = ST_PLAY;    
-    af_rec_active = 2;  
-    return true;      
-}      
+bool af_rec_play(void) {        
+    if (state != ST_IDLE) return false;        
+    pos = 0;      
+    interp_phase = 0;      
+    prev_samp = 0;      
+    slot_off = rec_slot_off(rec_bank());    // слот активного банка        
+    slot_len = rec_slot_len_codec(rec_bank(), &slot_codec);        
+    dec.pred = 0; dec.idx = 0;              // сброс ADPCM-декодера      
+    if (slot_len == 0) {                    // слот пуст — клип-заглушка        
+        play_src = 1;        
+        play_len = clip_voice_14_len;        
+        Serial.printf("# rec: play %lu samp (voice14, bank=%u empty)\n",    
+                      (unsigned long)play_len, (unsigned)rec_bank());        
+    } else {        
+        play_src = 0;        
+        play_len = slot_len;        
+        Serial.printf("# rec: play %lu samp (flash bank=%u)\n",    
+                      (unsigned long)play_len, (unsigned)rec_bank());        
+        // Prefetch: декодируем отсчёт pos=0 заранее — adpcm_dec stateful,    
+        // в горячем пути декодируем ровно 1 раз на отсчёт (при pos++).    
+        cur_samp = (slot_codec == AF_REC_CODEC_ADPCM)    
+                 ? adpcm_dec(adpcm_get_nib(rec_slot_data(), 0))    
+                 : ((const int16_t*)rec_slot_data())[0];    
+    }        
+    state = ST_PLAY;      
+    af_rec_active = 2;    
+    return true;        
+}        
   
 void af_rec_play_stop(void) {    
     if (state == ST_PLAY) {
@@ -469,16 +475,23 @@ int16_t __not_in_flash_func(af_rec_mix)(int16_t s) {
     int32_t v;    
     if (play_src) {                          // voice_14: полная частота, 1:1    
         v = s + clip_voice_14[pos++];    
-    } else {                                 // flash-слот: интерполяция ×2  
-        int16_t cur;    
-        if (slot_codec == AF_REC_CODEC_ADPCM)    
-            cur = adpcm_dec(adpcm_get_nib(rec_slot_data(), pos));    
-        else    
-            cur = ((const int16_t*)rec_slot_data())[pos];   // legacy PCM    
-        if (++interp_phase >= AF_REC_DECIM) { interp_phase = 0; pos++; v = s + cur; }      
-        else                                { v = s + (prev_samp + cur) / 2; }      
-        prev_samp = cur;      
-    }      
+    } else {                                 // flash-слот: интерполяция ×2    
+        // adpcm_dec stateful — декодируем ровно 1 раз на отсчёт (prefetch    
+        // в cur_samp), а не на каждый выходной сэмпл интерполятора.    
+        if (++interp_phase >= AF_REC_DECIM) {    
+            interp_phase = 0;    
+            v = s + cur_samp;    
+            prev_samp = cur_samp;    
+            pos++;    
+            if (pos < play_len) {    
+                cur_samp = (slot_codec == AF_REC_CODEC_ADPCM)    
+                         ? adpcm_dec(adpcm_get_nib(rec_slot_data(), pos))    
+                         : ((const int16_t*)rec_slot_data())[pos];    
+            }    
+        } else {    
+            v = s + (prev_samp + cur_samp) / 2;    
+        }    
+    }        
     if (v > 32767) v = 32767; else if (v < -32768) v = -32768;      
     return (int16_t)v;      
 }        
@@ -489,16 +502,23 @@ int32_t __not_in_flash_func(af_rec_src)(int32_t mic) {
     int32_t v;    
     if (play_src) {                          // voice_14: полная частота, 1:1    
         v = clip_voice_14[pos++];    
-    } else {                                 // flash-слот: интерполяция ×2  
-        int16_t cur;    
-        if (slot_codec == AF_REC_CODEC_ADPCM)    
-            cur = adpcm_dec(adpcm_get_nib(rec_slot_data(), pos));    
-        else    
-            cur = ((const int16_t*)rec_slot_data())[pos];   // legacy PCM    
-        if (++interp_phase >= AF_REC_DECIM) { interp_phase = 0; pos++; v = cur; }      
-        else                                { v = (prev_samp + cur) / 2; }      
-        prev_samp = cur;      
-    }      
+    } else {                                 // flash-слот: интерполяция ×2    
+        // adpcm_dec stateful — декодируем ровно 1 раз на отсчёт (prefetch    
+        // в cur_samp), а не на каждый выходной сэмпл интерполятора.    
+        if (++interp_phase >= AF_REC_DECIM) {    
+            interp_phase = 0;    
+            v = cur_samp;    
+            prev_samp = cur_samp;    
+            pos++;    
+            if (pos < play_len) {    
+                cur_samp = (slot_codec == AF_REC_CODEC_ADPCM)    
+                         ? adpcm_dec(adpcm_get_nib(rec_slot_data(), pos))    
+                         : ((const int16_t*)rec_slot_data())[pos];    
+            }    
+        } else {    
+            v = (prev_samp + cur_samp) / 2;    
+        }    
+    }        
     return v;                            // замещение микрофона    
 }      
   
