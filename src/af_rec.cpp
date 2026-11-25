@@ -53,13 +53,13 @@ static bool fill_done = false;
 // в rec_slot_write: flash_range_program требует длину кратную 256 Б.  
 static int16_t  ram_buf[AF_REC_RAM_SAMP + 128];  
   
-// --- Слот во flash ------------------------------------------------------------    
-// Заголовок слота (первая страница, 256 Б): magic + длина + банк + crc.    
-// Данные PCM16 с offset AF_REC_HDR_SIZE. Пустой слот = всё 0xFF.    
-#define AF_REC_HDR_SIZE   256u    
-#define AF_REC_MAGIC0     0x52u   // 'R'    
-#define AF_REC_MAGIC1     0x43u   // 'C'    
-#define AF_REC_VER        0x01u    
+// --- Слот во flash ------------------------------------------------------------      
+// Заголовок слота (первая страница, AF_REC_HDR_SIZE из af_config.h):      
+// magic + длина + банк + crc. Данные PCM16 с offset AF_REC_HDR_SIZE.      
+// Пустой слот = всё 0xFF.      
+#define AF_REC_MAGIC0     0x52u   // 'R'      
+#define AF_REC_MAGIC1     0x43u   // 'C'      
+#define AF_REC_VER        0x01u      
   
 static uint32_t slot_len  = 0;    // отсчётов в слоте активного банка      
 static uint32_t slot_off  = 0;    // flash-offset активного слота      
@@ -141,7 +141,7 @@ static void __not_in_flash_func(do_rec_flash_write)(void* param) {
 }       
   
 // Сброс ram_buf в слот bank. Вызывается из af_rec_stop (Core 0).      
-// Окно ~1.5-2 с (erase 32 секторов) — звук/USB мьютятся, как при save.      
+// Окно ~2.5-3 с (erase 56 секторов) — звук/USB мьютятся, как при save.
 // Пишем двумя program: заголовок 256 Б, затем ram_buf напрямую      
 // (он в RAM — источник для flash_range_program валиден при XIP off).      
 static bool rec_slot_write(uint8_t bank, uint32_t n_samp) {      

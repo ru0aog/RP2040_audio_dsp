@@ -419,10 +419,15 @@
 #define AF_REC_FLASH_LEN        (AF_REC_SLOT_LEN * AF_REC_SLOT_COUNT)  // 0xE0000  
 #define AF_REC_SEC_COUNT        (AF_REC_FLASH_LEN / FLASH_SECTOR_SIZE) // 224  
   
-// Ёмкость слота в отсчётах int16: 224 КБ минус заголовок 256 Б.  
+// Заголовок слота магнитофона: первая страница 256 Б  
+// (magic 'R''C' + ver + bank + len + crc). Единая точка определения —  
+// используется и в AF_REC_SLOT_SAMP, и в af_rec.cpp.  
+#define AF_REC_HDR_SIZE         256u  
+  
+// Ёмкость слота в отсчётах int16: 224 КБ минус заголовок.  
 // = 114688 отсчётов ≈ 14.8 с @ 7732 Гц. Лимит коммита во flash;  
 // лимит записи с АЦП — AF_REC_RAM_SAMP (staging-буфер).  
-#define AF_REC_SLOT_SAMP        ((AF_REC_SLOT_SIZE - 256u) / 2u)  
+#define AF_REC_SLOT_SAMP        ((AF_REC_SLOT_SIZE - AF_REC_HDR_SIZE) / 2u)  
   
 // RAM-буфер записи: 56000 отсчётов int16 = 112 КБ, ~7.24 с @ 7732 Гц.  
 // Помещается в слот 224 КБ с запасом (заголовок/выравнивание).

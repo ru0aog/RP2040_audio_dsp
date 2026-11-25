@@ -14,10 +14,10 @@
 // CW.TXT — 4 строки вызовов (af_cw_msgs, af_store.cpp). Пустая строка =      
 // голосовой слот. Запись с ПК: дебаунс 800 мс -> парсер -> af_store_cw_save.    
 //      
-// Аплоад: перезапись RECn.WAV -> стриминг-конвертер -> ram_buf -> слот n.      
-// Любой WAV (PCM 8/16/24/32 бит, mono/stereo, любая частота): ресемплинг      
-// в 7732 Гц mono int16, обрезка по длительности слота (~7.2 с). Коммит —      
-// по таймауту 1.5 с после последнего сектора (flash-окно в af_rec_slot_write).
+// Аплоад: перезапись RECn.WAV -> стриминг-конвертер -> ram_buf -> слот n.        
+// Любой WAV (PCM 8/16/24/32 бит, mono/stereo, любая частота): ресемплинг        
+// в 7732 Гц mono int16, обрезка по размеру RAM-буфера (~7.2 с). Коммит —        
+// по таймауту 1.5 с после последнего сектора (flash-окно в af_rec_slot_write).  
   
 #include <Arduino.h>  
 #include <string.h>  
@@ -46,7 +46,7 @@ static uint32_t fm_cw_ms    = 0;       // millis() последней запис
   
 // --- Аплоад WAV: состояние сессии -------------------------------------------    
 static bool     ul_active   = false;   // идёт приём RECn.WAV    
-static uint8_t  ul_bank     = 0;       // целевой банк (1..7)    
+static uint8_t  ul_bank     = 0;       // целевой банк (1..4)      
 static uint32_t ul_lba_next = 0;       // ожидаемый LBA (последовательная запись)    
 static uint32_t ul_last_ms  = 0;       // millis() последнего сектора    
 static uint32_t ul_file_off = 0;       // байт, прочитанный из файла    
@@ -67,7 +67,7 @@ static uint8_t  ul_tail_len = 0;
 // Windows при замене делает delete+create: dir-запись с именем RECn.WAV и  
 // первым кластером появляется ДО записи данных. Данные идут в свободный пул  
 // подряд от первого кластера — мапим их в слот по имени, а не по LBA.  
-static uint16_t dir_first_cl[AF_FM_WAV_FILES + 1];   // [bank 1..7] -> cluster, 0=нет  
+static uint16_t dir_first_cl[AF_FM_WAV_FILES + 1];   // [bank 1..4] -> cluster, 0=нет    
 
 static uint16_t rd16(const uint8_t* p);
 
@@ -138,7 +138,7 @@ static void fat_chain(uint8_t* f, uint16_t first, uint16_t n) {
         fat12_set(f, first + c, (c == n - 1) ? 0xFFF : (uint16_t)(first + c + 1));    
 }    
     
-// Полная перестройка FAT: SET.TXT (set_clusters) + 7 WAV по их размерам.    
+// Полная перестройка FAT: SET.TXT (set_clusters) + 4 WAV по их размерам.      
 static void fm_build_fat(uint16_t set_clusters, const uint16_t* wav_clusters) {    
     uint8_t* f = &fm_disk[1][0];    
     memset(f, 0, AF_FM_FAT_SECTORS * AF_FM_SECTOR_SIZE);    
@@ -166,7 +166,7 @@ static void dir_entry(uint8_t* e, const char* name83, uint16_t cl, uint32_t size
     memcpy(e + 28, &size, 4);    
 }    
     
-// Каталог: SET.TXT + REC1..REC7.WAV. wav_sizes[i] = байт в файле (44 = пусто).    
+// Каталог: SET.TXT + CW.TXT + REC1..REC4.WAV. wav_sizes[i] = байт (44 = пусто).      
 static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,    
                          const uint32_t* wav_sizes) {    
     uint8_t* d = fm_disk[AF_FM_DIR_LBA];    
@@ -334,7 +334,7 @@ static void wav_header(uint8_t* h, uint32_t data_bytes) {
     memcpy(h + 36, "data", 4); memcpy(h + 40, &data_bytes, 4);    
 }    
     
-// Синтез одного сектора WAV-файла слота (bank = 1..7) в buffer.    
+// Синтез одного сектора WAV-файла слота (bank = 1..4) в buffer.      
 // off_in_file = (lba - file_lba) * 512.    
 static void wav_sector(uint8_t bank, uint32_t off_in_file, uint8_t* buffer) {      
     uint32_t len = af_rec_slot_len(bank);      
