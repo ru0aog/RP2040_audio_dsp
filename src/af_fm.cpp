@@ -379,7 +379,9 @@ static int16_t fm_adpcm_dec(uint8_t nib) {
     
 // Отсчёт k ADPCM-слота: последовательный декод с кэшем позиции.    
 static int16_t fm_adpcm_sample(uint8_t bank, const uint8_t* data, uint32_t k) {    
-    if (bank != fm_dec_bank || k < fm_dec_pos) {   // другой слот/скачок — с нуля    
+    if (bank != fm_dec_bank || k + 1 < fm_dec_pos) {  // скачок назад — с нуля;  
+                                                      // k+1 == fm_dec_pos: отсчёт  
+                                                      // уже в fm_dec_pred (Hi-байт)  
         fm_dec_pred = 0; fm_dec_idx = 0; fm_dec_pos = 0; fm_dec_bank = bank;    
     }    
     int16_t v = fm_dec_pred;    
