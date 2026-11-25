@@ -44,7 +44,7 @@ extern size_t af_cli_format_banks(char* buf, size_t cap);
   
 #include "af_rec.h"          // af_rec_slot_len/data — WAV-экспорт    
     
-static uint8_t  fm_disk[AF_FM_RAM_SECTORS][AF_FM_SECTOR_SIZE];  // ~16 КБ    
+static uint8_t  fm_disk[AF_FM_RAM_SECTORS][AF_FM_SECTOR_SIZE];  // ~10 КБ (19 секторов) 
 static uint32_t fm_set_len = 0;        // байт в SET.TXT  
 static bool     fm_dirty   = false;    // ПК писал — ждёт парсера    
 static bool     fm_stale   = true;     // SET.TXT устарел — регенерировать      
@@ -152,7 +152,7 @@ static void fm_build_boot(void) {
     b[14] = 1;  b[15] = 0;               // reserved    
     b[16] = 1;                           // FAT count    
     b[17] = 16; b[18] = 0;               // root entries = 16 (1 сектор)    
-    const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;   // ~4437 < 65536  
+    const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;   // 20480 < 65536  
     memcpy(&b[19], &ts16, 2);        
     b[21] = 0xF8;                        // media          
     const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;          
@@ -397,10 +397,20 @@ static const int16_t fm_adpcm_step[89] = {
 static const int8_t fm_adpcm_idx[16] = {    
     -1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8    
 };    
-static int16_t fm_dec_pred = 0;    
-static int8_t  fm_dec_idx  = 0;    
-static uint32_t fm_dec_pos = 0;    // следующий отсчёт, который выдаст декодер    
-static uint8_t  fm_dec_bank = 0;   // банк, для которого валиден кэш    
+static int16_t fm_dec_pred = 0;      
+static int8_t  fm_dec_idx  = 0;      
+static uint32_t fm_dec_pos = 0;    // следующий отсчёт, который выдаст декодер      
+static uint8_t  fm_dec_bank = 0;   // банк, для которого валиден кэш      
+  
+// Чекпоинты состояния декодера каждые FM_DEC_CKPT отсчётов:      
+// при скачке назад (хост читает файл не последовательно) рестарт      
+// идёт с ближайшего снапшота, а не с нуля — иначе до 224К итераций      
+// декода внутри одного MSC-read -> watchdog -> reboot.      
+#define FM_DEC_CKPT   4096u      
+#define FM_DEC_CKPTS  (AF_FM_WAV_MAX_SAMP / FM_DEC_CKPT + 1)   // ~56      
+static int16_t fm_ck_pred[FM_DEC_CKPTS];      
+static int8_t  fm_ck_idx [FM_DEC_CKPTS];      
+static uint8_t fm_ck_bank = 0;    // банк, для которого валидны чекпоинты      
     
 static int16_t fm_adpcm_dec(uint8_t nib) {    
     int32_t step = fm_adpcm_step[fm_dec_idx];    
@@ -416,21 +426,38 @@ static int16_t fm_adpcm_dec(uint8_t nib) {
     return (int16_t)fm_dec_pred;    
 }    
     
-// Отсчёт k ADPCM-слота: последовательный декод с кэшем позиции.    
-static int16_t fm_adpcm_sample(uint8_t bank, const uint8_t* data, uint32_t k) {    
-    if (bank != fm_dec_bank || k + 1 < fm_dec_pos) {  // скачок назад — с нуля;  
-                                                      // k+1 == fm_dec_pos: отсчёт  
-                                                      // уже в fm_dec_pred (Hi-байт)  
-        fm_dec_pred = 0; fm_dec_idx = 0; fm_dec_pos = 0; fm_dec_bank = bank;    
-    }    
-    int16_t v = fm_dec_pred;    
-    while (fm_dec_pos <= k) {    
-        uint8_t b = data[fm_dec_pos >> 1];    
-        v = fm_adpcm_dec((fm_dec_pos & 1) ? (b >> 4) : (b & 0x0F));    
-        fm_dec_pos++;    
-    }    
-    return v;    
-}    
+// Отсчёт k ADPCM-слота: последовательный декод с кэшем позиции      
+// и чекпоинтами каждые FM_DEC_CKPT отсчётов.      
+static int16_t fm_adpcm_sample(uint8_t bank, const uint8_t* data, uint32_t k) {      
+    if (bank != fm_dec_bank || k + 1 < fm_dec_pos) {  // скачок назад/смена банка    
+        // Рестарт с ближайшего чекпоинта <= k (или с нуля).      
+        uint32_t cp = k / FM_DEC_CKPT;      
+        if (bank == fm_ck_bank && cp > 0) {      
+            fm_dec_pred = fm_ck_pred[cp];      
+            fm_dec_idx  = fm_ck_idx [cp];      
+            fm_dec_pos  = cp * FM_DEC_CKPT;      
+        } else {      
+            fm_dec_pred = 0; fm_dec_idx = 0; fm_dec_pos = 0;      
+        }      
+        fm_dec_bank = bank;      
+    }      
+    int16_t v = fm_dec_pred;      
+    while (fm_dec_pos <= k) {      
+        uint8_t b = data[fm_dec_pos >> 1];      
+        v = fm_adpcm_dec((fm_dec_pos & 1) ? (b >> 4) : (b & 0x0F));      
+        fm_dec_pos++;      
+        // Снапшот на границе чекпоинта — состояние ПОСЛЕ отсчёта pos-1.      
+        if ((fm_dec_pos % FM_DEC_CKPT) == 0) {      
+            uint32_t cp = fm_dec_pos / FM_DEC_CKPT;      
+            if (cp < FM_DEC_CKPTS) {      
+                fm_ck_pred[cp] = fm_dec_pred;      
+                fm_ck_idx [cp] = fm_dec_idx;      
+                fm_ck_bank     = bank;      
+            }      
+        }      
+    }      
+    return v;      
+}      
     
 // IMA-ADPCM энкодер аплоада: один отсчёт -> ниббл.      
 // Таблицы fm_adpcm_step/fm_adpcm_idx общие с декодером экспорта.      
@@ -841,10 +868,12 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
     else if (lba >= AF_FM_SET_LBA &&    
              lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)                 ram = AF_FM_SET_RAM + (lba - AF_FM_SET_LBA);    
     else if (lba == AF_FM_CW_LBA)                                      ram = AF_FM_CW_RAM;    
-    else {    
-        Serial.printf("# fm: write rejected lba=%lu (gap)\n", (unsigned long)lba);    
-        return -1;    
-    }    
+    else {      
+        // Зазор между RAM-областью и WAV — проглотить с OK:      
+        // отказ провоцирует ретраи хоста и remount.      
+        Serial.printf("# fm: write swallowed lba=%lu (gap)\n", (unsigned long)lba);      
+        return (int32_t)AF_FM_SECTOR_SIZE;      
+    }      
     memcpy(fm_disk[ram], buffer, AF_FM_SECTOR_SIZE);                    
     // Перехват root dir: чужие записи (SVI и т.п.) помечаем удалёнными,    
     // затем хост создал/обновил RECn.WAV — запомнить кластер.        
@@ -853,7 +882,7 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
         dir_track(fm_disk[ram]);    
     }    
 
-    // Парсер запускаем только при записи в data-область SET.TXT (LBA 16..31)
+    // Парсер запускаем только при записи в data-область SET.TXT (LBA 82..97)  
     // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    
     // не должны триггерить парсинг и перемонтирование — иначе цикл.    
     if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {      
