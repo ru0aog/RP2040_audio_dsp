@@ -147,9 +147,14 @@ static uint32_t rec_slot_len_codec(uint8_t bank, uint8_t* codec_out) {
     if (crc != h[8]) return 0;        
     uint8_t codec = (h[2] == 0x01u) ? AF_REC_CODEC_PCM : h[9];  // ver1: codec нет  
     if (codec != AF_REC_CODEC_PCM && codec != AF_REC_CODEC_ADPCM) return 0;      
-    uint32_t cap = (codec == AF_REC_CODEC_ADPCM) ? AF_REC_SLOT_SAMP      
-                                               : AF_REC_SLOT_SAMP / 2u;      
-    if (len > cap) return 0;   // лимит = ёмкость слота под данный codec      
+    // Лимит = байты данных слота (SLOT_SIZE - HDR), пересчитанные в отсчёты:  
+    // ADPCM 0.5 Б/отсчёт -> SLOT_SAMP; PCM16 2 Б/отсчёт -> (SLOT_SIZE-HDR)/2.  
+    // Без этого PCM len до 229120 проходил валидацию, но данные вылезали  
+    // за пределы слота — чтение за границей -> reboot на битом слоте.  
+    uint32_t data_bytes = AF_REC_SLOT_SIZE - AF_REC_HDR_SIZE;      
+    uint32_t cap = (codec == AF_REC_CODEC_ADPCM) ? data_bytes * 2u        
+                                               : data_bytes / 2u;        
+    if (len > cap) return 0;   // лимит = ёмкость слота под данный codec        
     if (codec_out) *codec_out = codec;      
     return len;          
 }        
@@ -429,8 +434,14 @@ bool af_rec_play(void) {
         Serial.printf("# rec: play %lu samp (voice14, bank=%u empty)\n",    
                       (unsigned long)play_len, (unsigned)rec_bank());        
     } else {        
-        play_src = 0;        
-        play_len = slot_len;        
+        play_src = 0;          
+        play_len = slot_len;          
+        // Страховка: данные не должны выходить за область слота          
+        // (битый len после валидации не пройдёт, но дёшево).          
+        uint32_t max_samp = (slot_codec == AF_REC_CODEC_ADPCM)      
+                          ? (AF_REC_SLOT_SIZE - AF_REC_HDR_SIZE) * 2u      
+                          : (AF_REC_SLOT_SIZE - AF_REC_HDR_SIZE) / 2u;      
+        if (play_len > max_samp) play_len = max_samp;          
         Serial.printf("# rec: play %lu samp (flash bank=%u, codec=%u)\n",    
                       (unsigned long)play_len, (unsigned)rec_bank(),(unsigned)slot_codec);        
         // Prefetch: декодируем отсчёт pos=0 заранее — adpcm_dec stateful,    
