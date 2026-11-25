@@ -114,7 +114,7 @@ bool af_rec_is_busy(void) {
 
 static bool rec_slot_write(uint8_t bank, uint32_t n_samp);  // определена ниже  
 
-// Коммит ram_buf -> слот bank (flash-окно ~1.5-2 с, мьют тракта).      
+// Коммит ram_buf -> слот bank (flash-окно ~2.5-3 с, мьют тракта).      
 // Вызывается из af_fm_poll по таймауту после последнего сектора WAV.      
 bool af_rec_slot_write(uint8_t bank, uint32_t n_samp) {      
     if (state != ST_IDLE) return false;      
