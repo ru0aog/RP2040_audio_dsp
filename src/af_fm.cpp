@@ -210,12 +210,14 @@ static uint16_t fat_entry(uint16_t n) {
     
 // Синтез одного сектора FAT (lba 1..AF_FM_FAT_SECTORS) в buffer.    
 // Сектор = 256 записей по 2 Б, little-endian.    
-static void fat_sector(uint32_t lba, uint8_t* buffer) {    
-    uint16_t* e = (uint16_t*)buffer;    
-    uint32_t base = (lba - 1) * 256;        // первая запись сектора    
-    for (uint32_t i = 0; i < 256; i++)    
-        e[i] = fat_entry((uint16_t)(base + i));    
-}    
+static void fat_sector(uint32_t lba, uint8_t* buffer) {      
+    uint32_t base = (lba - 1) * 256;        // первая запись сектора      
+    for (uint32_t i = 0; i < 256; i++) {    
+        uint16_t v = fat_entry((uint16_t)(base + i));    
+        buffer[i * 2]     = (uint8_t)v;     // byte-wise: буфер TinyUSB    
+        buffer[i * 2 + 1] = (uint8_t)(v >> 8);  // может быть невыровнен —    
+    }                                       // (uint16_t*)buffer -> hardfault    
+}      
   
 static void dir_entry(uint8_t* e, const char* name83, uint16_t cl, uint32_t size) {    
     memset(e, 0, 32);    
@@ -342,7 +344,7 @@ static void cw_txt_parse(const char* txt, uint32_t cap) {
 void af_fm_poll(void) {        
     // Отложенная печать из MSC-колбэков — здесь обычный контекст,    
     // printf безопасен.    
-    if (fm_log_pending) {    
+    if (fm_log_pending) {
         fm_log_pending = false;    
         Serial.println(fm_log);    
     }    
@@ -417,71 +419,77 @@ static const int16_t fm_adpcm_step[89] = {
 static const int8_t fm_adpcm_idx[16] = {    
     -1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8    
 };    
-static int16_t fm_dec_pred = 0;      
-static int8_t  fm_dec_idx  = 0;      
-static uint32_t fm_dec_pos = 0;    // следующий отсчёт, который выдаст декодер      
-static uint8_t  fm_dec_bank = 0;   // банк, для которого валиден кэш      
-  
-// Чекпоинты состояния декодера каждые FM_DEC_CKPT отсчётов:      
-// при скачке назад (хост читает файл не последовательно) рестарт      
-// идёт с ближайшего снапшота, а не с нуля — иначе до 224К итераций      
-// декода внутри одного MSC-read -> watchdog -> reboot.      
-#define FM_DEC_CKPT   4096u      
-#define FM_DEC_CKPTS  (AF_FM_WAV_MAX_SAMP / FM_DEC_CKPT + 1)   // ~56      
-static int16_t fm_ck_pred[FM_DEC_CKPTS];      
-static int8_t  fm_ck_idx [FM_DEC_CKPTS];      
-static uint8_t fm_ck_bank = 0;    // банк, для которого валидны чекпоинты      
+// Состояние декодера — PER-BANK: хост читает файлы с interleaving    
+// (копия REC1 + антивирус/Explorer трогают REC2..4, dir, FAT).    
+// Однобанковый кэш инвалидировался при каждом переключении — сектор    
+// декодировался с нуля до k (до 224К итераций), суммарно O(n²)    
+// на файл -> watchdog -> зависание/reboot при копировании.    
+static int16_t  fm_dec_pred[AF_FM_WAV_FILES + 1];   // [bank 1..4]    
+static int8_t   fm_dec_idx [AF_FM_WAV_FILES + 1];    
+static uint32_t fm_dec_pos [AF_FM_WAV_FILES + 1];   // следующий отсчёт    
+static bool     fm_dec_init[AF_FM_WAV_FILES + 1];   // состояние валидно    
     
-static int16_t fm_adpcm_dec(uint8_t nib) {    
-    int32_t step = fm_adpcm_step[fm_dec_idx];    
-    int32_t delta = step >> 3;    
-    if (nib & 4) delta += step;    
-    if (nib & 2) delta += step >> 1;    
-    if (nib & 1) delta += step >> 2;    
-    fm_dec_pred += (nib & 8) ? -delta : delta;    
-    if (fm_dec_pred > 32767) fm_dec_pred = 32767;    
-    else if (fm_dec_pred < -32768) fm_dec_pred = -32768;    
-    fm_dec_idx += fm_adpcm_idx[nib & 15];    
-    if (fm_dec_idx < 0) fm_dec_idx = 0; else if (fm_dec_idx > 88) fm_dec_idx = 88;    
-    return (int16_t)fm_dec_pred;    
-}    
+// Чекпоинты каждые FM_DEC_CKPT отсчётов — тоже per-bank:    
+// скачок назад рестартует с ближайшего снапшота своего банка.    
+#define FM_DEC_CKPT   4096u        
+#define FM_DEC_CKPTS  (AF_FM_WAV_MAX_SAMP / FM_DEC_CKPT + 1)   // ~56    
+static int16_t fm_ck_pred[AF_FM_WAV_FILES + 1][FM_DEC_CKPTS];  // ~440 Б    
+static int8_t  fm_ck_idx [AF_FM_WAV_FILES + 1][FM_DEC_CKPTS];  // ~220 Б    
+static uint32_t fm_ck_cnt[AF_FM_WAV_FILES + 1];   // сколько чекпоинтов записано     
+    
+static int16_t fm_adpcm_dec(uint8_t bank, uint8_t nib) {      
+    int16_t* pred = &fm_dec_pred[bank];    
+    int8_t*  idx  = &fm_dec_idx [bank];    
+    int32_t step = fm_adpcm_step[*idx];      
+    int32_t delta = step >> 3;      
+    if (nib & 4) delta += step;      
+    if (nib & 2) delta += step >> 1;      
+    if (nib & 1) delta += step >> 2;      
+    *pred += (nib & 8) ? -delta : delta;      
+    if (*pred > 32767) *pred = 32767;      
+    else if (*pred < -32768) *pred = -32768;      
+    *idx += fm_adpcm_idx[nib & 15];      
+    if (*idx < 0) *idx = 0; else if (*idx > 88) *idx = 88;      
+    return *pred;      
+}      
     
 // Отсчёт k ADPCM-слота: последовательный декод с кэшем позиции      
 // и чекпоинтами каждые FM_DEC_CKPT отсчётов.      
 // max_k — потолок индекса (len слота): декодер не выйдет за данные  
 // даже при рассинхроне кэша позиции.  
-static int16_t fm_adpcm_sample(uint8_t bank, const uint8_t* data, uint32_t k,  
-                               uint32_t max_k) {        
-    if (k > max_k) k = max_k;  
-    if (bank != fm_dec_bank || k + 1 < fm_dec_pos) {  // скачок назад/смена банка    
-        // Рестарт с ближайшего чекпоинта <= k (или с нуля).      
-        uint32_t cp = k / FM_DEC_CKPT;      
-        if (bank == fm_ck_bank && cp > 0) {      
-            fm_dec_pred = fm_ck_pred[cp];      
-            fm_dec_idx  = fm_ck_idx [cp];      
-            fm_dec_pos  = cp * FM_DEC_CKPT;      
-        } else {      
-            fm_dec_pred = 0; fm_dec_idx = 0; fm_dec_pos = 0;      
-        }      
-        fm_dec_bank = bank;      
-    }      
-    int16_t v = fm_dec_pred;      
-    while (fm_dec_pos <= k) {      
-        uint8_t b = data[fm_dec_pos >> 1];      
-        v = fm_adpcm_dec((fm_dec_pos & 1) ? (b >> 4) : (b & 0x0F));      
-        fm_dec_pos++;      
-        // Снапшот на границе чекпоинта — состояние ПОСЛЕ отсчёта pos-1.      
-        if ((fm_dec_pos % FM_DEC_CKPT) == 0) {      
-            uint32_t cp = fm_dec_pos / FM_DEC_CKPT;      
-            if (cp < FM_DEC_CKPTS) {      
-                fm_ck_pred[cp] = fm_dec_pred;      
-                fm_ck_idx [cp] = fm_dec_idx;      
-                fm_ck_bank     = bank;      
-            }      
-        }      
-    }      
-    return v;      
-}      
+static int16_t fm_adpcm_sample(uint8_t bank, const uint8_t* data, uint32_t k,    
+                               uint32_t max_k) {          
+    if (k > max_k) k = max_k;    
+    // Рестарт: первое обращение к банку или скачок назад.    
+    // Смена банка НЕ сбрасывает — у каждого банка своё состояние.    
+    if (!fm_dec_init[bank] || k + 1 < fm_dec_pos[bank]) {    
+        uint32_t cp = k / FM_DEC_CKPT;    
+        if (cp > 0 && cp < fm_ck_cnt[bank]) {         // снапшот своего банка    
+            fm_dec_pred[bank] = fm_ck_pred[bank][cp];    
+            fm_dec_idx [bank] = fm_ck_idx [bank][cp];    
+            fm_dec_pos [bank] = cp * FM_DEC_CKPT;    
+        } else {    
+            fm_dec_pred[bank] = 0; fm_dec_idx[bank] = 0; fm_dec_pos[bank] = 0;    
+        }    
+        fm_dec_init[bank] = true;    
+    }    
+    int16_t v = fm_dec_pred[bank];    
+    while (fm_dec_pos[bank] <= k) {    
+        uint32_t pos = fm_dec_pos[bank];    
+        uint8_t b = data[pos >> 1];    
+        v = fm_adpcm_dec(bank, (pos & 1) ? (b >> 4) : (b & 0x0F));    
+        fm_dec_pos[bank] = ++pos;    
+        if ((pos % FM_DEC_CKPT) == 0) {               // снапшот на границе    
+            uint32_t cp = pos / FM_DEC_CKPT;    
+            if (cp < FM_DEC_CKPTS) {    
+                fm_ck_pred[bank][cp] = fm_dec_pred[bank];    
+                fm_ck_idx [bank][cp] = fm_dec_idx [bank];    
+                if (cp >= fm_ck_cnt[bank]) fm_ck_cnt[bank] = cp + 1;    
+            }    
+        }    
+    }    
+    return v;    
+}    
     
 // IMA-ADPCM энкодер аплоада: один отсчёт -> ниббл.      
 // Таблицы fm_adpcm_step/fm_adpcm_idx общие с декодером экспорта.      
