@@ -428,7 +428,11 @@ static int16_t fm_adpcm_dec(uint8_t nib) {
     
 // Отсчёт k ADPCM-слота: последовательный декод с кэшем позиции      
 // и чекпоинтами каждые FM_DEC_CKPT отсчётов.      
-static int16_t fm_adpcm_sample(uint8_t bank, const uint8_t* data, uint32_t k) {      
+// max_k — потолок индекса (len слота): декодер не выйдет за данные  
+// даже при рассинхроне кэша позиции.  
+static int16_t fm_adpcm_sample(uint8_t bank, const uint8_t* data, uint32_t k,  
+                               uint32_t max_k) {        
+    if (k > max_k) k = max_k;  
     if (bank != fm_dec_bank || k + 1 < fm_dec_pos) {  // скачок назад/смена банка    
         // Рестарт с ближайшего чекпоинта <= k (или с нуля).      
         uint32_t cp = k / FM_DEC_CKPT;      
@@ -502,11 +506,16 @@ static void wav_sector(uint8_t bank, uint32_t off_in_file, uint8_t* buffer) {
         if (p < 44) {        
             buffer[i] = h[p];        
         } else {      
-            uint32_t k = (p - 44) / 2;              // индекс выходного отсчёта      
-            if (k >= out_samp || pcm == nullptr) { buffer[i] = 0; continue; }      
-            int16_t v;    
-            if (adpcm) {    
-                v = fm_adpcm_sample(bank, nib, k);  // 1:1, без ресемплинга    
+            uint32_t k = (p - 44) / 2;              // индекс выходного отсчёта        
+            if (k >= out_samp || pcm == nullptr) { buffer[i] = 0; continue; }        
+            int16_t v;      
+            if (adpcm) {      
+                // Жёсткий guard: читать nib[] только в пределах len нибблов  
+                // слота. out_samp == len для ADPCM, но при рассинхроне  
+                // (dir/FAT закэшированы хостом, слот перезаписан) чтение  
+                // XIP за границей слота -> hardfault -> reboot.  
+                if (k >= len) { buffer[i] = 0; continue; }  
+                v = fm_adpcm_sample(bank, nib, k, len ? len - 1 : 0);   // 1:1, без ресемплинга      
             } else {    
                 // Линейный ресемплинг 7732 -> 8000: src = k * 7732 / 8000      
                 uint32_t num = k * AF_FM_REC_RATE;      

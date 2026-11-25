@@ -233,14 +233,16 @@ bool af_rec_slot_write(uint8_t bank, uint32_t n_samp, uint8_t codec) {
     uint32_t cap = (codec == AF_REC_CODEC_ADPCM) ? AF_REC_RAM_SAMP      
                                                : AF_REC_RAM_BYTES / 2u;      
     if (n_samp == 0 || n_samp > cap) return false;            
-    if (!rec_slot_write(bank, n_samp, codec)) return false;        
-    if (bank == rec_bank()) {           // активный слот — обновить кэш        
-        slot_off = rec_slot_off(bank);        
-        slot_len = n_samp;        
-        slot_codec = codec;    
-    }        
-    return true;        
-}        
+    if (!rec_slot_write(bank, n_samp, codec)) return false;          
+    if (bank == rec_bank()) {           // активный слот — обновить кэш          
+        slot_off = rec_slot_off(bank);          
+        slot_len = n_samp;          
+        slot_codec = codec;      
+    }          
+    af_fm_request_sync();   // размер RECn.WAV изменился — перерендерить dir/FAT,  
+                            // иначе хост читает по stale-раскладке -> reboot  
+    return true;          
+}          
 
 // --- Flash-окно: erase+program слота. Вся функция в RAM. ----------------------    
 // param = {off, src, bytes}: erase AF_REC_SLOT_SIZE, затем program src.    
