@@ -1,15 +1,18 @@
 // src/af_fm.cpp  
 //  
-// FAT12-диск ~2.2 МБ, RAM-образ ~17 КБ (метаданные + SET.TXT + CW.TXT). Раскладка:        
-//   LBA 0      boot sector        
-//   LBA 1..14  FAT (14 секторов, кластер = 1 сектор)        
-//   LBA 15     root dir (SET.TXT + CW.TXT + REC1..REC4.WAV)            
-//   LBA 16..31 data: SET.TXT (RAM)            
-//   LBA 32     data: CW.TXT (RAM, 4 строки сообщений магнитофона)          
-//   LBA 33..   REC1..REC4.WAV — виртуальные, синтез в af_fm_msc_read            
-//   LBA 3537.. свободный пул 900 секторов (~450 КБ): сюда хост пишет            
-//              данные новых файлов; >= макс. RECn.WAV, иначе Explorer            
-//              откажет в копировании по проверке свободного места              
+// FAT16-диск 10 МБ, RAM-образ ~10 КБ (boot+dir+SET.TXT+CW.TXT). Раскладка:          
+//   LBA 0      boot sector          
+//   LBA 1..80  FAT (80 секторов — СИНТЕЗ в af_fm_msc_read, в RAM не хранится)          
+//   LBA 81     root dir (SET.TXT + CW.TXT + REC1..REC4.WAV)              
+//   LBA 82..97 data: SET.TXT (RAM)              
+//   LBA 98     data: CW.TXT (RAM, 4 строки сообщений магнитофона)            
+//   LBA 99..   REC1..REC4.WAV — виртуальные, синтез в af_fm_msc_read              
+//   LBA 3603.. свободный пул ~16877 секторов (~8.4 МБ): сюда хост пишет              
+//              данные новых файлов; Explorer пропускает копирование              
+//              любого размера по проверке свободного места                
+//    
+// Маппинг RAM-образа (fm_disk): [0]=boot, [1]=dir, [2..17]=SET.TXT, [18]=CW.TXT.    
+// FAT не хранится: цепочки регулярные, сектор генерируется формулой fat_sector().    
 //  
 // SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.      
 // Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.      
@@ -151,58 +154,53 @@ static void fm_build_boot(void) {
     b[17] = 16; b[18] = 0;               // root entries = 16 (1 сектор)    
     const uint16_t ts16 = (uint16_t)AF_FM_SECTOR_COUNT;   // ~4437 < 65536  
     memcpy(&b[19], &ts16, 2);        
-    b[21] = 0xF8;                        // media        
-    const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;        
-    memcpy(&b[22], &fat_sz, 2);          // sectors/FAT = 14  
-    b[24] = 1;  b[25] = 0;               // spt    
-    b[26] = 1;  b[27] = 0;               // heads    
-    b[36] = 0x80; b[38] = 0x29;    
-    const uint32_t vid = 0xA0D5F003;   // bump: новый volume serial ->      
-    memcpy(&b[39], &vid, 4);           // Windows не подставит кэш старого диска    
-    memcpy(&b[43], "AUDIO_DSP2 ", 11); // + метка для надёжности    
-    memcpy(&b[54], "FAT12   ", 8);  
+    b[21] = 0xF8;                        // media          
+    const uint16_t fat_sz = (uint16_t)AF_FM_FAT_SECTORS;          
+    memcpy(&b[22], &fat_sz, 2);          // sectors/FAT = 80    
+    b[24] = 1;  b[25] = 0;               // spt      
+    b[26] = 1;  b[27] = 0;               // heads      
+    b[36] = 0x80; b[38] = 0x29;      
+    const uint32_t vid = 0xA0D5F004;   // bump: новый volume serial ->        
+    memcpy(&b[39], &vid, 4);           // Windows не подставит кэш старого диска      
+    memcpy(&b[43], "AUDIO_DSP3 ", 11); // + метка для надёжности      
+    memcpy(&b[54], "FAT16   ", 8);    
     b[510] = 0x55; b[511] = 0xAA;  
 }  
   
-// FAT12: запись 12-битного значения в элемент n.  
-static void fat12_set(uint8_t* fat, uint16_t n, uint16_t v) {  
-    uint32_t off = n + n / 2;  
-    if (n & 1) {  
-        fat[off]     = (fat[off] & 0x0F) | ((v << 4) & 0xF0);  
-        fat[off + 1] = (uint8_t)(v >> 4);  
-    } else {  
-        fat[off]     = (uint8_t)v;  
-        fat[off + 1] = (fat[off + 1] & 0xF0) | ((v >> 8) & 0x0F);  
-    }  
-}  
-  
-// Цепочка из n кластеров начиная с first; FAT лежит в fm_disk[1..14]
-static void fat_chain(uint8_t* f, uint16_t first, uint16_t n) {    
-    for (uint16_t c = 0; c < n; c++)    
-        fat12_set(f, first + c, (c == n - 1) ? 0xFFF : (uint16_t)(first + c + 1));    
+// FAT16: значение записи n по формуле — FAT в RAM не хранится,    
+// сектор синтезируется в fat_sector() при чтении хостом.    
+// Раскладка цепочек (кластер = 1 сектор, нумерация с 2):    
+//   2..17        SET.TXT (16 кластеров, вся территория занята)    
+//   18           CW.TXT    
+//   19..         REC1..REC4.WAV по AF_FM_WAV_CLUSTERS кластеров    
+//   далее        свободный пул (0)    
+static uint16_t fat_entry(uint16_t n) {    
+    if (n == 0) return 0xFFF8;              // media + EOC    
+    if (n == 1) return 0xFFFF;    
+    uint16_t cl = 2;    
+    // SET.TXT: цепочка AF_FM_SET_CLUSTERS    
+    if (n >= cl && n < cl + AF_FM_SET_CLUSTERS)    
+        return (n == cl + AF_FM_SET_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);    
+    cl += AF_FM_SET_CLUSTERS;    
+    // CW.TXT: 1 кластер    
+    if (n == cl) return 0xFFFF;    
+    cl += AF_FM_CW_CLUSTERS;    
+    // RECn.WAV: фиксированная сетка AF_FM_WAV_CLUSTERS на файл    
+    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
+        if (n >= cl && n < cl + AF_FM_WAV_CLUSTERS)    
+            return (n == cl + AF_FM_WAV_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);    
+        cl += AF_FM_WAV_CLUSTERS;    
+    }    
+    return 0;                               // свободный пул    
 }    
     
-// Полная перестройка FAT: SET.TXT + CW.TXT + 4 WAV. Цепочки RECn.WAV    
-// всегда строятся на AF_FM_WAV_CLUSTERS кластеров (фиксированная сетка    
-// = dir-записи = AF_FM_WAV_LBA(i)), независимо от фактического размера    
-// слота — иначе сетки FAT и dir расходятся (cross-link, chkdsk).        
-static void fm_build_fat(uint16_t set_clusters, const uint16_t* wav_clusters) {    
-    uint8_t* f = &fm_disk[1][0];    
-    memset(f, 0, AF_FM_FAT_SECTORS * AF_FM_SECTOR_SIZE);    
-    f[0] = 0xF8; f[1] = 0xFF; f[2] = 0xFF;    
-    fat_chain(f, 2, AF_FM_SET_CLUSTERS);   // вся территория SET.TXT занята —    
-                                           // хост не выделит кластеры 3..17    
-                                           // новому файлу (инцидент с REC1)    
-    fat_chain(f, 2 + AF_FM_SET_CLUSTERS, AF_FM_CW_CLUSTERS);  // CW.TXT — кластер 18    
-    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
-        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS    
-                                    + i * AF_FM_WAV_CLUSTERS);    
-        fat_chain(f, first, AF_FM_WAV_CLUSTERS);  
-    }  
-    // Свободный пул в конце диска: кластеры за пределами цепочек RECn  
-    // остаются неразмеченными -> Windows видит свободное место и  
-    // пропускает проверку при копировании/замене файлов.  
-    // (ничего дополнительно делать не нужно — неразмеченные = свободные)  
+// Синтез одного сектора FAT (lba 1..AF_FM_FAT_SECTORS) в buffer.    
+// Сектор = 256 записей по 2 Б, little-endian.    
+static void fat_sector(uint32_t lba, uint8_t* buffer) {    
+    uint16_t* e = (uint16_t*)buffer;    
+    uint32_t base = (lba - 1) * 256;        // первая запись сектора    
+    for (uint32_t i = 0; i < 256; i++)    
+        e[i] = fat_entry((uint16_t)(base + i));    
 }    
   
 static void dir_entry(uint8_t* e, const char* name83, uint16_t cl, uint32_t size) {    
@@ -216,7 +214,7 @@ static void dir_entry(uint8_t* e, const char* name83, uint16_t cl, uint32_t size
 // Каталог: SET.TXT + CW.TXT + REC1..REC4.WAV. wav_sizes[i] = байт (44 = пусто).      
 static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,    
                          const uint32_t* wav_sizes) {    
-    uint8_t* d = fm_disk[AF_FM_DIR_LBA];    
+    uint8_t* d = fm_disk[AF_FM_DIR_RAM];    // dir — fm_disk[1], не LBA 81    
     memset(d, 0, AF_FM_SECTOR_SIZE);    
     dir_entry(&d[0], "SET     TXT", set_clusters ? 2 : 0, set_size);      
     dir_entry(&d[32], "CW      TXT", (uint16_t)(2 + AF_FM_SET_CLUSTERS),    
@@ -238,11 +236,9 @@ static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,
 void af_fm_init(void) {  
     memset(dir_first_cl, 0, sizeof(dir_first_cl));  
     memset(fm_disk, 0, sizeof(fm_disk));  
-    fm_build_boot();    
-    static const uint16_t zero4[AF_FM_WAV_FILES] = {0};      
-    static const uint32_t zsz4[AF_FM_WAV_FILES]  = {0};      
-    fm_build_fat(0, zero4);      
-    fm_build_dir(0, 0, zsz4);      
+    fm_build_boot();      
+    static const uint32_t zsz4[AF_FM_WAV_FILES]  = {0};        
+    fm_build_dir(0, 0, zsz4);      // FAT не строится — синтез на чтении    
     fm_set_len = 0;  
     fm_dirty   = false;  
     fm_stale   = true;                 // первый sync — после af_store_init  
@@ -251,8 +247,8 @@ void af_fm_init(void) {
 void af_fm_request_sync(void) { fm_stale = true; }  
   
 void af_fm_sync(void) {    
-    // SET.TXT рендерится в RAM-область (LBA 16..31)
-    char* txt = (char*)&fm_disk[AF_FM_SET_LBA][0];    
+    // SET.TXT рендерится в RAM-область (fm_disk[2..17])  
+    char* txt = (char*)&fm_disk[AF_FM_SET_RAM][0];      
     size_t cap = AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE;    
     size_t n = af_cli_format_banks(txt, cap);    
     if (n >= cap) n = cap - 1;    
@@ -286,7 +282,7 @@ void af_fm_sync(void) {
     // CW.TXT: 4 строки из af_cw_msgs, CRLF, хвост — пробелы (чистый вид    
     // в редакторе; парсер пробелы/CRLF пропускает).    
     {    
-        uint8_t* cw = &fm_disk[AF_FM_CW_LBA][0];    
+        uint8_t* cw = &fm_disk[AF_FM_CW_RAM][0];      
         memset(cw, ' ', AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);    
         uint32_t off = 0;    
         for (uint8_t i = 0; i < AF_CW_MSGS; i++) {    
@@ -297,8 +293,7 @@ void af_fm_sync(void) {
             cw[off++] = '\r'; cw[off++] = '\n';    
         }    
     }    
-    fm_build_fat(set_clusters, wav_clusters);        
-    fm_build_dir(fm_set_len, set_clusters, wav_sizes);        
+    fm_build_dir(fm_set_len, set_clusters, wav_sizes);   // FAT — синтез    
     fm_stale = false;        
 }      
 
@@ -338,7 +333,7 @@ void af_fm_poll(void) {
     // потом парсим SET.TXT целиком и пишем банки во flash.      
     if (fm_dirty && (int32_t)(millis() - fm_dirty_ms) >= 800) {        
         fm_dirty = false;      
-        const char* txt = (const char*)&fm_disk[AF_FM_SET_LBA][0];        
+        const char* txt = (const char*)&fm_disk[AF_FM_SET_RAM][0];          
         bool applied = af_cli_apply_set_txt(txt,        
                           AF_FM_SET_CLUSTERS * AF_FM_SECTOR_SIZE);        
         Serial.printf("# fm: SET.TXT %s\n",        
@@ -348,7 +343,7 @@ void af_fm_poll(void) {
     // CW.TXT: тот же дебаунс 800 мс -> парсер -> flash -> re-render.    
     if (fm_cw_dirty && (int32_t)(millis() - fm_cw_ms) >= 800) {    
         fm_cw_dirty = false;    
-        cw_txt_parse((const char*)&fm_disk[AF_FM_CW_LBA][0],    
+        cw_txt_parse((const char*)&fm_disk[AF_FM_CW_RAM][0],      
                      AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);    
         af_store_cw_save();            // flash-окно + af_fm_request_sync    
         Serial.println("# fm: CW.TXT parsed -> msgs written");    
@@ -732,10 +727,27 @@ int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {
     if (buffer == nullptr || bufsize == 0 || lba >= AF_FM_SECTOR_COUNT)    
         return -1;    
     if (bufsize < AF_FM_SECTOR_SIZE) return -1;    
-    if (lba < AF_FM_RAM_SECTORS) {                 // boot/FAT/dir/SET.TXT    
-        memcpy(buffer, fm_disk[lba], AF_FM_SECTOR_SIZE);    
-        return (int32_t)AF_FM_SECTOR_SIZE;    
-    }    
+    if (lba == 0) {                                // boot      
+        memcpy(buffer, fm_disk[0], AF_FM_SECTOR_SIZE);      
+        return (int32_t)AF_FM_SECTOR_SIZE;      
+    }      
+    if (lba <= AF_FM_FAT_SECTORS) {                // FAT 1..80 — синтез    
+        fat_sector(lba, (uint8_t*)buffer);    
+        return (int32_t)AF_FM_SECTOR_SIZE;      
+    }      
+    if (lba == AF_FM_DIR_LBA) {                    // root dir    
+        memcpy(buffer, fm_disk[AF_FM_DIR_RAM], AF_FM_SECTOR_SIZE);      
+        return (int32_t)AF_FM_SECTOR_SIZE;      
+    }      
+    if (lba >= AF_FM_SET_LBA && lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS) {    
+        memcpy(buffer, fm_disk[AF_FM_SET_RAM + (lba - AF_FM_SET_LBA)],    
+               AF_FM_SECTOR_SIZE);      
+        return (int32_t)AF_FM_SECTOR_SIZE;      
+    }      
+    if (lba == AF_FM_CW_LBA) {                     // CW.TXT    
+        memcpy(buffer, fm_disk[AF_FM_CW_RAM], AF_FM_SECTOR_SIZE);      
+        return (int32_t)AF_FM_SECTOR_SIZE;      
+    }      
     // WAV-область: определяем файл по диапазону LBA.    
     for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
         uint32_t start = AF_FM_WAV_LBA(i);    
@@ -815,26 +827,31 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
         return (int32_t)AF_FM_SECTOR_SIZE;        
     }        
     
-    if (lba >= AF_FM_RAM_SECTORS) {  
-        Serial.printf("# fm: write rejected lba=%lu (>= RAM_SECTORS %lu)\n",  
-                      (unsigned long)lba, (unsigned long)AF_FM_RAM_SECTORS);  
-        return -1;                                  // зазоры — read-only  
-    }  
-    // FAT (LBA 1..AF_FM_FAT_SECTORS) — read-only для хоста: наша FAT  
-    // описывает виртуальную раскладку RECn.WAV, а хост при записи файла  
-    // отдаёт обратно свою (закэшированную/переразмеченную) версию и  
-    // затирает цепочки — отсюда cross-link/truncated у RECn.WAV.  
-    // Проглатываем с OK: отказ провоцирует ретраи и remount.  
-    if (lba >= 1 && lba <= AF_FM_FAT_SECTORS)  
-        return (int32_t)AF_FM_SECTOR_SIZE;  
-  
-    memcpy(fm_disk[lba], buffer, AF_FM_SECTOR_SIZE);                  
-    // Перехват root dir: чужим записям (SVI и т.п.) — кластер из пула,  
-    // затем хост создал/обновил RECn.WAV — запомнить кластер.      
-    if (lba == AF_FM_DIR_LBA) {  
-        dir_fix_foreign(fm_disk[lba]);  
-        dir_track(fm_disk[lba]);  
-    }  
+    // FAT (LBA 1..AF_FM_FAT_SECTORS) — read-only для хоста: наша FAT    
+    // синтезируется и описывает виртуальную раскладку RECn.WAV, а хост    
+    // при записи файла отдаёт свою версию и затирает цепочки.    
+    // Проглатываем с OK: отказ провоцирует ретраи и remount.    
+    if (lba >= 1 && lba <= AF_FM_FAT_SECTORS)    
+        return (int32_t)AF_FM_SECTOR_SIZE;    
+    
+    // Маппинг LBA -> RAM-образ: dir=1, SET=2..17, CW=18.    
+    // Прочие LBA (зазоры между RAM-областью и WAV) — read-only.    
+    uint32_t ram;    
+    if (lba == AF_FM_DIR_LBA)                                          ram = AF_FM_DIR_RAM;    
+    else if (lba >= AF_FM_SET_LBA &&    
+             lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)                 ram = AF_FM_SET_RAM + (lba - AF_FM_SET_LBA);    
+    else if (lba == AF_FM_CW_LBA)                                      ram = AF_FM_CW_RAM;    
+    else {    
+        Serial.printf("# fm: write rejected lba=%lu (gap)\n", (unsigned long)lba);    
+        return -1;    
+    }    
+    memcpy(fm_disk[ram], buffer, AF_FM_SECTOR_SIZE);                    
+    // Перехват root dir: чужие записи (SVI и т.п.) помечаем удалёнными,    
+    // затем хост создал/обновил RECn.WAV — запомнить кластер.        
+    if (lba == AF_FM_DIR_LBA) {    
+        dir_fix_foreign(fm_disk[ram]);    
+        dir_track(fm_disk[ram]);    
+    }    
 
     // Парсер запускаем только при записи в data-область SET.TXT (LBA 16..31)
     // Записи хоста в boot/FAT/dir при монтировании (метки тома, индексы)    
