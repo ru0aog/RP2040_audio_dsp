@@ -101,24 +101,36 @@ static uint16_t dir_first_cl[AF_FM_WAV_FILES + 1];   // [bank 1..4] -> cluster, 
 static uint16_t rd16(const uint8_t* p);
 
 // Разбор записанного сектора root dir: обновить dir_first_cl[].  
-static void dir_track(const uint8_t* d) {  
-    static const char wav_names[AF_FM_WAV_FILES][12] = {    
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };    
-    for (uint8_t e = 0; e < 16; e++) {               // 16 записей по 32 Б    
-        const uint8_t* p = d + e * 32;    
-        if (p[0] == 0xE5 || p[0] == 0x00) continue;  // удалённая/пустая запись    
-        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
-            if (memcmp(p, wav_names[i], 11) == 0) {    
-                uint16_t cl = rd16(p + 26);  
-                if (cl != dir_first_cl[i + 1]) {    
-                    dir_first_cl[i + 1] = cl;    
-                    fm_logf("# fm: dir REC%u.WAV -> cluster %u",    
-                            (unsigned)(i + 1), (unsigned)cl);    
+static void dir_track(const uint8_t* d) {    
+    static const char wav_names[AF_FM_WAV_FILES][12] = {      
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };      
+    for (uint8_t e = 0; e < 16; e++) {               // 16 записей по 32 Б      
+        const uint8_t* p = d + e * 32;      
+        if (p[0] == 0x00) continue;                  // пустая запись      
+        for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {      
+            if (memcmp(p + 1, wav_names[i] + 1, 10) != 0) continue;    
+            // Имя совпало (по 10 символам после первого байта —    
+            // у удалённой записи p[0]=0xE5, имя остальное).    
+            if (p[0] == 0xE5) {    
+                // Хост удалил RECn.WAV (delete+create при замене):    
+                // stale-кластер сбросить — иначе он перехватит данные    
+                // чужого аплоада в "best_cl <= cl" матчинге.    
+                if (dir_first_cl[i + 1]) {    
+                    dir_first_cl[i + 1] = 0;    
+                    fm_logf("# fm: dir REC%u.WAV deleted", (unsigned)(i + 1));    
                 }    
-            }  
-        }  
-    }  
-}  
+                break;    
+            }    
+            uint16_t cl = rd16(p + 26);    
+            if (cl != dir_first_cl[i + 1]) {      
+                dir_first_cl[i + 1] = cl;      
+                fm_logf("# fm: dir REC%u.WAV -> cluster %u",      
+                        (unsigned)(i + 1), (unsigned)cl);      
+            }      
+            break;    
+        }    
+    }    
+}    
 
 // Чужие записи в root dir (System Volume Information, корзина и т.п.):    
 // хост выделяет им кластеры из нашей разметки — они указывают внутрь    
@@ -582,9 +594,14 @@ static bool ul_begin(uint8_t bank, uint32_t lba) {
         fm_logf("# fm: upload rejected — rec/play busy"); 
         return false;      
     }      
-    ul_active   = true;        
-    ul_bank     = bank;        
-    ul_lba_next = lba;        
+    ul_active   = true;          
+    ul_bank     = bank;          
+    ul_lba_next = lba;          
+    // Аплоад один за раз: stale-кластера других банков не должны    
+    // участвовать в best_cl-матчинге — иначе данные угоняются    
+    // в чужой слот (баг "REC2/REC4 не перезаписываются").    
+    for (uint8_t i = 1; i <= AF_FM_WAV_FILES; i++)    
+        if (i != bank) dir_first_cl[i] = 0;    
     fm_logf("# fm: upload begin: REC%u.WAV lba=%lu cl=%u",    
             (unsigned)bank, (unsigned long)lba,    
             (unsigned)dir_first_cl[bank]);  
