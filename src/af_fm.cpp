@@ -57,7 +57,8 @@ static uint32_t fm_cw_ms    = 0;       // millis() последней запис
 // --- Аплоад WAV: состояние сессии -------------------------------------------    
 static bool     ul_active   = false;   // идёт приём RECn.WAV    
 static uint8_t  ul_bank     = 0;       // целевой банк (1..4)      
-static uint32_t ul_lba_next = 0;       // ожидаемый LBA (последовательная запись)    
+// (ul_lba_next удалён — порядок данных = порядок прихода секторов,    
+//  LBA не последователен при записи в разрозненные кластеры)    
 static uint32_t ul_last_ms  = 0;       // millis() последнего сектора    
 static uint32_t ul_file_off = 0;       // байт, прочитанный из файла    
 static uint32_t ul_data_end = 0;       // конец data-чанка (байт в файле)    
@@ -596,7 +597,6 @@ static bool ul_begin(uint8_t bank, uint32_t lba) {
     }      
     ul_active   = true;          
     ul_bank     = bank;          
-    ul_lba_next = lba;          
     // Аплоад один за раз: stale-кластера других банков не должны    
     // участвовать в best_cl-матчинге — иначе данные угоняются    
     // в чужой слот (баг "REC2/REC4 не перезаписываются").    
@@ -878,24 +878,22 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
                 return (int32_t)AF_FM_SECTOR_SIZE;    // зазор — проглотить  
             }  
         }  
-        if (!ul_active) {        
-            if (!ul_begin(bank, lba))    
-                return (int32_t)AF_FM_SECTOR_SIZE;   // rec/play busy — проглотить    
-        } else if (ul_bank != bank) {  
-            fm_logf("# fm: write to REC%u while REC%u active — swallowed",
-                          (unsigned)bank, (unsigned)ul_bank);  
-            return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить  
-        }  
-        if (lba != ul_lba_next) {             // только последовательно        
-            fm_logf("# fm: REC%u.WAV non-seq LBA %lu (expect %lu)",
-                          (unsigned)ul_bank, (unsigned long)lba,    
-                          (unsigned long)ul_lba_next);    
-            ul_abort("non-sequential LBA");        
-            return (int32_t)AF_FM_SECTOR_SIZE;        
-        }        
-        ul_feed(buffer);        
-        ul_lba_next = lba + 1;        
-        return (int32_t)AF_FM_SECTOR_SIZE;        
+        if (!ul_active) {          
+            if (!ul_begin(bank, lba))      
+                return (int32_t)AF_FM_SECTOR_SIZE;   // rec/play busy — проглотить      
+        } else if (ul_bank != bank) {    
+            fm_logf("# fm: write to REC%u while REC%u active — swallowed",  
+                          (unsigned)bank, (unsigned)ul_bank);    
+            return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить    
+        }    
+        // LBA НЕ проверяем на последовательность: хост пишет данные    
+        // файла в разрозненные кластеры (своя цепочка RECn + свободный    
+        // пул), порядок прихода секторов = порядок данных в файле,    
+        // а LBA скачет (лог: 2727 -> 3606 -> 3607...). Проверка    
+        // "non-seq" убивала аплоад REC2/REC4 — каждый сектор рестартовал    
+        // сессию и в слот попадал только заголовок.    
+        ul_feed(buffer);          
+        return (int32_t)AF_FM_SECTOR_SIZE;          
     }        
     
     // FAT (LBA 1..AF_FM_FAT_SECTORS) — read-only для хоста: наша FAT    
