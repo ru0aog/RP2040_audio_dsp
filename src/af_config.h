@@ -401,37 +401,45 @@
 #define TX_TT_LO_HZ    400u  
 #define TX_TT_HI_HZ    3200u 
 
-// ---------------------------------------------------------------------------  
-// Цифровой магнитофон: 4 слота во flash, по одному на сообщение  
-// (селектор GP13/GP28, код 0..3 -> банк 1..4).  
-// Запись ~7 с в RAM-буфер (56000 отсчётов @ ~7732 Гц после децимации /2),  
-// сброс во flash на стопе через flash-окно af_store.  
-// Слот i (банк i+1): AF_REC_FLASH_OFF + i*AF_REC_SLOT_LEN,  
-// регион 0x11E000..0x1FDFFF (4 × 224 КБ = 896 КБ, 224 сектора).  
-// Банки занимают последний сектор 0x1FF000 — не пересекаются.  
-// Запас под рост прошивки до 0x11E000: ~140 КБ (сейчас занято ~1.0 МБ).  
-// ---------------------------------------------------------------------------  
-#define AF_REC_FLASH_OFF        0x11E000u   // слоты 0x11E000..0x1FDFFF, зазор 4 KB до banks  
-#define AF_REC_SLOT_LEN         0x38000u    // 224 КБ = 56 секторов на слот  
-#define AF_REC_SLOT_SEC         56u         // секторов на слот  
-#define AF_REC_SLOT_SIZE        (AF_REC_SLOT_SEC * FLASH_SECTOR_SIZE)  // 224 КБ  
-#define AF_REC_SLOT_COUNT       4u          // 4 слота = 4 сообщения (GP13/GP28)  
-#define AF_REC_FLASH_LEN        (AF_REC_SLOT_LEN * AF_REC_SLOT_COUNT)  // 0xE0000  
-#define AF_REC_SEC_COUNT        (AF_REC_FLASH_LEN / FLASH_SECTOR_SIZE) // 224  
-  
-// Заголовок слота магнитофона: первая страница 256 Б  
-// (magic 'R''C' + ver + bank + len + crc). Единая точка определения —  
-// используется и в AF_REC_SLOT_SAMP, и в af_rec.cpp.  
-#define AF_REC_HDR_SIZE         256u  
-  
-// Ёмкость слота в отсчётах int16: 224 КБ минус заголовок.  
-// = 114688 отсчётов ≈ 14.8 с @ 7732 Гц. Лимит коммита во flash;  
-// лимит записи с АЦП — AF_REC_RAM_SAMP (staging-буфер).  
-#define AF_REC_SLOT_SAMP        ((AF_REC_SLOT_SIZE - AF_REC_HDR_SIZE) / 2u)  
-  
-// RAM-буфер записи: 56000 отсчётов int16 = 112 КБ, ~7.24 с @ 7732 Гц.  
-// Помещается в слот 224 КБ с запасом (заголовок/выравнивание).
-#define AF_REC_RAM_SAMP         56000u
+// ---------------------------------------------------------------------------    
+// Цифровой магнитофон: 4 слота во flash, по одному на сообщение    
+// (селектор GP13/GP28, код 0..3 -> банк 1..4).    
+// Запись ~29 с в RAM-буфер: IMA-ADPCM 4 бит/отсчёт, кодируется на лету    
+// в af_rec_push (224000 отсчётов @ ~7732 Гц после децимации /2),    
+// сброс во flash на стопе через flash-окно af_store.    
+// Слот i (банк i+1): AF_REC_FLASH_OFF + i*AF_REC_SLOT_LEN,    
+// регион 0x11E000..0x1FDFFF (4 × 224 КБ = 896 КБ, 224 сектора).    
+// Банки занимают последний сектор 0x1FF000 — не пересекаются.    
+// Запас под рост прошивки до 0x11E000: ~140 КБ (сейчас занято ~1.0 МБ).    
+// ---------------------------------------------------------------------------    
+#define AF_REC_FLASH_OFF        0x11E000u   // слоты 0x11E000..0x1FDFFF, зазор 4 KB до banks    
+#define AF_REC_SLOT_LEN         0x38000u    // 224 КБ = 56 секторов на слот    
+#define AF_REC_SLOT_SEC         56u         // секторов на слот    
+#define AF_REC_SLOT_SIZE        (AF_REC_SLOT_SEC * FLASH_SECTOR_SIZE)  // 224 КБ    
+#define AF_REC_SLOT_COUNT       4u          // 4 слота = 4 сообщения (GP13/GP28)    
+#define AF_REC_FLASH_LEN        (AF_REC_SLOT_LEN * AF_REC_SLOT_COUNT)  // 0xE0000    
+#define AF_REC_SEC_COUNT        (AF_REC_FLASH_LEN / FLASH_SECTOR_SIZE) // 224    
+    
+// Заголовок слота магнитофона: первая страница 256 Б    
+// (magic 'R''C' + ver + bank + len + codec + crc). Единая точка    
+// определения — используется и в AF_REC_SLOT_SAMP, и в af_rec.cpp.    
+#define AF_REC_HDR_SIZE         256u    
+    
+// Кодеки слота (поле codec в заголовке, ver 0x02):    
+// 0 = PCM16 (legacy-слоты ver 0x01 и клип voice_14), 1 = IMA-ADPCM 4 бит.    
+#define AF_REC_CODEC_PCM        0u    
+#define AF_REC_CODEC_ADPCM      1u    
+    
+// Ёмкость слота в отсчётах: 224 КБ минус заголовок.    
+// ADPCM: 2 отсчёта/байт = 229376 отсчётов ≈ 29.7 с @ 7732 Гц.    
+// Лимит коммита во flash; лимит записи с АЦП — AF_REC_RAM_SAMP.    
+#define AF_REC_SLOT_SAMP        ((AF_REC_SLOT_SIZE - AF_REC_HDR_SIZE) * 2u)    
+    
+// RAM-буфер записи: 224000 отсчётов ADPCM = 112 КБ, ~29 с @ 7732 Гц.    
+// Физический размер буфера — AF_REC_RAM_BYTES (нибблы, 2 отсчёта/байт).    
+// Помещается в слот 224 КБ с запасом (заголовок/выравнивание).    
+#define AF_REC_RAM_SAMP         224000u    
+#define AF_REC_RAM_BYTES        (AF_REC_RAM_SAMP / 2u)   // 112 КБ  
 
 // Тестовый сектор ftest: последний сектор свободной зоны между    
 // прошивкой (~0x0f1000) и rec-slot (0x100000).    
