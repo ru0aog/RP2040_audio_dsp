@@ -1,12 +1,14 @@
 // src/af_rec.cpp    
 // ============================================================================  
-// af_rec.cpp — цифровой магнитофон: 4 слота во flash
-//    
-// Запись: af_rec_push (Core 1) пишет в ram_buf каждый AF_REC_DECIM-й    
-// отсчёт (децимация ×2: 15464 -> 7732 Гц, ~7.2 с в 56000 отсчётов).    
-// На стопе буфер сбрасывается во flash-слот активного банка через    
-// flash-окно (park Core1 -> mute -> 125 МГц -> capture pause -> pwm off    
-// -> IRQ-off -> erase+program -> restore), как в af_store_save.    
+// af_rec.cpp — цифровой магнитофон: 4 слота во flash по 224 КБ  
+//      
+// Запись: af_rec_push (Core 1) пишет в ram_buf каждый AF_REC_DECIM-й      
+// отсчёт (децимация ×2: 15464 -> 7732 Гц, ~7.2 с в 56000 отсчётов).      
+// На стопе буфер сбрасывается во flash-слот активного банка через      
+// flash-окно (park Core1 -> mute -> 125 МГц -> capture pause -> pwm off      
+// -> IRQ-off -> erase+program -> restore), как в af_store_save.      
+// Слот 224 КБ вмещает ~14.8 с — запас под потоковую запись/аплоад;      
+// лимит записи с АЦП пока = AF_REC_RAM_SAMP (56000 отсчётов).      
 // Воспроизведение: чтение слота напрямую из XIP с интерполяцией ×2.    
 // Пустой слот -> клип-заглушка voice_14 (1:1, без интерполяции).    
 // Активный слот = код селектора GP13/GP28 + 1 (af_gpio_msg_sel, 1..4).        
@@ -81,8 +83,8 @@ static uint32_t rec_slot_len(uint8_t bank) {
     uint8_t crc = 0;    
     for (int i = 0; i < 8; i++) crc ^= h[i];    
     if (crc != h[8]) return 0;    
-    if (len > AF_REC_RAM_SAMP) return 0;    
-    return len;    
+    if (len > AF_REC_SLOT_SAMP) return 0;   // лимит = ёмкость слота, не RAM-буфер  
+    return len;      
 }    
   
 // Указатель на PCM-данные слота в XIP (для воспроизведения).    
@@ -117,7 +119,7 @@ static bool rec_slot_write(uint8_t bank, uint32_t n_samp);  // определе�
 bool af_rec_slot_write(uint8_t bank, uint32_t n_samp) {      
     if (state != ST_IDLE) return false;      
     if (bank < 1 || bank > AF_REC_SLOTS) return false;        
-    if (n_samp == 0 || n_samp > AF_REC_RAM_SAMP) return false;      
+    if (n_samp == 0 || n_samp > AF_REC_SLOT_SAMP) return false;        
     if (!rec_slot_write(bank, n_samp)) return false;      
     if (bank == rec_bank()) {           // активный слот — обновить кэш      
         slot_off = rec_slot_off(bank);      

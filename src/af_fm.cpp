@@ -217,10 +217,12 @@ void af_fm_sync(void) {
     uint32_t wav_sizes[AF_FM_WAV_FILES];        
     static uint32_t prev_sizes[AF_FM_WAV_FILES] = {0};   // для детекта изменений    
     static bool     first_sync = true;                 // первый sync — базовая линия    
-    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {        
-        uint32_t len = af_rec_slot_len(i + 1);        
-        uint32_t out_samp = (len * AF_FM_WAV_RATE) / AF_FM_REC_RATE;        
-        wav_sizes[i] = 44 + out_samp * 2;        
+    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {          
+        uint32_t len = af_rec_slot_len(i + 1);          
+        uint32_t out_samp = (len * AF_FM_WAV_RATE) / AF_FM_REC_RATE;          
+        if (out_samp > AF_FM_WAV_MAX_SAMP)          // слот 224 КБ может вмещать  
+            out_samp = AF_FM_WAV_MAX_SAMP;          // больше, чем файл на диске  
+        wav_sizes[i] = 44 + out_samp * 2;          
         wav_clusters[i] = (uint16_t)((wav_sizes[i] + 511) / 512);        
         // Re-enumerate только при появлении файла (пусто -> непусто):    
         // заливка voice14, первая запись в слот. Изменение размера    
@@ -334,10 +336,12 @@ static void wav_header(uint8_t* h, uint32_t data_bytes) {
     
 // Синтез одного сектора WAV-файла слота (bank = 1..7) в buffer.    
 // off_in_file = (lba - file_lba) * 512.    
-static void wav_sector(uint8_t bank, uint32_t off_in_file, uint8_t* buffer) {    
-    uint32_t len = af_rec_slot_len(bank);    
-    uint32_t out_samp = (len * AF_FM_WAV_RATE) / AF_FM_REC_RATE;    
-    uint32_t data_bytes = out_samp * 2;    
+static void wav_sector(uint8_t bank, uint32_t off_in_file, uint8_t* buffer) {      
+    uint32_t len = af_rec_slot_len(bank);      
+    uint32_t out_samp = (len * AF_FM_WAV_RATE) / AF_FM_REC_RATE;      
+    if (out_samp > AF_FM_WAV_MAX_SAMP)              // cap: не выйти за кластеры  
+        out_samp = AF_FM_WAV_MAX_SAMP;              // RECn.WAV на виртуальном диске  
+    uint32_t data_bytes = out_samp * 2;      
     const int16_t* pcm = af_rec_slot_data(bank);    
     
     uint8_t h[44];      

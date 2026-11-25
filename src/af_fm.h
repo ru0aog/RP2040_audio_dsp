@@ -1,24 +1,23 @@
-// src/af_fm.h  
-//  
-// Файловый менеджер: FAT12-диск 16 КБ в RAM, один файл SET.TXT —  
-// текстовый дамп таблицы banks (cur + ячейки 1..7).  
-// MSC-колбэки регистрируются в af_usb.cpp (usb_msc).  
+// src/af_fm.h    
+//    
+// Файловый менеджер: FAT12-диск ~1.8 МБ, RAM-образ ~14 КБ    
+// (boot+FAT+dir+SET.TXT+CW.TXT). WAV-данные REC1..REC4.WAV    
+// синтезируются в af_fm_msc_read из flash-слотов магнитофона.    
+// MSC-колбэки регистрируются в af_usb.cpp (usb_msc).    
   
 #pragma once  
 #include <Arduino.h>  
   
 #define AF_FM_SECTOR_SIZE   512u    
     
-// Виртуальный диск: в RAM только boot+FAT+dir+SET.TXT, WAV-данные    
-// синтезируются в af_fm_msc_read из flash-слотов магнитофона.    
-//   LBA 0        boot    
-//   LBA 1..10    FAT (10 секторов — цепочки 7 WAV по ~453 кластера)    
-
-// Файловый менеджер: FAT12-диск в RAM, файлы SET.TXT и CW.TXT —    
-//   LBA 11       root dir (9 записей: SET.TXT + CW.TXT + REC1..REC7.WAV)      
-//   LBA 12..27   SET.TXT (16 кластеров резерв, ~8 КБ)      
-//   LBA 28       CW.TXT (1 кластер, 4 строки сообщений магнитофона)    
-//   LBA 29..     REC1..REC7.WAV, каждый по AF_FM_WAV_CLUSTERS кластеров 
+// Виртуальный диск: в RAM только boot+FAT+dir+SET.TXT+CW.TXT, WAV-данные      
+// синтезируются в af_fm_msc_read из flash-слотов магнитофона.      
+//   LBA 0        boot      
+//   LBA 1..10    FAT (10 секторов — цепочки 4 WAV по ~453 кластера)      
+//   LBA 11       root dir (6 записей: SET.TXT + CW.TXT + REC1..REC4.WAV)        
+//   LBA 12..27   SET.TXT (16 кластеров резерв, ~8 КБ)        
+//   LBA 28       CW.TXT (1 кластер, 4 строки сообщений магнитофона)      
+//   LBA 29..     REC1..REC4.WAV, каждый по AF_FM_WAV_CLUSTERS кластеров   
 
 #define AF_FM_FAT_SECTORS   10u    
 #define AF_FM_DIR_LBA       (1u + AF_FM_FAT_SECTORS)          // 11    
@@ -26,16 +25,19 @@
 #define AF_FM_SET_CLUSTERS  16u                               // резерв под SET.TXT    
 #define AF_FM_SET_LBA       AF_FM_DATA_START    
     
-// WAV: 8000 Гц mono 16-bit, ресемплинг из 7732 Гц.      
-// out_samp_max = 56000*8000/7732 + 1 ~= 57942; +44 Б заголовок.      
+// WAV: 8000 Гц mono 16-bit, ресемплинг из 7732 Гц.        
+// out_samp_max = 56000*8000/7732 + 2 ~= 57944; +44 Б заголовок.        
+// Размер файла привязан к AF_REC_RAM_SAMP (лимит записи/аплоада),        
+// а не к AF_REC_SLOT_SAMP: слот 224 КБ может вмещать больше —        
+// экспорт капается в af_fm_sync/wav_sector до AF_FM_WAV_MAX_SAMP.        
 #define AF_FM_WAV_RATE      8000u      
 #define AF_FM_REC_RATE      7732u    
 #define AF_FM_WAV_MAX_SAMP  ((AF_REC_RAM_SAMP * AF_FM_WAV_RATE) / AF_FM_REC_RATE + 2u)    
 #define AF_FM_WAV_MAX_BYTES (44u + AF_FM_WAV_MAX_SAMP * 2u)    
 #define AF_FM_WAV_CLUSTERS  ((AF_FM_WAV_MAX_BYTES + 511u) / 512u)   // ~453    
-#define AF_FM_WAV_FILES     4    // 4 слота магнитофона = 4 сообщения (селектор GP13/GP28)  
-//   LBA 28       CW.TXT (1 кластер, 4 строки сообщений магнитофона)    
-//   LBA 29..     REC1..REC7.WAV    
+#define AF_FM_WAV_FILES     4    // 4 слота магнитофона = 4 сообщения (селектор GP13/GP28)    
+//   LBA 28       CW.TXT (1 кластер, 4 строки сообщений магнитофона)      
+//   LBA 29..     REC1..REC4.WAV      
 #define AF_FM_CW_CLUSTERS   1u    
 #define AF_FM_CW_LBA        (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)   // 28 
 #define AF_FM_WAV_LBA(i)    (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)   // 29+  
