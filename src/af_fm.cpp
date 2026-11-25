@@ -30,6 +30,7 @@
 #include <Arduino.h>  
 #include <string.h>  
 #include <stdio.h>
+#include <stdarg.h>
 #include "hardware/flash.h"
 
 #include "af_config.h"  
@@ -75,8 +76,21 @@ static uint8_t  ul_tail_len = 0;
 // в ram_buf по мере ресемплинга — буфер вмещает ~29 с (224000 отсчётов),      
 // а не 7.2 с PCM-стейджинга. Состояние локальное — не делить с      
 // энкодером записи в af_rec.cpp (тот на Core 1).      
-static int16_t  ul_enc_pred = 0;      
-static int8_t   ul_enc_idx  = 0;      
+static int16_t  ul_enc_pred = 0;        
+static int8_t   ul_enc_idx  = 0;        
+  
+// Отложенная печать: Serial.printf внутри MSC-колбэков (TinyUSB task)    
+// рекурсивно дёргает USB-стек -> intermittent reboot. Колбэки только    
+// выставляют флаги, печать — из af_fm_poll (обычный контекст Core 0).    
+static char     fm_log[160];    
+static volatile bool fm_log_pending = false;    
+static void fm_logf(const char* fmt, ...) {    
+    if (fm_log_pending) return;              // одно сообщение за раз    
+    va_list ap; va_start(ap, fmt);    
+    vsnprintf(fm_log, sizeof(fm_log), fmt, ap);    
+    va_end(ap);    
+    fm_log_pending = true;    
+}       
 
 // --- Перехват dir-записей: первый кластер файла -> банк ----------------------  
 // Windows при замене делает delete+create: dir-запись с именем RECn.WAV и  
@@ -96,11 +110,11 @@ static void dir_track(const uint8_t* d) {
         for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
             if (memcmp(p, wav_names[i], 11) == 0) {    
                 uint16_t cl = rd16(p + 26);  
-                if (cl != dir_first_cl[i + 1]) {  
-                    dir_first_cl[i + 1] = cl;  
-                    Serial.printf("# fm: dir REC%u.WAV -> cluster %u\n",  
-                                  (unsigned)(i + 1), (unsigned)cl);  
-                }  
+                if (cl != dir_first_cl[i + 1]) {    
+                    dir_first_cl[i + 1] = cl;    
+                    fm_logf("# fm: dir REC%u.WAV -> cluster %u",    
+                            (unsigned)(i + 1), (unsigned)cl);    
+                }    
             }  
         }  
     }  
@@ -325,8 +339,14 @@ static void cw_txt_parse(const char* txt, uint32_t cap) {
     for (; idx < AF_CW_MSGS; idx++) af_cw_msgs[idx][0] = '\0';    
 }    
 
-void af_fm_poll(void) {      
-    // Коммит аплоада WAV: 1.5 с тишины после последнего сектора.    
+void af_fm_poll(void) {        
+    // Отложенная печать из MSC-колбэков — здесь обычный контекст,    
+    // printf безопасен.    
+    if (fm_log_pending) {    
+        fm_log_pending = false;    
+        Serial.println(fm_log);    
+    }    
+    // Коммит аплоада WAV: 1.5 с тишины после последнего сектора.      
     if (ul_active && (int32_t)(millis() - ul_last_ms) >= 1500)    
         ul_commit();    
     // Дебаунс: хост пишет файл пачкой секторов — ждём 800 мс тишины,      
@@ -541,29 +561,25 @@ static uint32_t rd32(const uint8_t* p) {
 }    
   
 // Сброс сессии аплоада (без записи слота).    
-static void ul_abort(const char* why) {    
-    if (ul_active) Serial.printf("# fm: REC%u.WAV upload aborted: %s\n",    
-                                 (unsigned)ul_bank, why);    
-    ul_active = false;    
-    ul_tail_len = 0;    
-}    
+static void ul_abort(const char* why) {      
+    if (ul_active) fm_logf("# fm: REC%u.WAV upload aborted: %s",      
+                           (unsigned)ul_bank, why);      
+    ul_active = false;      
+    ul_tail_len = 0;      
+}      
   
 // Начало сессии: запись в первый сектор файла RECn.WAV.    
 static bool ul_begin(uint8_t bank, uint32_t lba) {      
     if (af_rec_is_busy()) {      
-        Serial.println("# fm: upload rejected — rec/play busy");      
+        fm_logf("# fm: upload rejected — rec/play busy"); 
         return false;      
     }      
-    ul_active   = true;      
-    ul_bank     = bank;      
-    ul_lba_next = lba;      
-    Serial.printf("# fm: upload begin: REC%u.WAV lba=%lu (file start %lu)\n",  
-                  (unsigned)bank, (unsigned long)lba,  
-                  (unsigned long)AF_FM_WAV_LBA(bank - 1));
-    Serial.printf("# fm: dir_first_cl[] =");  
-    for (uint8_t i = 1; i <= AF_FM_WAV_FILES; i++)  
-        Serial.printf(" %u", (unsigned)dir_first_cl[i]);  
-    Serial.println();  
+    ul_active   = true;        
+    ul_bank     = bank;        
+    ul_lba_next = lba;        
+    fm_logf("# fm: upload begin: REC%u.WAV lba=%lu cl=%u",    
+            (unsigned)bank, (unsigned long)lba,    
+            (unsigned)dir_first_cl[bank]);  
     ul_last_ms  = millis();    
     ul_file_off = 0;    
     ul_data_end = 0;    
@@ -688,21 +704,15 @@ static void ul_feed(const uint8_t* buf) {
   
     if (ul_file_off == 0) {      
         uint32_t data_off = ul_parse_header(buf, AF_FM_SECTOR_SIZE);      
-        if (data_off == 0) {  
-            Serial.printf("# fm: REC%u.WAV bad header, first 32 bytes:\n# ",  
-                          (unsigned)ul_bank);  
-            for (uint8_t i = 0; i < 32; i++)  
-                Serial.printf("%02x ", buf[i]);  
-            Serial.printf("\n# ascii: ");  
-            for (uint8_t i = 0; i < 32; i++)  
-                Serial.printf("%c", (buf[i] >= 32 && buf[i] < 127) ? buf[i] : '.');  
-            Serial.println();  
-            ul_abort("bad WAV header");  
-            return;  
-        }      
-        Serial.printf("# fm: REC%u.WAV upload: %lu Hz %u ch %u bit codec=%u\n",      
-                      (unsigned)ul_bank, (unsigned long)ul_rate,      
-                      (unsigned)ul_channels, (unsigned)ul_bits, (unsigned)ul_codec);      
+        if (data_off == 0) {    
+            fm_logf("# fm: REC%u.WAV bad header: %02x %02x %02x %02x",    
+                    (unsigned)ul_bank, buf[0], buf[1], buf[2], buf[3]);    
+            ul_abort("bad WAV header");    
+            return;    
+        }        
+        fm_logf("# fm: REC%u.WAV upload: %lu Hz %u ch %u bit codec=%u",        
+                (unsigned)ul_bank, (unsigned long)ul_rate,        
+                (unsigned)ul_channels, (unsigned)ul_bits, (unsigned)ul_codec);        
         pos = data_off;    
     }    
   
@@ -741,13 +751,13 @@ static void ul_commit(void) {
     uint8_t bank = ul_bank;    
     uint32_t n = ul_out_pos;    
     ul_active = false;    
-    if (n == 0) {    
-        Serial.printf("# fm: REC%u.WAV upload: no samples\n", (unsigned)bank);    
-        return;    
-    }    
-    Serial.printf("# fm: REC%u.WAV -> slot %u, %lu samples%s\n",      
-                  (unsigned)bank, (unsigned)bank, (unsigned long)n,      
-                  ul_trunc ? " (truncated)" : "");      
+    if (n == 0) {      
+        fm_logf("# fm: REC%u.WAV upload: no samples", (unsigned)bank);      
+        return;      
+    }      
+    fm_logf("# fm: REC%u.WAV -> slot %u, %lu samples%s",        
+            (unsigned)bank, (unsigned)bank, (unsigned long)n,        
+            ul_trunc ? " (truncated)" : "");        
     // ram_buf уже содержит ADPCM-поток (инкрементальный encode в ul_push) —      
     // batch-encode не нужен.      
     if (af_rec_slot_write(bank, n, AF_REC_CODEC_ADPCM)) {            
@@ -755,7 +765,7 @@ static void ul_commit(void) {
         fm_sizes_changed = true;   // аплоад — всегда re-enumerate (содержимое новое)      
         dir_first_cl[bank] = 0;    // кластер отработан — не оставлять stale    
     } else {         
-        Serial.println("# fm: slot write failed");  
+        fm_logf("# fm: slot write failed");
     }  
 }    
 
@@ -825,7 +835,7 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
                 }    
             }    
             if (bank == 0) {  
-                Serial.printf("# fm: pool write lba=%lu cl=%u — no dir match\n",  
+                fm_logf("# fm: pool write lba=%lu cl=%u — no dir match",
                               (unsigned long)lba, (unsigned)cl);  
                 return (int32_t)AF_FM_SECTOR_SIZE;    // пул без имени — проглотить  
             }  
@@ -838,7 +848,7 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
                 }  
             }  
             if (bank == 0) {  
-                Serial.printf("# fm: gap write lba=%lu — swallowed\n",  
+                fm_logf("# fm: gap write lba=%lu — swallowed",
                               (unsigned long)lba);  
                 return (int32_t)AF_FM_SECTOR_SIZE;    // зазор — проглотить  
             }  
@@ -847,12 +857,12 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
             if (!ul_begin(bank, lba))    
                 return (int32_t)AF_FM_SECTOR_SIZE;   // rec/play busy — проглотить    
         } else if (ul_bank != bank) {  
-            Serial.printf("# fm: write to REC%u while REC%u active — swallowed\n",  
+            fm_logf("# fm: write to REC%u while REC%u active — swallowed",
                           (unsigned)bank, (unsigned)ul_bank);  
             return (int32_t)AF_FM_SECTOR_SIZE;       // чужой файл — проглотить  
         }  
         if (lba != ul_lba_next) {             // только последовательно        
-            Serial.printf("# fm: REC%u.WAV non-seq LBA %lu (expect %lu)\n",    
+            fm_logf("# fm: REC%u.WAV non-seq LBA %lu (expect %lu)",
                           (unsigned)ul_bank, (unsigned long)lba,    
                           (unsigned long)ul_lba_next);    
             ul_abort("non-sequential LBA");        
@@ -880,7 +890,7 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
     else {      
         // Зазор между RAM-областью и WAV — проглотить с OK:      
         // отказ провоцирует ретраи хоста и remount.      
-        Serial.printf("# fm: write swallowed lba=%lu (gap)\n", (unsigned long)lba);      
+        fm_logf("# fm: write swallowed lba=%lu (gap)", (unsigned long)lba);      
         return (int32_t)AF_FM_SECTOR_SIZE;      
     }      
     memcpy(fm_disk[ram], buffer, AF_FM_SECTOR_SIZE);                    
