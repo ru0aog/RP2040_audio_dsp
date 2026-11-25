@@ -1321,16 +1321,22 @@ class Panel(tk.Tk):
                 parent, variable=var,      
                 command=lambda l=label, v=var: self._set(l, v.get())      
             ).grid(row=row, column=col0 + 1, sticky="w")      
-        else:      
-            var = tk.StringVar(value=cur)      
-            e = ttk.Entry(parent, textvariable=var, width=9)      
+        else:        
+            if ptype == "gain":    
+                # поле — множитель (1.5), дамп отдаёт raw Q8 (384)    
+                try:    
+                    cur = f"{float(cur) / 256.0:g}"    
+                except ValueError:    
+                    pass    
+            var = tk.StringVar(value=cur)        
+            e = ttk.Entry(parent, textvariable=var, width=9)        
             e.grid(row=row, column=col0 + 1, sticky="w")      
             e.bind("<Return>",      
                    lambda _e, l=label, v=var: self._set(l, v.get()))      
             e.bind("<FocusOut>",      
                    lambda _e, l=label, v=var: self._set(l, v.get()))      
         hint = _unit(label) or \
-            {"x100": "x100", "gain": "Q8", "u32": "u32"}.get(ptype, "")  
+            {"x100": "x100", "gain": "x", "u32": "u32"}.get(ptype, "")    
         if hint:  
             ttk.Label(parent, text=hint, foreground="#888").grid(  
                 row=row, column=col0 + 2, sticky="w")  
@@ -1346,15 +1352,23 @@ class Panel(tk.Tk):
         p = self.params.get(label)  
         if p and p["type"] == "onoff":  
             val = "on" if str(val) in ("1", "on") else "off"  
-        elif p and p["type"] in ("gain", "x100"):    
-            # поле хранит raw (Q8 / x100), команда ждёт множитель —    
-            # иначе каждый FocusOut умножает значение (runaway до int32-max)    
+        elif p and p["type"] == "x100":      
+            # поле хранит raw (x100), команда ждёт множитель —      
+            # иначе каждый FocusOut умножает значение (runaway до int32-max)      
+            try:      
+                f = float(val)      
+            except ValueError:      
+                self._log(f"# {label}: '{val}' не число — не отправлено")      
+                return      
+            val = f"{f / 100.0:g}"      
+        elif p and p["type"] == "gain":    
+            # поле — множитель, команда ждёт множитель: шлём как есть,    
+            # только проверка на число    
             try:    
-                f = float(val)    
+                float(val)    
             except ValueError:    
                 self._log(f"# {label}: '{val}' не число — не отправлено")    
                 return    
-            val = f"{f / (256.0 if p['type'] == 'gain' else 100.0):g}"    
         self._cmd(f"{label} {val}")    
   
     def _refresh_param(self, ok_text):  
@@ -1367,13 +1381,15 @@ class Panel(tk.Tk):
         if not parts:    
             return    
         val = parts[0]
-        p = self.params.get(label)    
-        if p:    
-            try:    
-                f = float(val)    
-                p["var"].set(int(f) if f == int(f) else f)    
-            except ValueError:    
-                p["var"].set(val)    
+        p = self.params.get(label)      
+        if p:      
+            try:      
+                f = float(val)      
+                if p["type"] == "gain":    
+                    f /= 256.0          # OK отдаёт raw Q8 -> множитель    
+                p["var"].set(int(f) if f == int(f) else f)      
+            except ValueError:      
+                p["var"].set(val)      
   
     def _mode_set(self, cmd, val):    
         # Флажок runtime-режима: команда немедленно, в банк не пишется.    
