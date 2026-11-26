@@ -216,8 +216,8 @@ class Panel(tk.Tk):
         self._save_timer = None     # after-id страховочного рестарта      
         self.audio_in = None    # sd.InputStream при активном мониторинге  
         self.audio_out = None   # sd.OutputStream  
-        self.audio_q = queue.Queue(maxsize=4)   # блоки вход->выход;    
-                                                # 4x20 мс = 80 мс потолок лага    
+        self.audio_q = queue.Queue(maxsize=16)  # блоки вход->выход;  
+                                                # 16x20 мс = 320 мс потолок лага  
         self.audio_vol = 0.3      # громкость монитора 0.0..1.0 (читается из audio-потока)      
         self.rec_stream = None    # sd.InputStream при активной записи      
         self.rec_file = None      # wave.Wave_write или file для MP3  
@@ -227,7 +227,7 @@ class Panel(tk.Tk):
         self.spec_fs = 44100    
         self.spec_on = False        
         self.spec_buf = None    
-        self.spec_peak = -80.0      # peak-hold уровень, дБ  
+        self.spec_peak = -70.0      # peak-hold уровень, дБ    
         self.spec_peak_f = 0.0      # частота последнего пика, Гц    
         self.spec_hold = None       # послесвечение: max по бинам с затуханием (np.array)        
         self.spec_avg = None        # EMA-сглаженный спектр (np.array), ~0.3 с отклика          
@@ -357,7 +357,7 @@ class Panel(tk.Tk):
         # Правая панель: спектр сверху, лог ниже + командная строка + статус.      
         self.right_fr = ttk.Frame(self.paned)        
         self.paned.add(self.right_fr, weight=1)        
-        # Спектр входа UAC: текущий срез FFT 0..6 кГц / 0..-80 дБ,    
+        # Спектр входа UAC: текущий срез FFT 0..6 кГц / 0..-70 дБ,      
         # маркеры band lo/hi. Работает, пока включён монитор.    
         # Двойной щелчок — развернуть/свернуть на всё окно.    
         self.spec_fr = ttk.LabelFrame(self.right_fr, text="Спектр (0-6 кГц)")      
@@ -535,17 +535,17 @@ class Panel(tk.Tk):
                 except queue.Full:    
                     pass    
   
-            def out_cb(outdata, frames, time_, status):        
-                try:        
-                    data = self.audio_q.get_nowait()        
-                    # Дренаж: часы входа/выхода расходятся — очередь        
-                    # накапливает лаг. Выкидываем старые блоки, играем        
-                    # только самый свежий.        
-                    while True:        
-                        try:        
-                            data = self.audio_q.get_nowait()        
-                        except queue.Empty:        
-                            break        
+            def out_cb(outdata, frames, time_, status):          
+                try:          
+                    # Дренаж до целевого уровня: часы входа/выхода расходятся,  
+                    # очередь плывёт. Держим ~4 блока (80 мс) запаса — выбросы  
+                    # только сверху, внизу очередь не доедается до нуля.  
+                    while self.audio_q.qsize() > 4:  
+                        try:  
+                            self.audio_q.get_nowait()  
+                        except queue.Empty:  
+                            break  
+                    data = self.audio_q.get_nowait()  
                     # Вход ch может отличаться от выхода: привести каналы        
                     # до копирования. Сначала берём канал 0 (моно), затем        
                     # дублируем до числа каналов выхода — покрывает оба        
@@ -597,7 +597,7 @@ class Panel(tk.Tk):
                 break    
         self.spec_on = False        
         self.spec_buf = None    
-        self.spec_peak = -80.0      
+        self.spec_peak = -70.0        
         self.spec_peak_f = 0.0    
         self.spec_hold = None      
         self.spec_avg = None      
@@ -748,7 +748,7 @@ class Panel(tk.Tk):
 
     def _spec_draw(self):    
         # Перерисовка ~12 раз/с: сетка дБ/Гц + маркеры ПФ + полилиния спектра.  
-        # Фиксированные диапазоны: 0..6 кГц по X, 0..-80 дБ по Y.    
+        # Фиксированные диапазоны: 0..6 кГц по X, 0..-70 дБ по Y.      
         if not self.spec_on:    
             return    
         cv = self.spec_cv        
@@ -769,8 +769,8 @@ class Panel(tk.Tk):
         h = max(cv.winfo_height(), 60)    
         fmax = 6000    
         plot_h = h - 14                     # нижние 14 px — подписи частот    
-        for db in range(-10, -80, -10):     # сетка уровней, шаг 10 дБ, -80 внизу        
-            y = -db / 80.0 * plot_h        
+        for db in range(-10, -70, -10):     # сетка уровней, шаг 10 дБ, -70 внизу          
+            y = -db / 70.0 * plot_h          
             cv.create_line(0, y, w, y, fill="#303030")      
             cv.create_text(2, y, text=str(db), anchor="nw", fill="#888",      
                            font=("TkDefaultFont", 7))      
@@ -820,7 +820,7 @@ class Panel(tk.Tk):
             db = 20 * np.log10(mag / (win.sum() / 2) + 1e-9)   # компенсация ~6 дБ окна    
             freqs = np.fft.rfftfreq(nfft, 1.0 / self.spec_fs)         
             m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем      
-            dbm = np.clip(db[m], -80.0, 0.0)          
+            dbm = np.clip(db[m], -70.0, 0.0)            
             # EMA-сглаживание по бинам: шумовая "рвань" убирается,          
             # устойчивые пики остаются. 0.25 -> отклик ~0.3 с при 12 к/с.          
             # ОТКЛЮЧЕНО: мгновенный спектр. Вернуть — поставить SPEC_EMA > 0.          
@@ -834,19 +834,19 @@ class Panel(tk.Tk):
             # Послесвечение: per-bin max с затуханием ~1.5 дБ/кадр (~18 дБ/с).  
             # Рисуется тёмно-зелёным ПОД основной линией.  
             if self.spec_hold is None or len(self.spec_hold) != len(dbm):    
-                self.spec_hold = np.full(len(dbm), -80.0)    
+                self.spec_hold = np.full(len(dbm), -70.0)      
             self.spec_hold = np.maximum(dbm, self.spec_hold - 1.5)  
             pts_h = []  
-            for x, y in zip(freqs[m] / fmax * w,    
-                            np.clip(-self.spec_hold, 0, 80) / 80.0 * plot_h):    
+            for x, y in zip(freqs[m] / fmax * w,      
+                            np.clip(-self.spec_hold, 0, 70) / 70.0 * plot_h):      
                 pts_h += [x, y]  
             if len(pts_h) >= 4:    
                 cv.create_line(*pts_h, fill="#0a5a0a", width=1,  
                                smooth=self.SPEC_SPLINE, splinesteps=12)  
-            pts = []      
-            for x, y in zip(freqs[m] / fmax * w,        
-                            np.clip(-dbm, 0, 80) / 80.0 * plot_h):        
-                pts += [x, y]      
+            pts = []        
+            for x, y in zip(freqs[m] / fmax * w,            
+                            np.clip(-dbm, 0, 70) / 70.0 * plot_h):            
+                pts += [x, y]        
             if len(pts) >= 4:          
                 cv.create_line(*pts, fill="#00ff00", width=1,  
                                smooth=self.SPEC_SPLINE, splinesteps=12)  
@@ -859,8 +859,8 @@ class Panel(tk.Tk):
                 self.spec_peak = pk_db    
                 self.spec_peak_f = float(freqs[mpk][pk])    
             else:  
-                self.spec_peak = max(-80.0, self.spec_peak - 0.5)    
-            py = np.clip(-self.spec_peak, 0, 80) / 80.0 * plot_h        
+                self.spec_peak = max(-70.0, self.spec_peak - 0.5)      
+            py = np.clip(-self.spec_peak, 0, 70) / 70.0 * plot_h          
             cv.create_line(0, py, w, py, fill="#ffff00", dash=(2, 4))      
             cv.create_rectangle(w - 62, 20, w - 2, 48, fill="#101010",        
                                 outline="")   # подложка под подписи        
@@ -921,7 +921,7 @@ class Panel(tk.Tk):
             # Сигнальная маска: от пика в обе стороны, пока бины выше    
             # медианы шума +6 дБ — весь лепесток с юбкой считается сигналом,    
             # а не шумом (фиксированные ±60 Гц резали широкий лепесток).    
-            noise_db = float(np.median(dbu[bm])) if bm.any() else -80.0    
+            noise_db = float(np.median(dbu[bm])) if bm.any() else -70.0      
             thr = noise_db + 6.0    
             sig_m = np.zeros(len(fm), dtype=bool)    
             sig_m[i0] = True    
@@ -970,7 +970,7 @@ class Panel(tk.Tk):
                 i1 = int(np.argmax(dbm))      
                 far = np.abs(fm - fm[i1]) >= 100.0      
                 if far.any():      
-                    i2 = int(np.argmax(np.where(far, dbm, -80.0)))      
+                    i2 = int(np.argmax(np.where(far, dbm, -70.0)))        
                     f_mark, f_space = max(fm[i1], fm[i2]), min(fm[i1], fm[i2])      
                     # EMA ~3 кадра на обе частоты — как у SNR  
                     if self.ms_avg is None:  
@@ -1033,8 +1033,8 @@ class Panel(tk.Tk):
                     dr.line([(x0, y), (x1, min(y + dash, y1))],    
                             fill=fill, width=width)    
                     y += dash + gap    
-            for dbv in range(-10, -80, -10):          
-                y = -dbv / 80.0 * plot_h          
+            for dbv in range(-10, -70, -10):  
+                y = -dbv / 70.0 * plot_h  
                 dr.line([(0, y), (W, y)], fill="#303030")                 
             for f in range(1000, fmax, 1000):      
                 x = f / fmax * W      
@@ -1070,17 +1070,17 @@ class Panel(tk.Tk):
             fr, dbv = self.spec_last    
             # послесвечение — тёмно-зелёным под живой линией  
             if self.spec_hold is not None and len(self.spec_hold) == len(dbv):  
-                hpts = [(float(f / fmax * W),    
-                         float(np.clip(-d, 0, 80) / 80.0 * plot_h))    
+                hpts = [(float(f / fmax * W),      
+                         float(np.clip(-d, 0, 70) / 70.0 * plot_h))      
                         for f, d in zip(fr, self.spec_hold)]  
                 if len(hpts) >= 2:  
                     dr.line(hpts, fill="#0a5a0a", width=2)  
-            pts = [(float(f / fmax * W),      
-                    float(np.clip(-d, 0, 80) / 80.0 * plot_h))      
+            pts = [(float(f / fmax * W),        
+                    float(np.clip(-d, 0, 70) / 70.0 * plot_h))        
                    for f, d in zip(fr, dbv)]    
             if len(pts) >= 2:    
                 dr.line(pts, fill="#00ff00", width=3)    
-            py = np.clip(-self.spec_peak, 0, 80) / 80.0 * plot_h      
+            py = np.clip(-self.spec_peak, 0, 70) / 70.0 * plot_h        
             x = 0    
             while x < W:   # горизонтальный пунктир    
                 dr.line([(x, py), (min(x + 8, W), py)], fill="#8a8a20", width=2)      
@@ -1095,8 +1095,8 @@ class Panel(tk.Tk):
             dr.text((W - 10 - dr.textlength(t2, font=fnt), 76),          
                     t2, fill="#ffff00", font=fnt)           
             # Подписи сетки — последними, поверх всех линий, на подложках  
-            for dbv in range(-10, -80, -10):      
-                y = -dbv / 80.0 * plot_h      
+            for dbv in range(-10, -70, -10):        
+                y = -dbv / 70.0 * plot_h        
                 t = f"{dbv} дБ"        
                 tw2 = dr.textlength(t, font=fnt_sm)  
                 dr.rectangle([4, y, 12 + tw2, y + 24], fill="#101010")  
@@ -1130,7 +1130,7 @@ class Panel(tk.Tk):
                 i1 = int(np.argmax(dbv))  
                 far = np.abs(fr - fr[i1]) >= 100.0  
                 if far.any():  
-                    i2 = int(np.argmax(np.where(far, dbv, -80.0)))    
+                    i2 = int(np.argmax(np.where(far, dbv, -70.0)))      
                     f_mark, f_space = max(fr[i1], fr[i2]), min(fr[i1], fr[i2])    
                     if self.ms_avg is not None:    
                         f_mark, f_space = self.ms_avg   # сглаженные, как на экране    

@@ -212,8 +212,8 @@ class Panel(tk.Tk):
         self._save_timer = None     # after-id страховочного рестарта      
         self.audio_in = None    # sd.InputStream при активном мониторинге  
         self.audio_out = None   # sd.OutputStream  
-        self.audio_q = queue.Queue(maxsize=4)   # блоки вход->выход;    
-                                                # 4x20 мс = 80 мс потолок лага    
+        self.audio_q = queue.Queue(maxsize=16)  # блоки вход->выход;  
+                                                # 16x20 мс = 320 мс потолок лага  
         self.audio_vol = 0.3      # громкость монитора 0.0..1.0 (читается из audio-потока)      
         self.rec_stream = None    # sd.InputStream при активной записи      
         self.rec_file = None      # wave.Wave_write или file для MP3  
@@ -531,17 +531,17 @@ class Panel(tk.Tk):
                 except queue.Full:    
                     pass    
   
-            def out_cb(outdata, frames, time_, status):        
-                try:        
-                    data = self.audio_q.get_nowait()        
-                    # Дренаж: часы входа/выхода расходятся — очередь        
-                    # накапливает лаг. Выкидываем старые блоки, играем        
-                    # только самый свежий.        
-                    while True:        
-                        try:        
-                            data = self.audio_q.get_nowait()        
-                        except queue.Empty:        
-                            break        
+            def out_cb(outdata, frames, time_, status):          
+                try:          
+                    # Дренаж до целевого уровня: часы входа/выхода расходятся,  
+                    # очередь плывёт. Держим ~4 блока (80 мс) запаса — выбросы  
+                    # только сверху, внизу очередь не доедается до нуля.  
+                    while self.audio_q.qsize() > 4:  
+                        try:  
+                            self.audio_q.get_nowait()  
+                        except queue.Empty:  
+                            break  
+                    data = self.audio_q.get_nowait()  
                     # Вход ch может отличаться от выхода: привести каналы        
                     # до копирования. Сначала берём канал 0 (моно), затем        
                     # дублируем до числа каналов выхода — покрывает оба        
