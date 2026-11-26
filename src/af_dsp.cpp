@@ -1851,5 +1851,19 @@ uint8_t af_dsp_out_fill_pwm(void) {
     return n;  
 }
 
+// Текущее усиление АРУ, множитель. При agc off — ручной gain.  
+// gain = agc_ref / avg, кламп в [min_g .. max_g] — та же формула, что в agc_limit.  
+float af_dsp_agc_gain(void) {  
+    if (!agc_on) return (float)gain_q15 / 32768.0f;  
+    float avg = (float)agc_avg_q16 / 65536.0f;  
+    if (avg < 1.0f) avg = 1.0f;  
+    float g = (float)agc_ref / avg;  
+    const float max_g = cw_on ? cw_agc_max_gain : agc_max_gain;  
+    const float min_g = cw_on ? CW_AGC_MIN_GAIN : agc_min_gain;  
+    if (g > max_g) g = max_g;  
+    if (g < min_g) g = min_g;  
+    return g;  
+}  
+
 uint32_t af_dsp_band_lo_hz(void) { return af_lo_hz; }  
 uint32_t af_dsp_band_hi_hz(void) { return af_hi_hz; }
