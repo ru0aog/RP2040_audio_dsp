@@ -1404,9 +1404,9 @@ class Panel(tk.Tk):
         # Флажок runtime-режима: команда немедленно, в банк не пишется.    
         if self._mode_updating:    
             return                      # изменение пришло из дампа, не от пользователя    
-        if not self.schema_ok:    
-            self._log(f"# read-only: {cmd} не отправлено")    
-            return    
+        if not self.schema_ok:
+            self._log(f"# read-only: {cmd} не отправлено")
+            return
         self._cmd(f"{cmd} {'on' if val else 'off'}")    
         # Перечитать живое состояние — плата могла отклонить (nr при nt on и т.п.)  
         self._pending.append("state dump")  
