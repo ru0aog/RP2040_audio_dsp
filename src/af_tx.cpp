@@ -275,7 +275,7 @@ static int64_t tx_env_hi_q16 = (int64_t)256 << 16;  // EMA огибающей В
 
 // --- Этап 5: HF ducking ---    
 static volatile uint8_t  tx_duck_on     = AF_TX_DUCK_ON_DEFAULT;    
-static volatile int32_t  tx_duckmax_q15 = AF_TX_DUCK_MAX_Q15;  // потолок, Q15    
+static volatile int32_t  tx_duckmax_q15 = 0;  // потолок, Q15 — ставится в af_tx_init
 static int32_t k_duck_q15     = 0;      // сглаженный k_duck, Q15    
 static int32_t k_duck_tgt_q15 = 0;      // цель k_duck (per-block)    
 static uint8_t duck_blk_cnt   = 0;      // счётчик пересчёта    
@@ -983,6 +983,7 @@ void af_tx_init(void) {
     tx_rtty_fir1.n    = TX_RTTY_FIR_N;    
     tx_rtty_fir2.taps = tx_rtty_taps;    
     tx_rtty_fir2.n    = TX_RTTY_FIR_N;
+    af_tx_set_duckmax(AF_TX_DUCK_MAX_DB_X10);   // единый дефолт: дБx10 -> Q15  
     tx_tt_fir_design();  
     memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));  
     memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));  

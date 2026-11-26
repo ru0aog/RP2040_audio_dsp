@@ -41,8 +41,8 @@
 #define AF_FS_OUT_HZ            15464u      // Fs после децимации (494845 / 32)  
 
 // ---------------------------------------------------------------------------  
-// Полосовой FIR (sinc + окно Блэкмана-Харриса, Q15, симметричный)  
-// На 15.625 ksps 127 отводов дают переходную полосу ~135 Гц.  
+// Полосовой FIR (sinc + окно Блэкмана-Харриса, Q15, симметричный)    
+// На 15.464 ksps 127 отводов дают переходную полосу ~670 Гц.    
 // ---------------------------------------------------------------------------  
 #define AF_FIR_N                127  
 #define AF_FIR_LO_HZ_DEFAULT    100         // нижний срез по умолчанию  
@@ -75,8 +75,8 @@
 // заморожен, иначе громкость прыгает рывками. Константы в ~10 раз  
 // медленнее речевых: установился за ~2-3 с и держит.  
 #define CW_AGC_REF            12000       // Целевой средний уровень выхода для CW
-#define CW_AGC_ATT_Q24        100         // attack ~10x медленнее речевого  
-#define CW_AGC_REL_Q24        10          // release ~10x медленнее  
+#define CW_AGC_ATT_Q24        5000        // атака ~217 мс (~8x медленнее речевой)
+#define CW_AGC_REL_Q24        500         // спад ~2.2 с
 #define CW_AGC_MAX_GAIN       200.0f      // +46 дБ: хватает для слабых тонов;  
                                           // шум в паузах ограничен узким BPF  
 #define CW_AGC_MIN_GAIN       0.5f        // и не проваливается в ноль
@@ -88,9 +88,9 @@
 #define AF_GAIN_MAX             2000.0f     // потолок РРУ, множитель
 #define AF_GAIN_DEFAULT         1.0f
 
-// EMA среднего уровня — тоже медленнее речевой  
-#define CW_AGC_AVG_ATT_Q24    (AGC_AVG_ATT_Q24 / 8)  
-#define CW_AGC_AVG_DEC_Q24    (AGC_AVG_DEC_Q24 / 8)  
+// EMA среднего уровня — ~8x медленнее речевой (~217 мс)    
+#define CW_AGC_AVG_ATT_Q24    (AGC_AVG_ATT_Q24 / 8)
+#define CW_AGC_AVG_DEC_Q24    (AGC_AVG_DEC_Q24 / 8)
 
 // ---------------------------------------------------------------------------  
 // АРУ + лимитер (порт agc_limit из rx_audio.cpp)  
@@ -105,22 +105,22 @@
 
 // Фиксированные узкие нотчи в RX — гребёнка наводок 1/2/3/4 кГц.  
 // Биквад-нотч, r~0.995 -> полоса ~±20 Гц на -3 дБ, подавление -40+ дБ.  
-#define AF_RX_NOTCH1_HZ         1000u  
-#define AF_RX_NOTCH2_HZ         2000u  
-#define AF_RX_NOTCH3_HZ         3000u  
-#define AF_RX_NOTCH4_HZ         4000u  
-#define AF_RX_NOTCH5_HZ         5000u
+#define AF_RX_NOTCH1_HZ         1000u   // 1 кгц
+#define AF_RX_NOTCH2_HZ         2000u   // 2 кгц
+#define AF_RX_NOTCH3_HZ         3000u   // 3 кгц
+#define AF_RX_NOTCH4_HZ         4000u   // 4 кгц
+#define AF_RX_NOTCH5_HZ         5000u   // 5 кгц (для широкой полосы)
 #define AF_RX_NOTCH_R_Q15       32650   // r = 0.995 (шире -> 32000)  
 #define AF_RX_NOTCH_ON_DEFAULT  1       // 1 = нотчи включены при старте  
 
 // Dynamic Presence EQ RX: SNR-адаптивный подъём ~2.3 кГц (порт AF_TX_PRES_*).  
 #define AF_RX_PRES_HP_HZ        1500u   // срез HP-детектора  
 #define AF_RX_PRES_ENV_ATT_Q24  300000u // EMA огибающей: атака ~3 мс  
-#define AF_RX_PRES_ENV_REL_Q24  30000u  // спад ~50 мс  
+#define AF_RX_PRES_ENV_REL_Q24  30000u  // спад ~36 мс
 #define AF_RX_PRES_NF_UP_SHIFT  12      // nf вверх ~медленно (EMA 1/4096)  
 #define AF_RX_PRES_NF_MIN       8u      // защита от деления на ноль  
 #define AF_RX_PRES_K_ATT_Q24    100000u // k_dyn: атака ~10 мс  
-#define AF_RX_PRES_K_REL_Q24    15000u  // спад ~100 мс  
+#define AF_RX_PRES_K_REL_Q24    15000u  // спад ~72 мс
 #define AF_RX_PRES_FREQ_HZ      2300u   // центр presence-пика  
 #define AF_RX_PRES_Q_X100       100u    // Q = 1.00  
 #define AF_RX_PRES_MAX_Q15      (int32_t)(0.1885f * 32768.0f)  // +1.5 дБ дефолт  
@@ -161,7 +161,7 @@
 #define AF_TX_AGC_REL_Q24       1800u     // спад ~600 мс  
 #define AF_TX_GATE_THR          250u      // порог гейта (~-42 дБ от FS, 0 = off)  
 #define AF_TX_GATE_ATT_Q24      200000u   // открытие гейта ~5 мс  
-#define AF_TX_GATE_REL_Q24      4000u     // закрытие ~250 мс  
+#define AF_TX_GATE_REL_Q24      4000u     // закрытие ~271 мс
 
 // All-pass симметризатор огибающей (phase rotator): выравнивает  
 // пик-фактор речи -> клиппер работает эффективнее.  
@@ -199,10 +199,10 @@
 // (1 - k_duck*duck_max). Гласные не маскируют согласные.    
 // Только при tx2band on. Расчёт per-block, применение per-sample.    
 #define AF_TX_DUCK_ON_DEFAULT   1       // 1 = включён при старте    
-#define AF_TX_DUCK_MAX_Q15      9830    // потолок ослабления 0.3 (~-3 дБ)    
+
 // Сглаживание k_duck EMA, Q24:
-#define AF_TX_DUCK_ATT_Q24      150000u     // атака ~5 мс
-#define AF_TX_DUCK_REL_Q24      20000u      // спад ~54
+#define AF_TX_DUCK_ATT_Q24      150000u     // атака ~7.2 мс
+#define AF_TX_DUCK_REL_Q24      20000u      // спад ~54 мс  
 
 // ВЧ-эксайтер (этап 6): динамический усилитель ВЧ-полосы.  
 // y += env(|hi|) * hi * mix — произведение ВЧ-полосы на её медленную  
@@ -232,8 +232,8 @@
 // Потолки коррекции, Q15: boost +6 дБ (x2), cut -6 дБ (x0.5)  
 #define AF_TX_INTEL_BOOST_Q15    32768   // g_hi <= 1 + 1.0 = 2.0  
 #define AF_TX_INTEL_CUT_Q15      16384   // g_hi >= 1 - 0.5 = 0.5  
-// Сглаживание g_hi EMA, Q24: ~30 мс — медленнее duck, без «плавания»  
-#define AF_TX_INTEL_SMOOTH_Q24   30000u  
+// Сглаживание g_hi EMA, Q24: ~36 мс — медленнее duck, без «плавания»    
+#define AF_TX_INTEL_SMOOTH_Q24   30000u    
 
 // High-shelf полка (вариант A): статический подъём ВЧ выше ~1.8 кГц.  
 // Компенсирует «Hi-Fi» плоскость тракта: для разборчивости SSB-речи  
@@ -275,9 +275,9 @@
 // Отвод env_hi_pre: HP ~1.5 кГц (биквад) + EMA после АРУ, до гейта.  
 // HP отсекает гласные/F1 — огибающая реагирует в основном на согласные.  
 #define AF_TX_PRES_HP_HZ        1500u   // срез HP-детектора  
-// EMA огибающей детектора, Q24: атака ~3 мс, спад ~50 мс @15.464 ksps  
-#define AF_TX_PRES_ENV_ATT_Q24  300000u  
-#define AF_TX_PRES_ENV_REL_Q24  30000u  
+// EMA огибающей детектора, Q24:   
+#define AF_TX_PRES_ENV_ATT_Q24  300000u   // атака ~3.6 мс
+#define AF_TX_PRES_ENV_REL_Q24  30000u    // спад ~36 мс @15.464 ksps 
   
 // SNR-оценщик: трекер минимума env_hi_pre.  
 // Вниз — быстро (следует за падением шума), вверх — медленно  
@@ -290,9 +290,9 @@
 // Закон k_dyn (одна формула, без двойного гейтинга):  
 //   k = clamp((env_hi_pre - 2*nf) / (8*nf), 0, 1)  
 // env < 2*nf -> k=0 (шум не поднимаем), env > 10*nf -> k=1 (полный подъём).  
-// Сглаживание k_dyn EMA: атака ~10 мс, спад ~100 мс — без щелчков.  
-#define AF_TX_PRES_K_ATT_Q24    100000u  
-#define AF_TX_PRES_K_REL_Q24    15000u  
+// Сглаживание k_dyn EMA:
+#define AF_TX_PRES_K_ATT_Q24    100000u   // атака ~11 мс
+#define AF_TX_PRES_K_REL_Q24    15000u    // спад ~72 мс — без щелчков
   
 // Peaking-биквад: центр ~2.3 кГц, Q ~1.0, потолок подъёма txpresmax.  
 // Коэффициенты пересчитываются при смене txpresmax (не в горячем пути).  
@@ -317,7 +317,7 @@
 // Шумоподавление NR — LMS ALE (порт nr_lms_push из rx_dsp.cpp)  
 // ---------------------------------------------------------------------------  
 #define NR_N                    32          // длина FIR-предсказателя (удвоено при 320 МГц)
-#define NR_DELAY                24          // ~1.5 мс при 15.6 ksps: речь декоррелирует,  
+#define NR_DELAY                24          // ~1.5 мс при 15.464 ksps: речь декоррелирует,  
                                             // предсказатель цепляется только за тоны/стационарное  
 #define NR_MU_Q                 1638        // 1:1 из приёмника  
 #define NR_EPS                  (1 << 21)   // 1:1 из приёмника  
@@ -336,7 +336,7 @@
 #define AF_NB_THR_X10      30   // порог x10 (30 = x3.0 над огибающей)  
 #define AF_NB_THR_MIN      15   // клампы порога x10  
 #define AF_NB_THR_MAX      100  
-#define AF_NB_HOLD         3    // удержание blank после срабатывания, отсчётов  
+#define AF_NB_HOLD         10   // удержание blank после срабатывания, отсчётов (8...16)
 
 // ---------------------------------------------------------------------------  
 // Выход PWM (основной)  
@@ -344,7 +344,7 @@
 #define AF_PWM_PIN              0           // GP0, через RC-фильтр на выход  
 #define AF_PWM_WRAP             2559        // 2560 уровней (~11.3 бит), несущая ровно 125 кГц @320М/clkdiv=1.0  
 #define AF_OUT_BLOCK_SAMPLES    64          // отсчётов в выходном блоке (15.464 ksps = 4.1 мс)  
-#define AF_OUT_NUM_BUFFERS      16          // ~130 мс slack на потребителя
+#define AF_OUT_NUM_BUFFERS      16          // ~66 мс slack на потребителя (16 × 4.1 мс)  
   
 // ---------------------------------------------------------------------------  
 // Выход USB Audio (UAC-микрофон, всегда включён)  
