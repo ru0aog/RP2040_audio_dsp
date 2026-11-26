@@ -1200,9 +1200,9 @@ uint32_t af_dsp_rxshelfq(void) { return rx_shelf_q_x100; }
 void     af_dsp_set_rxshelf_on(bool on) { rxshelf_on = on; }    
 bool     af_dsp_rxshelf_on(void)        { return rxshelf_on; }    
 
-void af_dsp_set_rxeq(uint8_t band, int32_t db_x10) {   // band 0=lo 1=mid 2=hi  
-    if (db_x10 < -120) db_x10 = -120;  
-    if (db_x10 >  120) db_x10 =  120;  
+void af_dsp_set_rxeq(uint8_t band, int32_t db_x10) {   // band 0=lo 1=mid 2=hi    
+    if (db_x10 < -240) db_x10 = -240;    
+    if (db_x10 >  240) db_x10 =  240;    
     if      (band == 0) rxeq_lo_db_x10  = db_x10;  
     else if (band == 1) rxeq_mid_db_x10 = db_x10;  
     else                rxeq_hi_db_x10  = db_x10;  
@@ -1771,7 +1771,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
 
             // 3-полосный EQ
             // 3-полосный EQ — последним в RX-цепочке, после лимитера и
-            // soft-clip: его подъём до +12 дБ тоже может превысить int16,
+            // soft-clip: его подъём до +24 дБ тоже может превысить int16,
             // поэтому свой мягкий клиппер на выходе
             if (rxeq_on && (rxeq_lo_db_x10 || rxeq_mid_db_x10 || rxeq_hi_db_x10))      
                 s = rx_soft_clip(rxeq_push(s));
