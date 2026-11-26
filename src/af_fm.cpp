@@ -52,8 +52,9 @@ extern size_t af_cli_format_banks(char* buf, size_t cap);
   
 #include "af_rec.h"          // af_rec_slot_len/data — WAV-экспорт    
 
-    const uint32_t vid = 0xA0D5F005;   // bump: +README.TXT — иначе Windows    
-                                       // подставит кэш dir/FAT старого тома    
+const uint32_t vid = 0xA0D5F005;       // bump: +README.TXT — иначе Windows    
+                                       // подставит кэш dir/FAT старого тома
+                                       // остальное на строке 200
 
 static uint8_t  fm_disk[AF_FM_RAM_SECTORS][AF_FM_SECTOR_SIZE];  // ~10 КБ (19 секторов) 
 static uint32_t fm_set_len = 0;        // байт в SET.TXT  
@@ -196,9 +197,8 @@ static void fm_build_boot(void) {
     memcpy(&b[22], &fat_sz, 2);          // sectors/FAT = 80    
     b[24] = 1;  b[25] = 0;               // spt      
     b[26] = 1;  b[27] = 0;               // heads      
-    b[36] = 0x80; b[38] = 0x29;      
-    const uint32_t vid = 0xA0D5F004;   // bump: новый volume serial ->        
-    memcpy(&b[39], &vid, 4);           // Windows не подставит кэш старого диска      
+    b[36] = 0x80; b[38] = 0x29;        
+    memcpy(&b[39], &vid, 4);           // vid — файловый, bump при смене диска     
     memcpy(&b[43], "AUDIO_DSP3 ", 11); // + метка для надёжности      
     memcpy(&b[54], "FAT16   ", 8);    
     b[510] = 0x55; b[511] = 0xAA;  
