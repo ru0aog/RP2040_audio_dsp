@@ -1391,13 +1391,12 @@ class Panel(tk.Tk):
         val = parts[0]
         p = self.params.get(label)      
         if p:      
-            try:        
-                f = float(val)        
-                if p["type"] == "gain":      
-                    f /= 256.0          # OK отдаёт raw Q8 -> множитель      
-                elif p["type"] == "x100":      
-                    f /= 100.0          # OK отдаёт raw x100 -> множитель      
-                p["var"].set(int(f) if f == int(f) else f)         
+            try:          
+                f = float(val)          
+                if p["type"] == "x100":        
+                    f /= 100.0          # OK отдаёт raw x100 -> множитель        
+                # gain: OK отдаёт множитель напрямую ("# OK gain=100.00")    
+                p["var"].set(int(f) if f == int(f) else f)             
             except ValueError:      
                 p["var"].set(val)      
   

@@ -975,10 +975,25 @@ static bool cli_param_try(char* line) {
     } else {    
         val = (int32_t)strtol(v, NULL, 10);    
     }    
-    best->set(val);    
-    af_fm_request_sync();   // cur изменился — SET.TXT перерендерить  
-    Serial.printf("# OK %s=%ld\n", best->label, (long)val);    
-    return true;    
+    // gain: ввод множителем — кламп к [AF_GAIN_MIN..AF_GAIN_MAX] до записи,  
+    // чтобы банк и OK отражали фактическое значение, а не запрошенное.  
+    if (best->type == PT_GAIN) {  
+        int32_t lo = (int32_t)(AF_GAIN_MIN * 256.0f);  
+        int32_t hi = (int32_t)(AF_GAIN_MAX * 256.0f);  
+        if (val < lo) val = lo;  
+        if (val > hi) val = hi;  
+    }  
+    best->set(val);      
+    af_fm_request_sync();   // cur изменился — SET.TXT перерендерить    
+    if (best->type == PT_GAIN) {  
+        // OK в кратности (как query-ответ выше): "OK gain=1.50"  
+        unsigned g100 = (unsigned)val * 100u / 256u;  
+        Serial.printf("# OK %s=%u.%02u\n", best->label,  
+                      g100 / 100u, g100 % 100u);  
+    } else {  
+        Serial.printf("# OK %s=%ld\n", best->label, (long)val);  
+    }  
+    return true;      
 }    
 
 // ---------------------------------------------------------------------------  
@@ -1309,16 +1324,6 @@ static void cli_exec(char* line) {
             Serial.println("# OK agc=off"); }  
         else Serial.println("# ERR: agc on|off");  
     }  
-    else if (strcmp(cmd, "gain") == 0) {    
-        char* a = strtok(NULL, " \t");    
-        if (a) {    
-            float v = strtof(a, NULL);              // множитель: 0..AGC_MAX_GAIN    
-            af_dsp_set_gain(v);    
-            uint32_t g100 = (uint32_t)(af_dsp_gain() * 100.0f + 0.5f);  
-            Serial.printf("# OK gain=%lu.%02lu\n",  
-                          (unsigned long)(g100 / 100), (unsigned long)(g100 % 100));
-        } else Serial.println("# ERR: gain <0..1000> — множитель при agc off (1.0 = единичное)");    
-    }
     else if (strcmp(cmd, "bypass") == 0) {  
         char* a = strtok(NULL, " \t");  
         if (a && strcmp(a, "on") == 0)       {
