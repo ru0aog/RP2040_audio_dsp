@@ -154,43 +154,63 @@ static volatile const int16_t* af_fir_taps_cur = af_fir_taps[0];
 static uint8_t af_fir_taps_w = 0;              // индекс записи (0/1)    
 static int32_t af_fir_buf[AF_FIR_N] = {};      
 static int     af_fir_idx = 0;  
-// Второй экземпляр FIR — постфильтр после АРУ: режет внеполосный мусор,  
-// который NR/makeup/АРУ поднимают за пределами полосы. Те же тапы.  
-static int32_t af_fir_buf2[AF_FIR_N] = {};    
-static int     af_fir_idx2 = 0;    
+// Второй экземпляр FIR — постфильтр на самом выходе тракта (после    
+// EQ/shelf/exciter, до rx_soft_clip): финальная гарантия полосы band2.    
+// Свои границы af_lo2/hi2_hz и свой набор тапов — независим от входного    
+// band: срезает гармоники эксайтера и подъёмы EQ за пределами band2.    
+static int32_t af_fir_buf2[AF_FIR_N] = {};      
+static int     af_fir_idx2 = 0;      
+static volatile uint32_t af_lo2_hz = 100;    
+static volatile uint32_t af_hi2_hz = 3100;    
+static volatile bool     rxband2_on = false;   // 0 = пост-фильтр мимо    
+// Два набора тапов band2: Core 0 пишет в неактивный, атомарно переключает.    
+static int16_t af_fir_taps2[2][AF_FIR_N];    
+static volatile const int16_t* af_fir_taps2_cur = af_fir_taps2[0];    
+static uint8_t af_fir_taps2_w = 0;    
   
 // Bypass полосового FIR RX (pre + post): 0 = сигнал идёт мимо фильтра.  
 // Тапы и полоса сохраняются — включение возвращает фильтр в тракт.  
 static volatile bool rxband_on = true;  
     
-static void af_fir_init(void) {    
-    const int   M     = (AF_FIR_N - 1) / 2;    
-    const float fc_hi = (float)af_hi_hz / AF_FS_OUT_HZ;    
-    const float fc_lo = (float)af_lo_hz / AF_FS_OUT_HZ;    
-    float h[AF_FIR_N];    
-    float sum_dc = 0.0f;    
-    for (int n = 0; n < AF_FIR_N; n++) {  
-        const int m = n - M;  
-        float s_hi = (m == 0) ? (2.0f * fc_hi)  
-                              : sinf(2.0f * PI * fc_hi * m) / (PI * m);  
-        float s_lo = (m == 0) ? (2.0f * fc_lo)  
-                              : sinf(2.0f * PI * fc_lo * m) / (PI * m);  
-        // Блэкман-Харрис (4 члена): подавление в полосе заграждения ~-92 дБ  
-        // (у Блэкмана ~-58 дБ). Переходная полоса чуть шире: ~5.5*Fs/N.  
-        const float a = 2.0f * PI * n / (AF_FIR_N - 1);  
-        float w = 0.35875f - 0.48829f * cosf(a)  
-                         + 0.14128f * cosf(2.0f * a)  
-                         - 0.01168f * cosf(3.0f * a);  
-        h[n] = (s_hi - s_lo) * w;  
-        sum_dc += fabsf(h[n]);  
-    }  
-    const float norm = (sum_dc > 0.0f) ? (2.0f / sum_dc) : 1.0f;    
-    const uint8_t w = af_fir_taps_w ^ 1;        // пишем в неактивный    
-    for (int n = 0; n < AF_FIR_N; n++)    
-        af_fir_taps[w][n] = (int16_t)lroundf(h[n] * norm * 32768.0f);    
-    __dmb();                                     // тапы видны до указателя    
-    af_fir_taps_cur = af_fir_taps[w];            // атомарная публикация    
-    af_fir_taps_w   = w;    
+// Расчёт полосового FIR lo..hi в набор тапов taps[2][AF_FIR_N] с    
+// double-buffer публикацией через *cur/*widx. Core 0, float допустим.    
+static void af_fir_design(uint32_t lo_hz, uint32_t hi_hz,    
+                          int16_t taps[2][AF_FIR_N],    
+                          volatile const int16_t** cur, uint8_t* widx) {      
+    const int   M     = (AF_FIR_N - 1) / 2;      
+    const float fc_hi = (float)hi_hz / AF_FS_OUT_HZ;      
+    const float fc_lo = (float)lo_hz / AF_FS_OUT_HZ;      
+    float h[AF_FIR_N];      
+    float sum_dc = 0.0f;      
+    for (int n = 0; n < AF_FIR_N; n++) {    
+        const int m = n - M;    
+        float s_hi = (m == 0) ? (2.0f * fc_hi)    
+                              : sinf(2.0f * PI * fc_hi * m) / (PI * m);    
+        float s_lo = (m == 0) ? (2.0f * fc_lo)    
+                              : sinf(2.0f * PI * fc_lo * m) / (PI * m);    
+        const float a = 2.0f * PI * n / (AF_FIR_N - 1);    
+        float w = 0.35875f - 0.48829f * cosf(a)    
+                         + 0.14128f * cosf(2.0f * a)    
+                         - 0.01168f * cosf(3.0f * a);    
+        h[n] = (s_hi - s_lo) * w;    
+        sum_dc += fabsf(h[n]);    
+    }    
+    const float norm = (sum_dc > 0.0f) ? (2.0f / sum_dc) : 1.0f;      
+    const uint8_t w = *widx ^ 1;    
+    for (int n = 0; n < AF_FIR_N; n++)      
+        taps[w][n] = (int16_t)lroundf(h[n] * norm * 32768.0f);      
+    __dmb();    
+    *cur  = taps[w];    
+    *widx = w;      
+}      
+    
+static void af_fir_init(void) {      
+    af_fir_design(af_lo_hz, af_hi_hz, af_fir_taps, &af_fir_taps_cur,    
+                  &af_fir_taps_w);    
+}    
+static void af_fir_init2(void) {      
+    af_fir_design(af_lo2_hz, af_hi2_hz, af_fir_taps2, &af_fir_taps2_cur,    
+                  &af_fir_taps2_w);    
 }    
   
 // Один отсчёт полосового FIR — симметричная свёртка (порт af_lp_push):  
@@ -213,12 +233,12 @@ static inline int32_t __not_in_flash_func(af_fir_push)(int32_t x) {
     return (int32_t)((acc + (1 << 14)) >> 15);   // Q15 → масштаб, +0.5 LSB    
 }    
   
-// Постфильтр после АРУ — тот же набор тапов, своё состояние.  
-static inline int32_t __not_in_flash_func(af_fir_push2)(int32_t x) {  
+// Постфильтр на выходе — свой набор тапов band2, своё состояние.    
+static inline int32_t __not_in_flash_func(af_fir_push2)(int32_t x) {
     af_fir_buf2[af_fir_idx2] = x;  
     if (++af_fir_idx2 >= AF_FIR_N) af_fir_idx2 = 0;  
   
-    const int16_t* taps = (const int16_t*)af_fir_taps_cur;  
+    const int16_t* taps = (const int16_t*)af_fir_taps2_cur; 
     int64_t acc = 0;  
     int lo = af_fir_idx2;  
     int hi = af_fir_idx2 + AF_FIR_N - 1;  
@@ -1129,7 +1149,29 @@ uint32_t af_dsp_af_hi_hz(void) { return af_hi_hz; }
   
 void af_dsp_set_rxband(bool on) { rxband_on = on; }    
 bool af_dsp_rxband_on(void)     { return rxband_on; }    
-  
+
+// Пост-фильтр band2: свои границы, независимые от входного band.    
+// В CW не следует за f0 — полоса задаётся явно.    
+bool af_dsp_set_band2(uint32_t f_lo_hz, uint32_t f_hi_hz) {    
+    const uint32_t FS2 = AF_FS_OUT_HZ / 2;    
+    if (f_hi_hz > FS2 - 200) f_hi_hz = FS2 - 200;    
+    if (f_lo_hz >= f_hi_hz)  f_lo_hz = (f_hi_hz > 100) ? (f_hi_hz - 100) : 0;    
+    af_lo2_hz = f_lo_hz;    
+    af_hi2_hz = f_hi_hz;    
+    af_fir_init2();    
+    return true;    
+}    
+uint32_t af_dsp_band2_lo_hz(void) { return af_lo2_hz; }    
+uint32_t af_dsp_band2_hi_hz(void) { return af_hi2_hz; }    
+void af_dsp_set_rxband2(bool on) {    
+    if (on && !rxband2_on) {          // чистый старт — без переходного звона    
+        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));    
+        af_fir_idx2 = 0;    
+    }    
+    rxband2_on = on;    
+}    
+bool af_dsp_rxband2_on(void) { return rxband2_on; }    
+
 // Возврат: 0 = выключено, 1 = включено, 2 = включено и NR снят (приоритет NT),  
 //          3 = отклонено (CW on — NT в узкой полосе бесполезен и перегружает Core 1).  
 int af_dsp_set_notch(bool on) {    
@@ -1350,7 +1392,8 @@ void af_dsp_set_cw(bool on) {
         // Восстановить полосу, которая была до включения CW.    
         af_lo_hz = af_saved_lo_hz;    
         af_hi_hz = af_saved_hi_hz;    
-        af_fir_init();    
+        af_fir_init();
+        af_fir_init2();       // тапы пост-фильтра band2    
     }    
     cw_on = on;    
 }  
@@ -1777,9 +1820,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // Гребёнка — после АРУ (контур не «отменяет» нотчи), но ДО пост-FIR:  
             // предельный цикл Q15-нотчей звенит на частотах 3/4/5 кГц вне полосы —  
             // постфильтр этот звон отрезает. Нотчи 1/2 кГц внутри полосы работают.  
-            if (rx_notch_on) s = (int16_t)rx_notch_push(s);  
-            if (rxband_on) s = sat16(af_fir_push2(s));   // пост-FIR: срез внеполосного  
-                                                       // мусора после АРУ/NR  
+            if (rx_notch_on) s = (int16_t)rx_notch_push(s);    
             
             // Presence EQ (SNR-адаптивный подъём ~2.3 кГц)
             if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —    
@@ -1807,11 +1848,17 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 s = rx_soft_clip(pre_clip);  
             }  
   
-            // Пик-детектор выхода тракта (до rx_soft_clip): мгновенная атака,  
-            // спад ~110 мс — тот же AGC_PEAK_DEC_Q24, что у входного pk.  
-            // Обратная связь АРУ: видит подъём EQ/shelf/exciter.  
-            {  
-                int64_t ap = (pre_clip < 0) ? -(int64_t)pre_clip : (int64_t)pre_clip;  
+            // Пост-фильтр band2 — на самом выходе, после EQ/shelf/exciter:    
+            // финальная полоса независимо от подъёмов «вкусовых» каскадов.    
+            // До out_peak: B-петля АРУ видит реальный выходной пик.    
+            if (rxband2_on) {    
+                pre_clip = af_fir_push2(pre_clip);    
+                s = rx_soft_clip(pre_clip);    
+            }    
+    
+            // Пик-детектор выхода тракта (до rx_soft_clip): мгновенная атака,    
+            {    
+                int64_t ap = (pre_clip < 0) ? -(int64_t)pre_clip : (int64_t)pre_clip;    
                 int64_t tp = ap << 16;  
                 int64_t dp = tp - out_peak_q16;  
                 out_peak_q16 += (dp > 0) ? dp  

@@ -202,3 +202,9 @@ uint32_t af_dsp_rxeqf(uint8_t band);
 // (значения дБ/частот при этом хранятся).  
 void     af_dsp_set_rxeq_on(bool on);  
 bool     af_dsp_rxeq_on(void);  
+
+bool     af_dsp_set_band2(uint32_t f_lo_hz, uint32_t f_hi_hz);    
+uint32_t af_dsp_band2_lo_hz(void);    
+uint32_t af_dsp_band2_hi_hz(void);    
+void     af_dsp_set_rxband2(bool on);    
+bool     af_dsp_rxband2_on(void);    

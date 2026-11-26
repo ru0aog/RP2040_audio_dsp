@@ -74,7 +74,9 @@ static void cli_help(void) {
     Serial.println("#   rx excmix <0..16384> — подмес эксайтера Q15 (3277 = ~10%)");  
     Serial.println("#   nb on|off         — noise blanker: подавитель импульсных помех RX");    
     Serial.println("#   nb thr <15..100>  — порог NB x10 над огибающей (30 = x3.0)");
-    Serial.println("#   rx band on|off    — полосовой FIR RX (off = сигнал мимо фильтра)");  
+    Serial.println("#   rx band on|off    — полосовой FIR RX (off = сигнал мимо фильтра)");
+    Serial.println("#   band2 lo|hi <Hz>  — полоса пост-фильтра на выходе (после EQ)");    
+    Serial.println("#   rx band2 on|off   — пост-фильтр выхода (off = мимо)");    
     Serial.println("#   rx shelf on|off   — low-shelf «бас» в тракте/мимо");  
     Serial.println("#   rxeq on|off       — 3-полосный EQ RX целиком");  
     Serial.println("#   rxeq lo|mid|hi <-120..120> — 3-полосный EQ RX, дБx10 (60=+6дБ, -60=-6дБ)");      
@@ -202,9 +204,12 @@ static void cli_stats(void) {
     
     // ---- RX: параметры приёмного тракта (при tx=on неактивен) ----      
     Serial.printf("# === RX (%s) ===\n", tx ? "inactive" : "active");      
-    Serial.printf("#   band    = %lu..%lu Hz\n",      
-                  (unsigned long)af_dsp_band_lo_hz(),      
-                  (unsigned long)af_dsp_band_hi_hz());      
+    Serial.printf("#   band    = %lu..%lu Hz   band2=%lu..%lu Hz (%s)\n",        
+                  (unsigned long)af_dsp_band_lo_hz(),        
+                  (unsigned long)af_dsp_band_hi_hz(),  
+                  (unsigned long)af_dsp_band2_lo_hz(),  
+                  (unsigned long)af_dsp_band2_hi_hz(),  
+                  af_dsp_rxband2_on() ? "on" : "off");        
     Serial.printf("#   nt      = %s   nr      = %s(%s) bypass  = %s   ramp    = %s\n",        
                   af_dsp_notch_on()  ? "on" : "off",        
                   af_dsp_nr_on()     ? "on" : "off",        
@@ -774,7 +779,9 @@ typedef struct {
   
 // Обёртки для парных/плавающих сеттеров.  
 static void p_set_band_lo(int32_t v)  { af_dsp_set_band((uint32_t)v, af_dsp_band_hi_hz()); }  
-static void p_set_band_hi(int32_t v)  { af_dsp_set_band(af_dsp_band_lo_hz(), (uint32_t)v); }  
+static void p_set_band_hi(int32_t v)  { af_dsp_set_band(af_dsp_band_lo_hz(), (uint32_t)v); }
+static void p_set_band2_lo(int32_t v) { af_dsp_set_band2((uint32_t)v, af_dsp_band2_hi_hz()); }    
+static void p_set_band2_hi(int32_t v) { af_dsp_set_band2(af_dsp_band2_lo_hz(), (uint32_t)v); }    
 static void p_set_txband_lo(int32_t v){ af_tx_set_band((uint32_t)v, af_tx_hi_hz()); }  
 static void p_set_txband_hi(int32_t v){ af_tx_set_band(af_tx_lo_hz(), (uint32_t)v); }  
 static void p_set_notch1(int32_t v)   { af_tx_set_notchf((uint32_t)v, af_tx_notch2()); }  
@@ -806,7 +813,10 @@ static const af_param_t AF_PARAMS[] = {
     // --- RX ---  
     { "band lo",     PT_U16,   offsetof(af_bank_t, lo_hz),          p_set_band_lo },    
     { "band hi",     PT_U16,   offsetof(af_bank_t, hi_hz),          p_set_band_hi },    
-    { "rx band",     PT_ONOFF, offsetof(af_bank_t, rxband_on),      P_SET(af_dsp_set_rxband) },  
+    { "rx band",     PT_ONOFF, offsetof(af_bank_t, rxband_on),      P_SET(af_dsp_set_rxband) },
+    { "band2 lo",    PT_U16,   offsetof(af_bank_t, lo2_hz),         p_set_band2_lo },    
+    { "band2 hi",    PT_U16,   offsetof(af_bank_t, hi2_hz),         p_set_band2_hi },    
+    { "rx band2",    PT_ONOFF, offsetof(af_bank_t, band2_on),       P_SET(af_dsp_set_rxband2) },    
     { "cw",          PT_ONOFF, offsetof(af_bank_t, cw_on),          P_SET(af_dsp_set_cw) },  
     { "cw f0",       PT_U16,   offsetof(af_bank_t, cw_f0),          P_SET(af_dsp_set_cw_freq) },  
     { "cw bw",       PT_U16,   offsetof(af_bank_t, cw_bw),          P_SET(af_dsp_set_cw_bw) },  
@@ -1309,7 +1319,8 @@ static void cli_exec(char* line) {
             Serial.printf("R|bypass|%u\n",   af_dsp_bypass_on() ? 1 : 0);    
             Serial.printf("R|cw|%u\n",       af_dsp_cw_on() ? 1 : 0);    
             Serial.printf("R|nb|%u\n",       af_dsp_nb_on() ? 1 : 0);    
-            Serial.printf("R|rxnotch|%u\n",  af_dsp_rxnotch_on() ? 1 : 0);    
+            Serial.printf("R|rxnotch|%u\n",  af_dsp_rxnotch_on() ? 1 : 0);
+            Serial.printf("R|rxband2|%u\n",  af_dsp_rxband2_on() ? 1 : 0);    
             Serial.printf("R|rxpres|%u\n",   af_dsp_rxpres_on() ? 1 : 0);    
             Serial.printf("R|rxexc|%u\n",    af_dsp_rxexc_on() ? 1 : 0);    
             Serial.printf("R|rtty|%u\n",     af_dsp_rtty_on() ? 1 : 0);    
