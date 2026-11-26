@@ -286,14 +286,14 @@ void af_store_snapshot(af_bank_t* out) {
     out->cw_noise = (uint16_t)af_dsp_cw_noise();      
     out->cwdec_on    = af_dsp_cwdec_on() ? 1 : 0;        
     out->cw_wpm      = cwdec_wpm();        
-    out->cw_sql_x100 = (uint16_t)(cwdec_sql() * 100.0f + 0.5f);        
+    out->cw_sql_x100 = (uint32_t)(cwdec_sql() * 100.0f + 0.5f);          
     out->rtty_on       = af_dsp_rtty_on() ? 1 : 0;  
     out->rtty_scan     = rttydec_scan_en() ? 1 : 0;  
     out->rtty_rsid     = rttydec_rsid_en() ? 1 : 0;  
     out->rtty_rev      = rttydec_rev() ? 1 : 0;    
     out->rtty_dbg      = rttydec_dbg_en() ? 1 : 0;    
     out->rtty_ctr      = 0;   // центр не персистентен — при load всегда авто-захват    
-    out->rtty_sql_x100 = (uint16_t)(rttydec_sql() * 100.0f + 0.5f);  
+    out->rtty_sql_x100 = (uint32_t)(rttydec_sql() * 100.0f + 0.5f);    
     out->agc_on   = af_dsp_agc_on() ? 1 : 0;        
     out->gain_pct = (uint32_t)(af_dsp_gain() * 256.0f + 0.5f);
     out->voice_vol = af_voice_volume();    
