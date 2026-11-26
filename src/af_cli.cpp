@@ -1009,7 +1009,14 @@ static bool cli_param_try(char* line) {
     if (best->type == PT_U16 && strcmp(best->label, "cw noise") == 0) {  
         if (val > 100) val = 100;  
         if (val < 0)   val = 0;  
-    }  
+    }
+    // rx shelf: сеттер клампит в 0..60 (x10 дБ = 0..+6.0 дБ) —    
+    // OK и банк должны показывать фактическое значение.    
+    if (best->type == PT_U16 && strcmp(best->label, "rx shelf") == 0) {    
+        if (val > 60) val = 60;    
+        if (val < 0)  val = 0;    
+    } 
+
     best->set(val);      
     af_fm_request_sync();   // cur изменился — SET.TXT перерендерить    
     if (best->type == PT_GAIN) {    

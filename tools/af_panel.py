@@ -117,7 +117,11 @@ def _unit(label):
     if label in ("band lo", "band hi", "cw bw"):  # полоса приёма / CW-фильтр, Гц      
         return "Гц"      
     if label == "cw noise":                       # уровень тестового шума CW, %      
-        return "%"      
+        return "%"
+    if label == "rx shelf":                       # подъём НЧ, дБ x10  
+        return "x0.1 дБ"
+    if label == "rx shelf q":                     # добротность shelf, Q x100  
+        return "x0.01"  
     if label == "agc ref":          # целевой уровень АРУ, нормированный    
         return "норм"    
     if label == "lim ceil":         # потолок лимитера, пиковый уровень    
