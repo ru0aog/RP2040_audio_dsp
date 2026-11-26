@@ -902,28 +902,33 @@ static const af_param_t AF_PARAMS[] = {
 #define AF_PARAMS_COUNT  (sizeof(AF_PARAMS) / sizeof(AF_PARAMS[0]))  
   
 // Чтение поля банка по смещению (тип задаёт размер: u8/i16/u16/u32).  
-static int32_t bank_field(const af_bank_t* b, const af_param_t* p) {  
-    const uint8_t* base = (const uint8_t*)b;  
-    switch (p->type) {    
-        case PT_ONOFF:    
-        case PT_U8:    return (int32_t)*(const uint8_t*)(base + p->off);    
-        case PT_I16:   return (int32_t)*(const int16_t*)(base + p->off);      
-        case PT_U32:   return (int32_t)*(const uint32_t*)(base + p->off);      
-        default:       return (int32_t)*(const uint16_t*)(base + p->off);      
-    }    
-}  
+static int32_t bank_field(const af_bank_t* b, const af_param_t* p) {    
+    const uint8_t* base = (const uint8_t*)b;    
+    switch (p->type) {      
+        case PT_ONOFF:      
+        case PT_U8:    return (int32_t)*(const uint8_t*)(base + p->off);      
+        case PT_I16:   return (int32_t)*(const int16_t*)(base + p->off);        
+        case PT_U32:   return (int32_t)*(const uint32_t*)(base + p->off);        
+        case PT_GAIN:  // gain_pct — u32 (Q8, до 512000)    
+        case PT_X100:  // agc_max/min, cw/rtty sql — u32 (x100)    
+                     return (int32_t)*(const uint32_t*)(base + p->off);        
+        default:       return (int32_t)*(const uint16_t*)(base + p->off);        
+    }      
+}    
 
 // Запись поля банка по смещению (зеркало bank_field).        
-static void bank_field_set(af_bank_t* b, const af_param_t* p, int32_t v) {        
-    uint8_t* base = (uint8_t*)b;        
-    switch (p->type) {        
-        case PT_ONOFF:        
-        case PT_U8:    *(uint8_t*)(base + p->off)  = (uint8_t)v;  break;        
-        case PT_I16:   *(int16_t*)(base + p->off)  = (int16_t)v;  break;        
-        case PT_U32:   *(uint32_t*)(base + p->off) = (uint32_t)v; break;        
-        default:       *(uint16_t*)(base + p->off) = (uint16_t)v; break;        
-    }        
-}        
+static void bank_field_set(af_bank_t* b, const af_param_t* p, int32_t v) {          
+    uint8_t* base = (uint8_t*)b;          
+    switch (p->type) {          
+        case PT_ONOFF:          
+        case PT_U8:    *(uint8_t*)(base + p->off)  = (uint8_t)v;  break;          
+        case PT_I16:   *(int16_t*)(base + p->off)  = (int16_t)v;  break;          
+        case PT_U32:   *(uint32_t*)(base + p->off) = (uint32_t)v; break;          
+        case PT_GAIN:  // u32 — зеркало bank_field    
+        case PT_X100:  *(uint32_t*)(base + p->off) = (uint32_t)v; break;          
+        default:       *(uint16_t*)(base + p->off) = (uint16_t)v; break;          
+    }          
+}          
 
 // Диспетчер команд-меток: "<label> <value>" — longest match по таблице.  
 // Вызывается до strtok (строка ещё целая). true = команда обработана.  
@@ -986,12 +991,14 @@ static bool cli_param_try(char* line) {
     // agc max/min (x100): тот же кламп — [x1 .. AF_GAIN_MAX] в единицах x100.    
     // Сеттер af_dsp_set_agcmax/agcmin клампит runtime, но банк и OK    
     // должны показывать фактическое значение, а не запрошенное.    
-    if (best->type == PT_X100) {    
-        int32_t lo = 100;                              // x1.00    
-        int32_t hi = (int32_t)(AF_GAIN_MAX * 100.0f);  // x2000.00    
-        if (val < lo) val = lo;    
-        if (val > hi) val = hi;    
-    }  
+    // Только agc max/min: у cw sql/rtty sql свой диапазон (пороги < x1).    
+    if (best->type == PT_X100 &&    
+        (strcmp(best->label, "agc max") == 0 || strcmp(best->label, "agc min") == 0)) {      
+        int32_t lo = 100;                              // x1.00      
+        int32_t hi = (int32_t)(AF_GAIN_MAX * 100.0f);  // x2000.00      
+        if (val < lo) val = lo;      
+        if (val > hi) val = hi;      
+    }    
     best->set(val);      
     af_fm_request_sync();   // cur изменился — SET.TXT перерендерить    
     if (best->type == PT_GAIN) {    
@@ -1120,15 +1127,32 @@ bool af_cli_apply_set_txt(const char* txt, size_t len) {
                     val = (int32_t)(strtof(tok, NULL) * 256.0f + 0.5f);        
                 } else if (best->type == PT_X100) {        
                     val = (int32_t)(strtof(tok, NULL) * 100.0f + 0.5f);        
-                } else {        
-                    val = (int32_t)strtol(tok, NULL, 10);        
-                }        
-        
-                if (col == 0) {        
-                    best->set(val);          // cur — в живой DSP, как CLI set        
-                } else {        
-                    bank_field_set(&bk[col - 1], best, val);        
-                }        
+                } else {          
+                    val = (int32_t)strtol(tok, NULL, 10);          
+                }          
+          
+                // Тот же кламп, что в cli_param_try: банк и cur должны    
+                // отражать фактическое значение, а не запрошенное.    
+                if (best->type == PT_GAIN) {    
+                    int32_t lo = (int32_t)(AF_GAIN_MIN * 256.0f);    
+                    int32_t hi = (int32_t)(AF_GAIN_MAX * 256.0f);    
+                    if (val < lo) val = lo;    
+                    if (val > hi) val = hi;    
+                }    
+                if (best->type == PT_X100 &&    
+                    (strcmp(best->label, "agc max") == 0 ||    
+                     strcmp(best->label, "agc min") == 0)) {    
+                    int32_t lo = 100;    
+                    int32_t hi = (int32_t)(AF_GAIN_MAX * 100.0f);    
+                    if (val < lo) val = lo;    
+                    if (val > hi) val = hi;    
+                }    
+          
+                if (col == 0) {          
+                    best->set(val);          // cur — в живой DSP, как CLI set          
+                } else {          
+                    bank_field_set(&bk[col - 1], best, val);          
+                }          
                 applied++;        
             }        
         }        

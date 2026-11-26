@@ -295,11 +295,11 @@ void af_store_snapshot(af_bank_t* out) {
     out->rtty_ctr      = 0;   // центр не персистентен — при load всегда авто-захват    
     out->rtty_sql_x100 = (uint16_t)(rttydec_sql() * 100.0f + 0.5f);  
     out->agc_on   = af_dsp_agc_on() ? 1 : 0;        
-    out->gain_pct = (uint16_t)(af_dsp_gain() * 256.0f + 0.5f);    
+    out->gain_pct = (uint32_t)(af_dsp_gain() * 256.0f + 0.5f);
     out->voice_vol = af_voice_volume();    
     out->agc_ref      = (uint16_t)af_dsp_agcref();      
-    out->agc_max_x100 = (uint16_t)(af_dsp_agcmax() * 100.0f + 0.5f);      
-    out->agc_min_x100 = (uint16_t)(af_dsp_agcmin() * 100.0f + 0.5f);      
+    out->agc_max_x100 = (uint32_t)(af_dsp_agcmax() * 100.0f + 0.5f);        
+    out->agc_min_x100 = (uint32_t)(af_dsp_agcmin() * 100.0f + 0.5f);
     out->lim_ceil     = (uint16_t)af_dsp_limceil();      
     out->nr_depth     = (uint16_t)af_dsp_nrdepth();      
     out->nr_makeup    = (uint32_t)af_dsp_nrmakeup();      
@@ -608,8 +608,8 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].rtty_dbg = 0;   // диагностика выключена по умолчанию    
         b[i].agc_on = 1;  b[i].gain_pct = 256;  b[i].voice_vol = 300;      
         b[i].agc_ref = AGC_REF;      
-        b[i].agc_max_x100 = (uint16_t)(AGC_MAX_GAIN * 100.0f + 0.5f);      
-        b[i].agc_min_x100 = (uint16_t)(AGC_MIN_GAIN * 100.0f + 0.5f);      
+        b[i].agc_max_x100 = (uint32_t)(AGC_MAX_GAIN * 100.0f + 0.5f);        
+        b[i].agc_min_x100 = (uint32_t)(AGC_MIN_GAIN * 100.0f + 0.5f);        
         b[i].lim_ceil = LIMIT_CEIL;      
         b[i].nr_depth = NR_DEPTH_Q15;  b[i].nr_makeup = NR_MAKEUP_Q15;      
         b[i].nt_mu = NOTCH_MU_Q;  b[i].nr_mu = NR_MU_Q;  

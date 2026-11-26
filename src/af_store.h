@@ -20,12 +20,11 @@
 // (чистая плата / битый crc). Пустая строка "" = дефолты не подставлять.    
 #define AF_CW_DEFAULT  "VVV TESTING BEACON K"    
   
-#define AF_STORE_VER      12  // было 11: +флаги bypass блоков (rxband_on, rxeq_on,  
-                            // rxshelf_on, txband_on, txeq_on, txagc_on, txgate_on,  
-                            // txcomp_on, txclip_on, txshelf_on) в af_bank_t.  
-                            // Старые банки невалидны.        
-                            // CW.TXT живёт в том же секторе по смещению 0x800        
-                            // со своим magic 'CW'+ver+crc — версию банков не меняет.     
+#define AF_STORE_VER      13  // было 12: gain_pct/agc_max_x100/agc_min_x100  
+                            // расширены u16 -> u32 (gain до x2000, agc до x2000  
+                            // не влезали в u16). Старые банки невалидны.  
+                            // CW.TXT живёт в том же секторе по смещению 0x800  
+                            // со своим magic 'CW'+ver+crc — версию банков не меняет.   
 
 extern char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];  
   
@@ -52,12 +51,12 @@ struct af_bank_t {
     uint8_t  rtty_dbg;       // диагностика # scan:/# trk: (0/1)    
     uint16_t rtty_ctr;       // ручной центр, Гц (0 = авто)    
     uint16_t rtty_sql_x100;  // сквелч x100 (15 = 0.15, 0 = off)    
-    uint8_t  agc_on;        // 0/1 — АРУ; при 0 действует gain_pct      
-    uint16_t gain_pct;      // ручное усиление, Q8 (256 = ×1.0)  
-    uint16_t voice_vol;     // громкость голосовых сообщений, % (0..400)  
-    uint16_t agc_ref;       // целевой уровень АРУ (SSB)    
-    uint16_t agc_max_x100;  // потолок АРУ x100 (300 = ×3.00)    
-    uint16_t agc_min_x100;  // нижний предел АРУ x100    
+    uint8_t  agc_on;        // 0/1 — АРУ; при 0 действует gain_pct        
+    uint32_t gain_pct;      // ручное усиление, Q8 (256 = ×1.0, до ×2000)    
+    uint16_t voice_vol;     // громкость голосовых сообщений, % (0..400)    
+    uint16_t agc_ref;       // целевой уровень АРУ (SSB)      
+    uint32_t agc_max_x100;  // потолок АРУ x100 (200000 = ×2000.00)      
+    uint32_t agc_min_x100;  // нижний предел АРУ x100      
     uint16_t lim_ceil;      // потолок лимитера    
     uint16_t nr_depth;      // глубина NR, Q15    
     uint32_t nr_makeup;     // makeup NR, Q15 (до 131072 — не влезает в u16)    
