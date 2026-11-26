@@ -866,6 +866,7 @@ static volatile bool     dsp_reset_req = false; // запрос сброса с�
 static volatile int32_t agc_ref      = AGC_REF;        // целевой уровень АРУ  
 static volatile float   agc_max_gain = AGC_MAX_GAIN;   // потолок усиления  
 static volatile float   agc_min_gain = AGC_MIN_GAIN;   // нижний предел  
+static volatile float   cw_agc_max_gain = CW_AGC_MAX_GAIN; // потолок АРУ CW  
 static volatile int32_t lim_ceil     = LIMIT_CEIL;     // потолок лимитера  
 
 static volatile bool tx_on = false;   // false=RX, true=TX (PTT GP8 / "tx on")      
@@ -894,7 +895,7 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
         // [MIN_GAIN .. MAX_GAIN] => avg в [REF/MAX .. REF/MIN].  
         // В тишине avg упирается в REF/MAX_GAIN — шум не разгоняется  
         // под потолок, голосовые сообщения слышны без agc off.  
-        const float max_g = cw_on ? CW_AGC_MAX_GAIN : agc_max_gain;    
+        const float max_g = cw_on ? cw_agc_max_gain : agc_max_gain;  
         const float min_g = cw_on ? CW_AGC_MIN_GAIN : agc_min_gain;    
         int32_t avg_lo = (int32_t)(agc_ref / max_g);    
         int32_t avg_hi = (int32_t)(agc_ref / min_g);  
@@ -1364,7 +1365,13 @@ void af_dsp_set_limceil(int32_t v) {
     if (v < 1000)  v = 1000;  
     if (v > 32767) v = 32767;  
     lim_ceil = v;  
+}
+void af_dsp_set_cw_agcmax(float g) {  
+    if (g < 1.0f)        g = 1.0f;  
+    if (g > AF_GAIN_MAX) g = AF_GAIN_MAX;  
+    cw_agc_max_gain = g;  
 }  
+float af_dsp_cw_agcmax(void) { return cw_agc_max_gain; }  
 int32_t af_dsp_agcref(void)  { return agc_ref; }  
 float   af_dsp_agcmax(void)  { return agc_max_gain; }  
 float   af_dsp_agcmin(void)  { return agc_min_gain; }  

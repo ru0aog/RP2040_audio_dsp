@@ -298,8 +298,9 @@ void af_store_snapshot(af_bank_t* out) {
     out->gain_pct = (uint32_t)(af_dsp_gain() * 256.0f + 0.5f);
     out->voice_vol = af_voice_volume();    
     out->agc_ref      = (uint16_t)af_dsp_agcref();      
-    out->agc_max_x100 = (uint32_t)(af_dsp_agcmax() * 100.0f + 0.5f);        
-    out->agc_min_x100 = (uint32_t)(af_dsp_agcmin() * 100.0f + 0.5f);
+    out->agc_max_x100 = (uint32_t)(af_dsp_agcmax() * 100.0f + 0.5f);          
+    out->agc_min_x100 = (uint32_t)(af_dsp_agcmin() * 100.0f + 0.5f);  
+    out->cw_agc_max_x100 = (uint32_t)(af_dsp_cw_agcmax() * 100.0f + 0.5f);  
     out->lim_ceil     = (uint16_t)af_dsp_limceil();      
     out->nr_depth     = (uint16_t)af_dsp_nrdepth();      
     out->nr_makeup    = (uint32_t)af_dsp_nrmakeup();      
@@ -461,8 +462,9 @@ bool af_store_load(uint8_t idx) {
     // RX: АРУ/лимитер/NR-параметры (on/off NT/NR/rxnotch не трогаем —    
     // они включаются по обстановке с GP5/GP6 и консоли).    
     af_dsp_set_agcref((int32_t)b.agc_ref);    
-    af_dsp_set_agcmax((float)b.agc_max_x100 / 100.0f);    
-    af_dsp_set_agcmin((float)b.agc_min_x100 / 100.0f);    
+    af_dsp_set_agcmax((float)b.agc_max_x100 / 100.0f);      
+    af_dsp_set_agcmin((float)b.agc_min_x100 / 100.0f);      
+    af_dsp_set_cw_agcmax((float)b.cw_agc_max_x100 / 100.0f);   // потолок АРУ ТЛГ  
     af_dsp_set_limceil((int32_t)b.lim_ceil);    
     af_dsp_set_nrdepth((int32_t)b.nr_depth);    
     af_dsp_set_nrmakeup((int32_t)b.nr_makeup);    
@@ -610,8 +612,9 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].rtty_dbg = 0;   // диагностика выключена по умолчанию    
         b[i].agc_on = 1;  b[i].gain_pct = 256;  b[i].voice_vol = 300;      
         b[i].agc_ref = AGC_REF;      
-        b[i].agc_max_x100 = (uint32_t)(AGC_MAX_GAIN * 100.0f + 0.5f);        
-        b[i].agc_min_x100 = (uint32_t)(AGC_MIN_GAIN * 100.0f + 0.5f);        
+        b[i].agc_max_x100 = (uint32_t)(AGC_MAX_GAIN * 100.0f + 0.5f);          
+        b[i].agc_min_x100 = (uint32_t)(AGC_MIN_GAIN * 100.0f + 0.5f);          
+        b[i].cw_agc_max_x100 = (uint32_t)(CW_AGC_MAX_GAIN * 100.0f + 0.5f);  
         b[i].lim_ceil = LIMIT_CEIL;      
         b[i].nr_depth = NR_DEPTH_Q15;  b[i].nr_makeup = NR_MAKEUP_Q15;      
         b[i].nt_mu = NOTCH_MU_Q;  b[i].nr_mu = NR_MU_Q;  

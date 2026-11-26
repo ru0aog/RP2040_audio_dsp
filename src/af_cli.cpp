@@ -86,6 +86,7 @@ static void cli_help(void) {
     Serial.println("#   cw dec on|off     — CW-декодер: текст в Serial (только при cw on)");    
     Serial.println("#   cw wpm <5..60>    — стартовая скорость декодера, WPM");      
     Serial.println("#   cw sql <0..1>     — сквелч декодера (0 = off, 0.25 = дефолт)");
+    Serial.println("#   cw agcmax <1..2000> — потолок АРУ ТЛГ, множитель (дефолт x50)");  
     Serial.println("#   cw tx <текст>     — передать посылку CW (тон = cw f0, авто-возврат в RX)");    
     Serial.println("#   cw txwpm <5..60>  — скорость передачи;  cw abort — оборвать посылку");
     Serial.println("#   cw msg <1..4> <текст> — строка CW.TXT (пусто = голосовой слот)");      
@@ -232,11 +233,12 @@ static void cli_stats(void) {
     Serial.printf("#   agc     = %s   gain=%lu.%02lu\n",      
                   af_dsp_agc_on() ? "on" : "off",      
                   (unsigned long)(g100 / 100), (unsigned long)(g100 % 100));      
-    Serial.printf("#   agcref  = %ld   agcmax=%ld agcmin=%ld   limceil=%ld\n",      
-                  (long)af_dsp_agcref(),      
-                  (long)(af_dsp_agcmax() * 100.0f + 0.5f),      
-                  (long)(af_dsp_agcmin() * 100.0f + 0.5f),      
-                  (long)af_dsp_limceil());      
+    Serial.printf("#   agcref  = %ld   agcmax=%ld agcmin=%ld   limceil=%ld   cw agcmax=%ld\n",  
+                  (long)af_dsp_agcref(),  
+                  (long)(af_dsp_agcmax() * 100.0f + 0.5f),  
+                  (long)(af_dsp_agcmin() * 100.0f + 0.5f),  
+                  (long)af_dsp_limceil(),  
+                  (long)(af_dsp_cw_agcmax() * 100.0f + 0.5f));  
     Serial.printf("#   nrdepth = %ld   nrmakeup=%ld   ntmu=%ld nrmu=%ld\n",    
                   (long)af_dsp_nrdepth(),    
                   (long)af_dsp_nrmakeup(),    
@@ -778,6 +780,7 @@ static void p_set_notch1(int32_t v)   { af_tx_set_notchf((uint32_t)v, af_tx_notc
 static void p_set_notch2(int32_t v)   { af_tx_set_notchf(af_tx_notch1(), (uint32_t)v); }  
 static void p_set_gain(int32_t v)     { af_dsp_set_gain((float)v / 256.0f); }        // Q8  
 static void p_set_agcmax(int32_t v)   { af_dsp_set_agcmax((float)v / 100.0f); }      // x100  
+static void p_set_cw_agcmax(int32_t v){ af_dsp_set_cw_agcmax((float)v / 100.0f); } // x100  
 static void p_set_agcmin(int32_t v)   { af_dsp_set_agcmin((float)v / 100.0f); }      // x100  
 static void p_set_cw_sql(int32_t v)   { cwdec_set_sql((float)v / 100.0f); }      // x100  
 static void p_set_rtty_sql(int32_t v) { rttydec_set_sql((float)v / 100.0f); }  
@@ -810,6 +813,7 @@ static const af_param_t AF_PARAMS[] = {
     { "cw dec",      PT_ONOFF, offsetof(af_bank_t, cwdec_on),       P_SET(af_dsp_set_cwdec) },    
     { "cw wpm",      PT_U8,    offsetof(af_bank_t, cw_wpm),         P_SET(cwdec_set_wpm) },    
     { "cw sql",      PT_X100,  offsetof(af_bank_t, cw_sql_x100),    p_set_cw_sql },
+    { "cw agcmax",   PT_X100,  offsetof(af_bank_t, cw_agc_max_x100), p_set_cw_agcmax },  
     { "rtty",        PT_ONOFF, offsetof(af_bank_t, rtty_on),        P_SET(af_dsp_set_rtty) },  
     { "rtty scan",   PT_ONOFF, offsetof(af_bank_t, rtty_scan),      P_SET(rttydec_set_scan) },  
     { "rtty rsid",   PT_ONOFF, offsetof(af_bank_t, rtty_rsid),      P_SET(rttydec_set_rsid) },  
@@ -992,8 +996,9 @@ static bool cli_param_try(char* line) {
     // Сеттер af_dsp_set_agcmax/agcmin клампит runtime, но банк и OK    
     // должны показывать фактическое значение, а не запрошенное.    
     // Только agc max/min: у cw sql/rtty sql свой диапазон (пороги < x1).    
-    if (best->type == PT_X100 &&    
-        (strcmp(best->label, "agc max") == 0 || strcmp(best->label, "agc min") == 0)) {      
+    if (best->type == PT_X100 &&      
+        (strcmp(best->label, "agc max") == 0 || strcmp(best->label, "agc min") == 0 ||  
+         strcmp(best->label, "cw agcmax") == 0)) {    
         int32_t lo = 100;                              // x1.00      
         int32_t hi = (int32_t)(AF_GAIN_MAX * 100.0f);  // x2000.00      
         if (val < lo) val = lo;      

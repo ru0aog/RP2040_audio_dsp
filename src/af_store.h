@@ -20,11 +20,8 @@
 // (чистая плата / битый crc). Пустая строка "" = дефолты не подставлять.    
 #define AF_CW_DEFAULT  "VVV TESTING BEACON K"    
   
-#define AF_STORE_VER      13  // было 12: gain_pct/agc_max_x100/agc_min_x100  
-                            // расширены u16 -> u32 (gain до x2000, agc до x2000  
-                            // не влезали в u16). Старые банки невалидны.  
-                            // CW.TXT живёт в том же секторе по смещению 0x800  
-                            // со своим magic 'CW'+ver+crc — версию банков не меняет.   
+#define AF_STORE_VER      14  // было 13: +cw_agc_max_x100 (потолок АРУ ТЛГ).    
+                            // Старые банки невалидны.    
 
 extern char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];  
   
@@ -43,7 +40,8 @@ struct af_bank_t {
     uint16_t cw_noise;      // уровень добавки шума 0..2000 (не проценты!)    
     uint8_t  cwdec_on;      // CW-декодер (0/1)    
     uint8_t  cw_wpm;        // стартовая скорость декодера, WPM (5..60)    
-    uint32_t cw_sql_x100;   // порог сквелча декодера x100 (25 = 0.25, 0 = off)  
+    uint32_t cw_sql_x100;   // порог сквелча декодера x100 (25 = 0.25, 0 = off)    
+    uint32_t cw_agc_max_x100; // потолок АРУ ТЛГ x100 (5000 = x50.00)    
     uint8_t  rtty_on;        // RTTY-декодер (0/1)  
     uint8_t  rtty_scan;      // сканер Гёрцеля (0/1)  
     uint8_t  rtty_rsid;      // захват по RSID (0/1)  
