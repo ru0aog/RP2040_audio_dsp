@@ -84,7 +84,7 @@ static hb_state_t hb[AF_HB_STAGES];
   
 // ---------------------------------------------------------------------------  
 // CIC R=4, N=3 — интеграторы на 494.8 ksps, гребёнки на 123.7 ksps
-// Переполнение int32 в интеграторах — штатное (по модулю 2^32).  
+// Переполнение int32 в интеграторах — штатное (по модулю 2^32)
 // ---------------------------------------------------------------------------  
 static int32_t cic_int[AF_CIC_N], cic_comb[AF_CIC_N];  
 static uint8_t cic_cnt = 0;  
@@ -1526,44 +1526,44 @@ static inline void __not_in_flash_func(core1_update_load)(uint32_t now_us) {
     core1_window_start_us = now_us;  
 }  
   
-// ---------------------------------------------------------------------------  
-// Главный поллинг (Core 1): блоки ADC -> весь тракт -> выходные очереди  
-// ---------------------------------------------------------------------------  
-void __not_in_flash_func(af_dsp_poll)(void) {        
-    // DC-смещение ADC: EMA k=1/256 (порт dc_i/dc_q из rx_dsp.cpp).        
-    static int32_t dc_est = 0;        
-        
-    // Бюджет дрейна: не больше 2 блоков за вызов (~5 мс). Иначе при      
-    // накопленном бэклоге Core 1 уходит в длинный цикл, out_usb/out_pwm      
-    // не обслуживаются читателями вовремя — вставки/провалы на выходе.      
-    uint8_t budget = 2;    
-        
-    af_store_core1_park_poll();   // если Core 0 просит парковку — встаём в RAM-spin        
-  
-    // Сброс состояния тракта по запросу Core 0 (после af_store_save):  
-    // пауза capture + парковка на flash-erase оставляла протухшие отсчёты  
-    // в линиях задержки и сбитые EMA — на выходе гребёнка до ребута.  
-    if (dsp_reset_req) {  
-        dsp_reset_req = false;  
-        dc_est = 0;  
-        memset(cic_int, 0, sizeof(cic_int));  
-        memset(cic_comb, 0, sizeof(cic_comb));  
-        cic_cnt = 0;  
-        for (int s = 0; s < AF_HB_STAGES; s++) {  
-            memset(hb[s].d, 0, sizeof(hb[s].d));  
-            hb[s].w = 0; hb[s].phase = 0;  
-        }  
-        memset(af_fir_buf, 0, sizeof(af_fir_buf));    
-        af_fir_idx = 0;  
-        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));  
-        af_fir_idx2 = 0;  
-        memset(notch_buf, 0, sizeof(notch_buf));  
-        memset(notch_w,   0, sizeof(notch_w));  
-        memset(notch_v,   0, sizeof(notch_v));  
-        notch_idx = notch_vidx = 0;  
-        notch_energy = notch_pow = 0;  
-        memset(nr_buf, 0, sizeof(nr_buf));  
-        memset(nr_w,   0, sizeof(nr_w));  
+// ---------------------------------------------------------------------------
+// Главный поллинг (Core 1): блоки ADC -> весь тракт -> выходные очереди
+// ---------------------------------------------------------------------------
+void __not_in_flash_func(af_dsp_poll)(void) {
+    // DC-смещение ADC: EMA k=1/256 (порт dc_i/dc_q из rx_dsp.cpp)
+    static int32_t dc_est = 0;
+
+    // Бюджет дрейна: не больше 2 блоков за вызов (~5 мс). Иначе при
+    // накопленном бэклоге Core 1 уходит в длинный цикл, out_usb/out_pwm
+    // не обслуживаются читателями вовремя — вставки/провалы на выходе
+    uint8_t budget = 2;
+
+    af_store_core1_park_poll();   // если Core 0 просит парковку — встаём в RAM-spin
+
+    // Сброс состояния тракта по запросу Core 0 (после af_store_save):
+    // пауза capture + парковка на flash-erase оставляла протухшие отсчёты
+    // в линиях задержки и сбитые EMA — на выходе гребёнка до ребута
+    if (dsp_reset_req) {
+        dsp_reset_req = false;
+        dc_est = 0;
+        memset(cic_int, 0, sizeof(cic_int));
+        memset(cic_comb, 0, sizeof(cic_comb));
+        cic_cnt = 0;
+        for (int s = 0; s < AF_HB_STAGES; s++) {
+            memset(hb[s].d, 0, sizeof(hb[s].d));
+            hb[s].w = 0; hb[s].phase = 0;
+        }
+        memset(af_fir_buf, 0, sizeof(af_fir_buf));
+        af_fir_idx = 0;
+        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));
+        af_fir_idx2 = 0;
+        memset(notch_buf, 0, sizeof(notch_buf));
+        memset(notch_w,   0, sizeof(notch_w));
+        memset(notch_v,   0, sizeof(notch_v));
+        notch_idx = notch_vidx = 0;
+        notch_energy = notch_pow = 0;
+        memset(nr_buf, 0, sizeof(nr_buf));
+        memset(nr_w,   0, sizeof(nr_w));
         nr_idx = 0; nr_pow = 0;  
         for (int s = 0; s < AF_CW_SECTIONS; s++)  
             cw_sec[s].x1 = cw_sec[s].x2 = cw_sec[s].y1 = cw_sec[s].y2 = 0;  
@@ -1585,38 +1585,38 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rx_in_lvl_q16 = (int64_t)256 << 16;    
         rx_in_peak = 0;    
         out_fill_pos = 0;    
-        af_snr_reset();          // кадры/OLA/шумовая оценка спектрального NR      
-        __dmb();      
-    }      
-  
-    // Отложенный сброс spec-NR по запросу Core 0 (nr spec|lms, load банка):  
-    // выполняется здесь, на Core 1 — af_snr_push в этот момент не работает.  
-    if (snr_reset_req) {  
-        snr_reset_req = false;  
-        af_snr_reset();  
-        __dmb();  
+        af_snr_reset();          // кадры/OLA/шумовая оценка спектрального NR
+        __dmb();
     }
-    
+
+    // Отложенный сброс spec-NR по запросу Core 0 (nr spec|lms, load банка):
+    // выполняется здесь, на Core 1 — af_snr_push в этот момент не работает
+    if (snr_reset_req) {
+        snr_reset_req = false;
+        af_snr_reset();
+        __dmb();
+    }
+
     const volatile uint16_t* blk;
 
     // Получение блока АЦП
     while (budget-- > 0 && (blk = af_capture_get_block()) != NULL) {
         const uint32_t t0 = time_us_32();   // busy = только обработка блока
 
-        for (uint32_t i = 0; i < AF_BLOCK_SAMPLES; i++) {  
+        for (uint32_t i = 0; i < AF_BLOCK_SAMPLES; i++) {
         // обработка одного отсчёта
             // Сырой отсчёт ADC: 12 бит в младших разрядах
             int32_t meas = (int32_t)blk[i] & 0x0FFF;
 
-            // Центрирование DC: EMA среднего, вычитаем из измерения.  
-            dc_est += ((meas << 8) - dc_est) >> 8;  
-            int32_t x = (meas - (dc_est >> 8)) << 4;   // 12 -> 16 бит  
+            // Центрирование DC: EMA среднего, вычитаем из измерения
+            dc_est += ((meas << 8) - dc_est) >> 8;
+            int32_t x = (meas - (dc_est >> 8)) << 4;   // 12 -> 16 бит
   
-            // Четырёхсупенчатая децимация 495k -> 15.464k: CIC/4 -> HB/2 -> HB/2 -> HB/2
+            // четырёхступенчатая децимация 495k -> 15.464k: CIC/4 -> HB/2 -> HB/2 -> HB/2
             int32_t y;
             if (!cic_push(x, &y))        continue;          // первый шаг децимации CIC/4 (с компенсацией усиления)
 
-#if 0   // NB ЗАГЛУШЕН — см. af_dsp_set_nb. Оставлено для будущей доработки.  
+#if 0   // NB ЗАГЛУШЕН — см. af_dsp_set_nb. Оставлено для будущей доработки
             // Noise Blanker: импульсные помехи до HB/FIR (125 ksps).    
             // |y| > env*thr -> hold последнего чистого отсчёта + AF_NB_HOLD    
             // на хвост. env — EMA |y| k=1/1024, обновляется значением,      
@@ -1644,54 +1644,53 @@ void __not_in_flash_func(af_dsp_poll)(void) {
   
             //  ------------------------------- НЧ-тракт на 15.464 ksps -------------------------------
             // Bypass-ветка (обход всего тракта)
-            if (bypass_on) {      
-                // Обход: децимированный вход напрямую на выход,      
-                // без FIR/CW/NT/NR/АРУ/лимитера.  
-                // голос должен быть слышен и в обходе  
-                if (af_rec_active == 1) af_rec_push(sat16(y));  
-                int16_t sb = af_voice_mix(sat16(y));  
-                if (af_rec_active == 2) sb = af_rec_mix(sb);  
-                out_emit(sb);  
-                //out_emit(sat16(y));      
-                continue;      
+            if (bypass_on) {
+                // Обход: децимированный вход напрямую на выход,
+                // без FIR/CW/NT/NR/АРУ/лимитера.
+                // голос должен быть слышен и в обходе
+                if (af_rec_active == 1) af_rec_push(sat16(y));
+                int16_t sb = af_voice_mix(sat16(y));
+                if (af_rec_active == 2) sb = af_rec_mix(sb);
+                out_emit(sb);
+                continue;
             }
             
             // ТХ-ветка (передача)
             if (tx_on) {        
-                // TX-тракт: FIR -> компрессор -> клиппер -> постфильтр.        
-                // RX-цепочка (FIR/CW/NT/NR/AGC) в TX не работает.        
-                int32_t tx_in = (af_rec_active == 2) ? af_rec_src(y) : y;      
-                if (af_rec_active == 1) af_rec_push(sat16(tx_in));  // запись: микрофон ДО TX-обработки      
-                int16_t t;  
-                if (cwtx_busy()) {      
-                    // CW-посылка: тон с колокольной огибающей В ОБХОД      
-                    // af_tx_process — компрессор/клиппер/гейт речевого      
-                    // тракта съели бы фронты и добавили гармоники.      
-                    // af_tx_process не вызывается — его FIR/EMA простаивают,      
-                    // при возврате к речи продолжат без щелчка.      
-                    // Полосовой FIR 700..1400 (общий с RTTY TX) срезает      
-                    // шумовой пол и гармоники LUT — тон 1000 Гц в центре.      
-                    t = sat16(af_tx_rtty_fir_push(cwtx_sample()));      
-                } else if (tt_gen_busy()) {  
-                    // Двухтональный IMD-тест: в обход af_tx_process,  
-                    // свой каскад FIR 400..3200 (тон 1900 и IMD3 3100  
-                    // должны пройти — речевой 700..1400 их срезал бы).  
-                    t = sat16(af_tx_tt_fir_push(tt_gen_sample()));  
-                } else if (rttytx_busy()) {          
-                    // RTTY-посылка: FSK mark/space, непрерывная фаза —      
-                    // тоже в обход af_tx_process (клиппер исказил бы тоны).      
-                    // Полосовой FIR 200..1800 срезает шумовой пол и      
-                    // гармоники LUT вне полосы — спектр на USB чистый.      
-                    t = sat16(af_tx_rtty_fir_push(rttytx_sample()));      
-                } else {      
-                    t = af_tx_process(tx_in);            // play: запись вместо микрофона        
-                }    
-                out_emit(t);      
-                continue;        
+                // TX-тракт: FIR -> компрессор -> клиппер -> постфильтр
+                // RX-цепочка (FIR/CW/NT/NR/AGC) в TX не работает
+                int32_t tx_in = (af_rec_active == 2) ? af_rec_src(y) : y;
+                if (af_rec_active == 1) af_rec_push(sat16(tx_in));  // запись: микрофон ДО TX-обработки
+                int16_t t;
+                if (cwtx_busy()) {
+                    // CW-посылка: тон с колокольной огибающей В ОБХОД
+                    // af_tx_process — компрессор/клиппер/гейт речевого
+                    // тракта съели бы фронты и добавили гармоники.
+                    // af_tx_process не вызывается — его FIR/EMA простаивают,
+                    // при возврате к речи продолжат без щелчка.
+                    // Полосовой FIR 700..1400 (общий с RTTY TX) срезает
+                    // шумовой пол и гармоники LUT — тон 1000 Гц в центре.
+                    t = sat16(af_tx_rtty_fir_push(cwtx_sample()));
+                } else if (tt_gen_busy()) {
+                    // Двухтональный IMD-тест: в обход af_tx_process,
+                    // свой каскад FIR 400..3200 (тон 1900 и IMD3 3100
+                    // должны пройти — речевой 700..1400 их срезал бы).
+                    t = sat16(af_tx_tt_fir_push(tt_gen_sample()));
+                } else if (rttytx_busy()) {
+                    // RTTY-посылка: FSK mark/space, непрерывная фаза —
+                    // тоже в обход af_tx_process (клиппер исказил бы тоны).
+                    // Полосовой FIR 200..1800 срезает шумовой пол и
+                    // гармоники LUT вне полосы — спектр на USB чистый.
+                    t = sat16(af_tx_rtty_fir_push(rttytx_sample()));
+                } else {
+                    t = af_tx_process(tx_in);            // play: запись вместо микрофона
+                }
+                out_emit(t);
+                continue;
             }
 
             // Полосовой FIR RX (установка полосы пропускания RX-тракта)
-            if (rxband_on) y = af_fir_push(y); {  // bypass: сигнал мимо FIR
+            if (rxband_on) y = af_fir_push(y); {
                 // S-meter: EMA |y| Q16, ~10 мс — уровень в полосе до АРУ
                 int32_t ay = (y < 0) ? -y : y;
                 rx_in_lvl_q16 += (((int64_t)ay << 16) - rx_in_lvl_q16) >> 6;
@@ -1764,7 +1763,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             
             // Ramp-тест
             if (ramp_on) {    
-                // Пила: +100 на отсчёт при 15.625 ksps → период ~21 мс,    
+                // Пила: +100 на отсчёт при 15.464 ksps → период ~42 мс,    
                 // амплитуда полная. Скачок ≠ +100 (mod 65536) = потеря/дубль.    
                 s = ramp_val;    
                 ramp_val += 100;    
