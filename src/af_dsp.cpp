@@ -1577,7 +1577,8 @@ void af_dsp_init(void) {
     memset(cic_comb, 0, sizeof(cic_comb));  
     cic_cnt = 0;  
   
-    af_fir_init();  
+    af_fir_init();
+    af_fir_init2();       // тапы band2 по дефолтным af_lo2/hi2_hz 
     cw_design();          // начальные коэффициенты CW-секций  
     rx_notch_design();    // коэффициенты фиксированных нотчей RX
     rx_pres_hp_design();      // HP-детектор presence    

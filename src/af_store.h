@@ -20,8 +20,9 @@
 // (чистая плата / битый crc). Пустая строка "" = дефолты не подставлять.    
 #define AF_CW_DEFAULT  "VVV TESTING BEACON K"    
   
-#define AF_STORE_VER      14  // было 13: +cw_agc_max_x100 (потолок АРУ ТЛГ).    
-                            // Старые банки невалидны.    
+#define AF_STORE_VER      15  // было 14: +lo2_hz/hi2_hz/band2_on (пост-фильтр  
+                            // на выходе со своими границами band2).  
+                            // Старые банки невалидны.  
 
 extern char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];  
   
@@ -71,7 +72,10 @@ struct af_bank_t {
     uint16_t rx_shelf_q;    // добротность x100 (70 = 0.70)    
     uint8_t  rx_exc_on;     // RX гармонический эксайтер T2 (0/1)      
     uint16_t rx_exc_mix;    // подмес эксайтера, Q15 (3277 = ~10%)      
-    uint8_t  rxband_on;     // полосовой FIR RX (pre+post) (0/1, 1 = в тракте)  
+    uint8_t  rxband_on;     // полосовой FIR RX на входе (0/1, 1 = в тракте)  
+    uint16_t lo2_hz;        // нижний срез пост-фильтра band2, Гц  
+    uint16_t hi2_hz;        // верхний срез пост-фильтра band2, Гц  
+    uint8_t  band2_on;      // пост-фильтр на выходе (0/1, 1 = в тракте)  
     uint8_t  rxeq_on;       // 3-полосный EQ RX (0/1)  
     uint8_t  rxshelf_on;    // low-shelf «бас» RX (0/1; при 0 db не применяется)  
     // --- TX ---      

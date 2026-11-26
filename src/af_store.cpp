@@ -317,8 +317,12 @@ void af_store_snapshot(af_bank_t* out) {
     out->rx_shelf_q    = (uint16_t)af_dsp_rxshelfq();      
     out->rx_exc_on     = af_dsp_rxexc_on() ? 1 : 0;          
     out->rx_exc_mix    = (uint16_t)af_dsp_rxexcmix();          
-    out->rxband_on     = af_dsp_rxband_on() ? 1 : 0;  
-    out->rxeq_on       = af_dsp_rxeq_on() ? 1 : 0;  
+    out->rxband_on     = af_dsp_rxband_on() ? 1 : 0;    
+    // Пост-фильтр на выходе — свои границы band2, независимые от band.  
+    out->lo2_hz        = (uint16_t)af_dsp_band2_lo_hz();  
+    out->hi2_hz        = (uint16_t)af_dsp_band2_hi_hz();  
+    out->band2_on      = af_dsp_rxband2_on() ? 1 : 0;  
+    out->rxeq_on       = af_dsp_rxeq_on() ? 1 : 0;    
     out->rxshelf_on    = af_dsp_rxshelf_on() ? 1 : 0;  
     // RX EQ (3-полосный, дБx10 + Гц)      
     out->rxeq_lo_db  = (int16_t)af_dsp_rxeq(0);    
@@ -486,8 +490,12 @@ bool af_store_load(uint8_t idx) {
     af_dsp_set_rxshelf((int32_t)b.rx_shelf_db);       // после freq/q — пересчёт    
     af_dsp_set_rxexcmix((int32_t)b.rx_exc_mix);          
     af_dsp_set_rxexc(b.rx_exc_on != 0);          
-    af_dsp_set_rxband(b.rxband_on != 0);  
-    af_dsp_set_rxeq_on(b.rxeq_on != 0);  
+    af_dsp_set_rxband(b.rxband_on != 0);    
+    // Пост-фильтр: границы до флага on — тапы пересчитаются в set_band2,  
+    // фильтр стартует с загруженной полосой, а не со старой.  
+    af_dsp_set_band2(b.lo2_hz, b.hi2_hz);  
+    af_dsp_set_rxband2(b.band2_on != 0);  
+    af_dsp_set_rxeq_on(b.rxeq_on != 0);    
     af_dsp_set_rxshelf_on(b.rxshelf_on != 0);  
     // RX EQ: частоты до gain — пересчёт биквадов идёт в сеттерах,      
     // блок стартует с загруженными f/db.    
@@ -630,7 +638,9 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].rx_exc_on     = AF_RX_EXC_ON_DEFAULT;        // 0 — выключен        
         b[i].rx_exc_mix    = AF_RX_EXC_MIX_PCT_DEFAULT;   // 10 = 10%  
         // Bypass-флаги блоков: по умолчанию всё в тракте (поведение как раньше)  
-        b[i].rxband_on = 1;  b[i].rxeq_on = 1;  b[i].rxshelf_on = 1;  
+        b[i].rxband_on = 1;  b[i].rxeq_on = 1;  b[i].rxshelf_on = 1;    
+        // Пост-фильтр на выходе: по умолчанию выключен, полоса = широкая.  
+        b[i].lo2_hz = 100;  b[i].hi2_hz = 3100;  b[i].band2_on = 0;  
         b[i].txband_on = 1;  b[i].txeq_on = 1;  b[i].txagc_on = 1;  
         b[i].txgate_on = 1;  b[i].txcomp_on = 1; b[i].txclip_on = 1;  
         b[i].txshelf_on = 1;  
@@ -768,7 +778,11 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
     // RX shelf/exciter — выключены (дефолт rx_shelf_db=30 заменяем на 0).  
     b[0].rx_shelf_db = 0;  
     b[0].rx_exc_on   = 0;  
-    b[0].rx_exc_mix  = 50;           // 50% (новая семантика — проценты)  
+    b[0].rx_exc_mix  = 50;           // 50% (новая семантика — проценты)
+    // Пост-фильтр на выходе: финальная полоса 100..3100 под динамик.  
+    b[0].band2_on = 1;  
+    b[0].lo2_hz   = 300;  
+    b[0].hi2_hz   = 2400;  
 }            
   
 // Записать дефолтные банки — вызывается из af_store_poll при пустом секторе.    
