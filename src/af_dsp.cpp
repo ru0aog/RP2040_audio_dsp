@@ -1859,7 +1859,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // внеполосный мусор, который АРУ подняла и нотчи нагенерировали    
             // (предельный цикл Q15-нотчей звенит на 3/4/5 кГц). Привязан    
             // к rxband_on — как входной фильтр, отдельной команды нет.    
-            if (rxband_on) s = (int16_t)af_fir_push3(s);    
+            if (rxband_on) s = sat16(af_fir_push3(s));   // подчистка: sat16, не cast —  
+                                                       // FIR в полосе до x2, пики > int16  
               
             // Presence EQ (SNR-адаптивный подъём ~2.3 кГц)  
             if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —    
@@ -1890,10 +1891,15 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // Пост-фильтр band2 — на самом выходе, после EQ/shelf/exciter:    
             // финальная полоса независимо от подъёмов «вкусовых» каскадов.    
             // До out_peak: B-петля АРУ видит реальный выходной пик.    
-            if (rxband2_on) {    
-                pre_clip = af_fir_push2(pre_clip);    
-                s = rx_soft_clip(pre_clip);    
-            }    
+            if (rxband2_on) {      
+                // Мягкий клиппер ДО фильтра нельзя — он уже отработал на EQ.  
+                // После band2 — только sat16: кубический soft_clip здесь сам  
+                // генерирует гармоники выше band2 hi («хвост на ВЧ»), а FIR  
+                // выход ограничен — жёсткий кламп сработает лишь на редком  
+                // звоне фронтов.  
+                pre_clip = af_fir_push2(pre_clip);      
+                s = sat16(pre_clip);      
+            }      
     
             // Пик-детектор выхода тракта (до rx_soft_clip): мгновенная атака,    
             {    
