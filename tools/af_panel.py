@@ -217,7 +217,8 @@ class Panel(tk.Tk):
         self.spec_buf = None    
         self.spec_peak = -80.0      # peak-hold уровень, дБ  
         self.spec_peak_f = 0.0      # частота последнего пика, Гц    
-        self.spec_hold = None       # послесвечение: max по бинам с затуханием (np.array)      
+        self.spec_hold = None       # послесвечение: max по бинам с затуханием (np.array)        
+        self.spec_avg = None        # EMA-сглаженный спектр (np.array), ~0.3 с отклика          
         self.spec_last = None       # (freqs, db) последнего кадра — для кнопки "Скрин"      
         self.snr_avg = None         # EMA-сглаженный SNR (~3 кадра)    
         self.snr_disp = None        # отображаемое значение, обновляется раз в 1 с    
@@ -586,8 +587,9 @@ class Panel(tk.Tk):
         self.spec_buf = None    
         self.spec_peak = -80.0      
         self.spec_peak_f = 0.0    
-        self.spec_hold = None    
-        self.snr_avg = None      
+        self.spec_hold = None      
+        self.spec_avg = None      
+        self.snr_avg = None        
         self.snr_disp = None    
         self.snr_next_ms = 0    
         self.ms_avg = None    
@@ -708,13 +710,16 @@ class Panel(tk.Tk):
                 self.rec_enc = None  
         self.rec_btn.configure(text="Запись")    
 
-    SPEC_NFFT      = 4096    # окно FFT обычное;  ~10.8 Гц/бин при fs=44100  
-    SPEC_NFFT_FULL = 4096    # развёрнутый спектр; ~5.4 Гц/бин  
+    SPEC_NFFT      = 4096    # окно FFT обычное;  ~10.8 Гц/бин при fs=44100    
+    SPEC_NFFT_FULL = 4096    # развёрнутый спектр; ~5.4 Гц/бин    
+    SPEC_EMA       = 0.0      # EMA-сглаживание спектра: 0 = выкл, 0.25 = ~0.3 с    
+    SPEC_SPLINE    = False    # сплайн-сглаживание кривой (Canvas smooth=True)    
 
     def _spec_toggle_full(self):    
         # Двойной щелчок по спектру: развернуть на всё окно / свернуть.    
-        self.spec_full = not self.spec_full    
-        self.spec_hold = None   # длина бинов сменится — пересоздать  
+        self.spec_full = not self.spec_full      
+        self.spec_hold = None   # длина бинов сменится — пересоздать    
+        self.spec_avg = None    # и сглаживание — та же причина    
         if self.spec_full:    
             self.paned.forget(self.tbl_wrap)          # скрыть таблицу параметров    
             self.log.master.pack_forget()             # скрыть лог (обёртка со скроллом)    
@@ -803,8 +808,17 @@ class Panel(tk.Tk):
             db = 20 * np.log10(mag / (win.sum() / 2) + 1e-9)   # компенсация ~6 дБ окна    
             freqs = np.fft.rfftfreq(nfft, 1.0 / self.spec_fs)         
             m = (freqs >= 50) & (freqs <= fmax)   # DC и <50 Гц не рисуем      
-            dbm = np.clip(db[m], -80.0, 0.0)      
-            self.spec_last = (freqs[m].copy(), dbm.copy())   # кадр для "Скрин"  
+            dbm = np.clip(db[m], -80.0, 0.0)          
+            # EMA-сглаживание по бинам: шумовая "рвань" убирается,          
+            # устойчивые пики остаются. 0.25 -> отклик ~0.3 с при 12 к/с.          
+            # ОТКЛЮЧЕНО: мгновенный спектр. Вернуть — поставить SPEC_EMA > 0.          
+            if self.SPEC_EMA > 0.0:          
+                if self.spec_avg is None or len(self.spec_avg) != len(dbm):          
+                    self.spec_avg = dbm.copy()          
+                else:          
+                    self.spec_avg = self.SPEC_EMA * dbm + (1.0 - self.SPEC_EMA) * self.spec_avg          
+                dbm = self.spec_avg          
+            self.spec_last = (freqs[m].copy(), dbm.copy())   # кадр для "Скрин"        
             # Послесвечение: per-bin max с затуханием ~1.5 дБ/кадр (~18 дБ/с).  
             # Рисуется тёмно-зелёным ПОД основной линией.  
             if self.spec_hold is None or len(self.spec_hold) != len(dbm):    
@@ -814,14 +828,16 @@ class Panel(tk.Tk):
             for x, y in zip(freqs[m] / fmax * w,    
                             np.clip(-self.spec_hold, 0, 80) / 80.0 * plot_h):    
                 pts_h += [x, y]  
-            if len(pts_h) >= 4:  
-                cv.create_line(*pts_h, fill="#0a5a0a", width=1, smooth=True)  
+            if len(pts_h) >= 4:    
+                cv.create_line(*pts_h, fill="#0a5a0a", width=1,  
+                               smooth=self.SPEC_SPLINE, splinesteps=12)  
             pts = []      
             for x, y in zip(freqs[m] / fmax * w,        
                             np.clip(-dbm, 0, 80) / 80.0 * plot_h):        
                 pts += [x, y]      
-            if len(pts) >= 4:        
-                cv.create_line(*pts, fill="#00ff00", width=1, smooth=True)    
+            if len(pts) >= 4:          
+                cv.create_line(*pts, fill="#00ff00", width=1,  
+                               smooth=self.SPEC_SPLINE, splinesteps=12)  
             # Peak-hold: жёлтый пунктир на уровне максимума, затухание  
             # 0.5 дБ/кадр (~6 дБ/с). Частота — у последнего пробившего пика.  
             mpk = m   # <50 Гц уже отрезаны маской отрисовки  
