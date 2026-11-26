@@ -853,8 +853,9 @@ static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {
 //   B) быстрый лимитер поверх (мгновенная атака, спад τ≈14 мс (k=80000/2²⁴)).  
 // Состояние в Q16, коэффициенты EMA в Q24.  
 // ---------------------------------------------------------------------------  
-static int64_t agc_avg_q16  = (int64_t)4096 << 16;   // среднее уровня, Q16  
-static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера, Q16
+static int64_t agc_avg_q16  = (int64_t)4096 << 16;   // среднее уровня, Q16    
+static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера, Q16  
+static int64_t agc_peak_q16 = (int64_t)2048 << 16;   // пик входа АРУ, Q16  
 
 static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)    
 static volatile uint32_t gain_q15  = 32768;   // ручное усиление, Q15 (32768 = ×1.0)  
@@ -881,32 +882,49 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
     const uint32_t att_q24 = cw_on ? CW_AGC_AVG_ATT_Q24 : AGC_AVG_ATT_Q24;  
     const uint32_t dec_q24 = cw_on ? CW_AGC_AVG_DEC_Q24 : AGC_AVG_DEC_Q24;  
   
-    int64_t ax  = (x < 0) ? -x : x;  
-    int64_t tgt = ax << 16;  
-    int64_t da  = tgt - agc_avg_q16;  
-    agc_avg_q16 += (da * (da > 0 ? (int64_t)att_q24  
-                                 : (int64_t)dec_q24)) >> 24;  
-    if (agc_avg_q16 < AGC_AVG_MIN) agc_avg_q16 = AGC_AVG_MIN;  
-  
-    int32_t y1;  
-    if (agc_on) {  
-        int32_t avg = (int32_t)(agc_avg_q16 >> 16);  
-        // Кламп усиления: gain = AGC_REF/avg должен остаться в  
-        // [MIN_GAIN .. MAX_GAIN] => avg в [REF/MAX .. REF/MIN].  
-        // В тишине avg упирается в REF/MAX_GAIN — шум не разгоняется  
-        // под потолок, голосовые сообщения слышны без agc off.  
-        const float max_g = cw_on ? cw_agc_max_gain : agc_max_gain;  
-        const float min_g = cw_on ? CW_AGC_MIN_GAIN : agc_min_gain;    
-        int32_t avg_lo = (int32_t)(agc_ref / max_g);    
-        int32_t avg_hi = (int32_t)(agc_ref / min_g);  
-        if (avg < avg_lo) avg = avg_lo;  
-        if (avg > avg_hi) avg = avg_hi;  
-        // Точное деление вместо >>k: сдвиг по старшему биту давал  
-        // gain с ошибкой до 2x и СКАЧКИ gain при пересечении avg  
-        // границ степени двойки -> AM-модуляция -> гребёнка палок.  
-        // int64-деление ~100 циклов x 15.5 ksps = ~0.6% Core 1.  
-        y1 = (int32_t)(((int64_t)x * agc_ref) / avg);  
-    } else {  
+    int64_t ax  = (x < 0) ? -x : x;    
+    int64_t tgt = ax << 16;    
+    int64_t da  = tgt - agc_avg_q16;    
+    agc_avg_q16 += (da * (da > 0 ? (int64_t)att_q24    
+                                 : (int64_t)dec_q24)) >> 24;    
+    if (agc_avg_q16 < AGC_AVG_MIN) agc_avg_q16 = AGC_AVG_MIN;    
+    
+    // Пик-детектор входа АРУ: мгновенная атака, медленный спад.    
+    // Нужен для пико-чувствительного клампа gain (см. ниже).    
+    int64_t dpk = tgt - agc_peak_q16;    
+    agc_peak_q16 += (dpk > 0) ? dpk    
+                              : (dpk * (int64_t)AGC_PEAK_DEC_Q24) >> 24;    
+    if (agc_peak_q16 < ((int64_t)1 << 16)) agc_peak_q16 = (int64_t)1 << 16;    
+    
+    int32_t y1;    
+    if (agc_on) {    
+        int32_t avg = (int32_t)(agc_avg_q16 >> 16);    
+        // Кламп усиления: gain = AGC_REF/avg должен остаться в    
+        // [MIN_GAIN .. MAX_GAIN] => avg в [REF/MAX .. REF/MIN].    
+        // В тишине avg упирается в REF/MAX_GAIN — шум не разгоняется    
+        // под потолок, голосовые сообщения слышны без agc off.    
+        const float max_g = cw_on ? cw_agc_max_gain : agc_max_gain;    
+        const float min_g = cw_on ? CW_AGC_MIN_GAIN : agc_min_gain;      
+        int32_t avg_lo = (int32_t)(agc_ref / max_g);      
+        int32_t avg_hi = (int32_t)(agc_ref / min_g);    
+        if (avg < avg_lo) avg = avg_lo;    
+        if (avg > avg_hi) avg = avg_hi;    
+        // Пико-чувствительный кламп: gain <= lim_ceil/pk — АРУ не    
+        // выставляет усиление выше «безклиппингового». Выражено через    
+        // avg: gain = ref/avg <= lim_ceil/pk  =>  avg >= ref*pk/lim_ceil.    
+        // Лимитер (контур B) остаётся страховкой на редких фронтах,    
+        // а не работает непрерывно — «зерно» уходит.    
+        int32_t pk = (int32_t)(agc_peak_q16 >> 16);    
+        if (pk > 0) {    
+            int32_t avg_pk = (int32_t)(((int64_t)agc_ref * pk) / lim_ceil);    
+            if (avg < avg_pk) avg = avg_pk;    
+        }    
+        // Точное деление вместо >>k: сдвиг по старшему биту давал    
+        // gain с ошибкой до 2x и СКАЧКИ gain при пересечении avg    
+        // границ степени двойки -> AM-модуляция -> гребёнка палок.    
+        // int64-деление ~100 циклов x 15.5 ksps = ~0.6% Core 1.    
+        y1 = (int32_t)(((int64_t)x * agc_ref) / avg);    
+    } else {    
         // АРУ off: фиксированное ручное усиление, множитель в Q15.  
         y1 = (int32_t)(((int64_t)x * (int64_t)gain_q15) >> 15);
     }  
@@ -1585,8 +1603,9 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rxe_hp2_x1 = rxe_hp2_x2 = rxe_hp2_y1 = rxe_hp2_y2 = 0;  
         rxe_harm_lvl = 0;  rxe_harm_peak = 0;  
         nb_env = 8192;  nb_last = 0;  nb_hold_cnt = 0;            
-        agc_avg_q16  = (int64_t)4096 << 16;  
-        lim_peak_q16 = (int64_t)2048 << 16;  
+        agc_avg_q16  = (int64_t)4096 << 16;    
+        lim_peak_q16 = (int64_t)2048 << 16;    
+        agc_peak_q16 = (int64_t)2048 << 16;    
         rx_in_lvl_q16 = (int64_t)256 << 16;    
         rx_in_peak = 0;    
         out_fill_pos = 0;    
@@ -1857,18 +1876,30 @@ float af_dsp_agc_gain(void) {
     if (!agc_on) return (float)gain_q15 / 32768.0f;  
     float avg = (float)agc_avg_q16 / 65536.0f;  
     if (avg < 1.0f) avg = 1.0f;  
-    float g = (float)agc_ref / avg;  
-    const float max_g = cw_on ? cw_agc_max_gain : agc_max_gain;  
-    const float min_g = cw_on ? CW_AGC_MIN_GAIN : agc_min_gain;  
-    if (g > max_g) g = max_g;  
-    if (g < min_g) g = min_g;  
-    return g;  
+    float g = (float)agc_ref / avg;    
+    const float max_g = cw_on ? cw_agc_max_gain : agc_max_gain;    
+    const float min_g = cw_on ? CW_AGC_MIN_GAIN : agc_min_gain;    
+    if (g > max_g) g = max_g;    
+    if (g < min_g) g = min_g;    
+    // Пико-чувствительный кламп — тот же, что в agc_limit.    
+    float pk = (float)agc_peak_q16 / 65536.0f;    
+    if (pk > 0.0f) {    
+        float g_pk = (float)lim_ceil / pk;    
+        if (g > g_pk) g = g_pk;    
+    }    
+    return g;    
 }  
 
 // Средний уровень на входе АРУ (после NT/NR), отсчёты.  
 // agc_gain ≈ agc_ref / avg — для диагностики в sig.  
 int32_t af_dsp_agc_avg(void) {  
     return (int32_t)(agc_avg_q16 >> 16);  
+}  
+
+// Пик на входе АРУ (после NT/NR), отсчёты.  
+// При активном пиковом клампе agc ≈ lim_ceil / pk — для диагностики в sig.  
+int32_t af_dsp_agc_peak(void) {  
+    return (int32_t)(agc_peak_q16 >> 16);  
 }  
 
 uint32_t af_dsp_band_lo_hz(void) { return af_lo_hz; }  

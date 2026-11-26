@@ -1231,10 +1231,12 @@ static void cli_exec(char* line) {
         // dbfs печатаем вручную: знак + целая + десятая (printf %f может быть выключен)    
         long db_i = (long)dbfs;                       // -23    
         long db_f = (long)(fabsf(dbfs) * 10.0f) % 10; // 4    
-        Serial.printf("# sig lvl=%ld inpk=%ld avg=%ld agc=%ld.%02ld dbfs=%ld.%ld\n",    
-                      (long)lvl, (long)pk, (long)avg,    
-                      (long)g, (long)(g * 100.0f) % 100,    
-                      db_i, db_f);    
+        int32_t apk = af_dsp_agc_peak();  
+        Serial.printf("# sig lvl=%ld inpk=%ld avg=%ld pk=%ld agc=%ld.%02ld dbfs=%ld.%ld\n",  
+                      (long)lvl, (long)pk,  
+                      (long)avg, (long)apk,  
+                      (long)g, (long)(g * 100.0f) % 100,  
+                      (long)dbfs, (long)(fabsf(dbfs) * 10.0f) % 10);  
     }  
 
     else if (strcmp(cmd, "version") == 0) {  
