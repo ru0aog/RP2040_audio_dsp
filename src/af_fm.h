@@ -50,9 +50,9 @@
 #define AF_FM_CW_LBA        (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)   // 98         
   
 // AF_PANEL.PY — read-only копия tools/af_panel.py, вшитая в прошивку    
-// (rodata, не в fm_disk). Резерв 192 кластера = 96 КБ: файл ~73 КБ,    
-// запас под рост. Размер в dir-записи = фактический sizeof(af_panel_py).    
-#define AF_FM_PANEL_CLUSTERS  192u                                 // 96 КБ резерв    
+// Резерв 56 КБ запас под рост. 
+// Размер в dir-записи = фактический sizeof(af_panel_py).    
+#define AF_FM_PANEL_CLUSTERS  192u                                 // 56 КБ резерв    
 #define AF_FM_PANEL_LBA       (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS)   // 99    
   
 #define AF_FM_WAV_LBA(i)    (AF_FM_PANEL_LBA + AF_FM_PANEL_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)   // 291+        
