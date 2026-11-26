@@ -856,6 +856,18 @@ static inline int32_t __not_in_flash_func(nr_lms_push)(int32_t x) {
 static int64_t agc_avg_q16  = (int64_t)4096 << 16;   // среднее уровня, Q16    
 static int64_t lim_peak_q16 = (int64_t)2048 << 16;   // пик лимитера, Q16  
 static int64_t agc_peak_q16 = (int64_t)2048 << 16;   // пик входа АРУ, Q16  
+// Пик на выходе тракта (после EQ/shelf/exciter, до rx_soft_clip), Q16.  
+// Обратная связь АРУ: при подъёме EQ (+24 дБ полка) выходной пик  
+// растёт в B раз относительно входного — АРУ снижает gain, чтобы  
+// out_pk не уходил в насыщение rx_soft_clip.  
+static volatile int64_t out_peak_q16  = (int64_t)2048 << 16;  
+// Оценка суммарного подъёма пост-АРУ каскадов: B = out_pk / in_pk, Q16.  
+static volatile int64_t boost_est_q16 = (int64_t)1 << 16;   // старт x1.0  
+// Усиление АРУ, применённое к последнему блоку (Q16).  
+// Нужно для нормировки boost_est: out_pk = in_pk × g × B,  
+// поэтому B = out_pk / (in_pk × g), а не out_pk / in_pk —  
+// иначе оценка подъёма EQ включает само усиление АРУ (квадратичная петля).  
+static volatile int32_t agc_gain_blk_q16 = (int32_t)1 << 16;  
 
 static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)    
 static volatile uint32_t gain_q15  = 32768;   // ручное усиление, Q15 (32768 = ×1.0)  
@@ -914,20 +926,33 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
         // avg: gain = ref/avg <= lim_ceil/pk  =>  avg >= ref*pk/lim_ceil.    
         // Лимитер (контур B) остаётся страховкой на редких фронтах,    
         // а не работает непрерывно — «зерно» уходит.    
-        int32_t pk = (int32_t)(agc_peak_q16 >> 16);    
-        if (pk > 0) {    
-            int32_t avg_pk = (int32_t)(((int64_t)agc_ref * pk) / lim_ceil);    
-            if (avg < avg_pk) avg = avg_pk;    
-        }    
+        int32_t pk = (int32_t)(agc_peak_q16 >> 16);      
+        if (pk > 0) {      
+            // Пиковый кламп с учётом подъёма пост-АРУ каскадов:  
+            // выходной пик = pk * gain * B <= 32767  =>  
+            // gain <= 32767/(pk*B)  =>  avg >= ref*pk*B/32767.  
+            // B = boost_est_q16 (Q16): без EQ B=x1 -> как раньше (32767/pk);  
+            // с полкой +24 дБ B~x16 -> gain в 16 раз ниже, насыщения нет.  
+            int64_t b = boost_est_q16;                       // Q16  
+            int32_t avg_pk = (int32_t)(((int64_t)agc_ref * pk * b)  
+                                       / ((int64_t)32767 << 16));  
+            if (avg < avg_pk) avg = avg_pk;      
+        }      
         // Точное деление вместо >>k: сдвиг по старшему биту давал    
         // gain с ошибкой до 2x и СКАЧКИ gain при пересечении avg    
         // границ степени двойки -> AM-модуляция -> гребёнка палок.    
         // int64-деление ~100 циклов x 15.5 ksps = ~0.6% Core 1.    
-        y1 = (int32_t)(((int64_t)x * agc_ref) / avg);    
-    } else {    
-        // АРУ off: фиксированное ручное усиление, множитель в Q15.  
-        y1 = (int32_t)(((int64_t)x * (int64_t)gain_q15) >> 15);
-    }  
+    y1 = (int32_t)(((int64_t)x * agc_ref) / avg);    
+    // Фактический gain этого отсчёта — для нормировки boost_est.  
+    // Перезаписывается каждым отсчётом; per-block читается последнее —  
+    // в пределах блока gain почти не меняется (avg — медленная EMA).  
+    agc_gain_blk_q16 = (int32_t)(((int64_t)agc_ref << 16) / avg);    
+    } else {      
+        // АРУ off: фиксированное ручное усиление, множитель в Q15.    
+        y1 = (int32_t)(((int64_t)x * (int64_t)gain_q15) >> 15);  
+        // gain блока для нормировки boost_est: Q15 -> Q16 (x2).  
+        agc_gain_blk_q16 = (int32_t)gain_q15 << 1;  
+    }    
   
     if (cw_on) {                       // CW: без лимитера, только насыщение  
         if (y1 >  32767) y1 =  32767;  
@@ -1603,9 +1628,12 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         rxe_hp2_x1 = rxe_hp2_x2 = rxe_hp2_y1 = rxe_hp2_y2 = 0;  
         rxe_harm_lvl = 0;  rxe_harm_peak = 0;  
         nb_env = 8192;  nb_last = 0;  nb_hold_cnt = 0;            
-        agc_avg_q16  = (int64_t)4096 << 16;    
-        lim_peak_q16 = (int64_t)2048 << 16;    
-        agc_peak_q16 = (int64_t)2048 << 16;    
+        agc_avg_q16  = (int64_t)4096 << 16;      
+        lim_peak_q16 = (int64_t)2048 << 16;      
+        agc_peak_q16 = (int64_t)2048 << 16;      
+        out_peak_q16  = (int64_t)2048 << 16;
+        agc_gain_blk_q16 = (int32_t)1 << 16;   // x1.0 — нейтральный старт  
+        boost_est_q16 = (int64_t)1 << 16;  
         rx_in_lvl_q16 = (int64_t)256 << 16;    
         rx_in_peak = 0;    
         out_fill_pos = 0;    
@@ -1762,19 +1790,34 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // не контролируется контуром B. Вместо жёсткого sat16 на каждом  
             // каскаде — один мягкий клиппер в конце: пики плавно прижимаются  
             // к ~−3.5 dBFS, clip_count не растёт, щелчков нет.  
-            if ((rxshelf_on && rx_shelf_db_x10) || (rx_exc_on && !cw_on)) {      
-                int32_t s32 = s;      
-                if (rxshelf_on && rx_shelf_db_x10) s32 = rx_shelf_push(s32);    // low-shelf: «бас»      
-                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);              // эксайтер: только речь      
-                s = rx_soft_clip(s32);      
-            }
-
-            // 3-полосный EQ
-            // 3-полосный EQ — последним в RX-цепочке, после лимитера и
-            // soft-clip: его подъём до +24 дБ тоже может превысить int16,
-            // поэтому свой мягкий клиппер на выходе
-            if (rxeq_on && (rxeq_lo_db_x10 || rxeq_mid_db_x10 || rxeq_hi_db_x10))      
-                s = rx_soft_clip(rxeq_push(s));
+            int32_t pre_clip = s;   // сигнал до мягких клипперов — для out_peak  
+            if ((rxshelf_on && rx_shelf_db_x10) || (rx_exc_on && !cw_on)) {        
+                int32_t s32 = s;        
+                if (rxshelf_on && rx_shelf_db_x10) s32 = rx_shelf_push(s32);    // low-shelf: «бас»        
+                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);              // эксайтер: только речь        
+                pre_clip = s32;  
+                s = rx_soft_clip(s32);        
+            }  
+  
+            // 3-полосный EQ — последним в RX-цепочке, после лимитера и  
+            // soft-clip: его подъём до +24 дБ тоже может превысить int16,  
+            // поэтому свой мягкий клиппер на выходе  
+            if (rxeq_on && (rxeq_lo_db_x10 || rxeq_mid_db_x10 || rxeq_hi_db_x10)) {  
+                pre_clip = rxeq_push(s);  
+                s = rx_soft_clip(pre_clip);  
+            }  
+  
+            // Пик-детектор выхода тракта (до rx_soft_clip): мгновенная атака,  
+            // спад ~110 мс — тот же AGC_PEAK_DEC_Q24, что у входного pk.  
+            // Обратная связь АРУ: видит подъём EQ/shelf/exciter.  
+            {  
+                int64_t ap = (pre_clip < 0) ? -(int64_t)pre_clip : (int64_t)pre_clip;  
+                int64_t tp = ap << 16;  
+                int64_t dp = tp - out_peak_q16;  
+                out_peak_q16 += (dp > 0) ? dp  
+                                         : (dp * (int64_t)AGC_PEAK_DEC_Q24) >> 24;  
+                if (out_peak_q16 < ((int64_t)1 << 16)) out_peak_q16 = (int64_t)1 << 16;  
+            }  
             
             // Запись магнитофона
             if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса
@@ -1797,7 +1840,25 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             out_emit(sat16(s));
         
         }  // конец for по отсчётам блока  
-        if (rx_pres_on && !tx_on && !bypass_on) rx_pres_block_update();  
+        if (rx_pres_on && !tx_on && !bypass_on) rx_pres_block_update();    
+  
+        // Оценка суммарного подъёма пост-АРУ каскадов:  
+        // B = out_pk / (in_pk × g_applied). Делим на gain блока —  
+        // иначе bst включает усиление самой АРУ и петля становится  
+        // квадратичной (bst=6400 вместо честных x16 при полке +24 дБ).  
+        {  
+            int64_t in_pk  = agc_peak_q16 >> 16;  
+            int64_t out_pk = out_peak_q16 >> 16;  
+            int64_t g_last = agc_gain_blk_q16;              // Q16  
+            if (in_pk < 1) in_pk = 1;  
+            if (g_last < (int64_t)1 << 16) g_last = (int64_t)1 << 16;  // не делим на <x1  
+            int64_t denom = (in_pk * g_last) >> 16;       // in_pk × g, отсчёты  
+            if (denom < 1) denom = 1;  
+            int64_t b = (out_pk << 16) / denom;  
+            if (b < ((int64_t)1 << 16))  b = (int64_t)1 << 16;  
+            if (b > ((int64_t)64 << 16)) b = (int64_t)64 << 16;  
+            boost_est_q16 += (b - boost_est_q16) >> 4;  
+        }  
         
         // Освобождение блока АЦП
         af_capture_release();    
@@ -1881,13 +1942,16 @@ float af_dsp_agc_gain(void) {
     const float min_g = cw_on ? CW_AGC_MIN_GAIN : agc_min_gain;    
     if (g > max_g) g = max_g;    
     if (g < min_g) g = min_g;    
-    // Пико-чувствительный кламп — тот же, что в agc_limit.    
-    float pk = (float)agc_peak_q16 / 65536.0f;    
-    if (pk > 0.0f) {    
-        float g_pk = (float)lim_ceil / pk;    
-        if (g > g_pk) g = g_pk;    
-    }    
-    return g;    
+    // Пико-чувствительный кламп с учётом подъёма пост-АРУ каскадов —  
+    // тот же, что в agc_limit: g <= 32767 / (pk × B).  
+    float pk = (float)agc_peak_q16 / 65536.0f;      
+    float bst = (float)boost_est_q16 / 65536.0f;  
+    if (bst < 1.0f) bst = 1.0f;  
+    if (pk > 0.0f) {      
+        float g_pk = 32767.0f / (pk * bst);      
+        if (g > g_pk) g = g_pk;      
+    }      
+    return g;      
 }  
 
 // Средний уровень на входе АРУ (после NT/NR), отсчёты.  
@@ -1904,3 +1968,12 @@ int32_t af_dsp_agc_peak(void) {
 
 uint32_t af_dsp_band_lo_hz(void) { return af_lo_hz; }  
 uint32_t af_dsp_band_hi_hz(void) { return af_hi_hz; }
+// Пик на выходе тракта (до rx_soft_clip), отсчёты — для sig.  
+int32_t af_dsp_out_peak(void) {  
+    return (int32_t)(out_peak_q16 >> 16);  
+}  
+  
+// Оценка подъёма пост-АРУ каскадов, x100 (100 = x1.00) — для sig.  
+int32_t af_dsp_boost_est(void) {  
+    return (int32_t)((boost_est_q16 * 100) >> 16);  
+}  

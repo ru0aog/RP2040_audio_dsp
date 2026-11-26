@@ -137,6 +137,8 @@ void    af_dsp_set_limceil(int32_t v);   // потолок лимитера, 100
 int32_t af_dsp_limceil(void);  
 void    af_dsp_set_cw_agcmax(float g);   // потолок АРУ CW, 1..1000  
 float   af_dsp_cw_agcmax(void);  
+int32_t af_dsp_out_peak(void);  
+int32_t af_dsp_boost_est(void);  
 
 // Настройка NT/NR (шаги адаптации и глубина — экспертные).  
 void    af_dsp_set_ntmu(int32_t v);      // шаг NLMS нотча, 0..32768  

@@ -1023,7 +1023,25 @@ static bool cli_param_try(char* line) {
         if (val > 50) val = 50;  
         if (val < 0)  val = 0;  
     }  
-
+    // rxeq lo/mid/hi: сеттер клампит в ±240 (±24.0 дБ, дБx10).  
+    // OK и банк должны показывать фактическое значение.  
+    if (best->type == PT_I16 &&  
+        (strcmp(best->label, "rxeq lo")  == 0 ||  
+         strcmp(best->label, "rxeq mid") == 0 ||  
+         strcmp(best->label, "rxeq hi")  == 0)) {  
+        if (val >  240) val =  240;  
+        if (val < -240) val = -240;  
+    }  
+    // txeq lo/mid/hi: сеттер клампит в ±240 (дБx10) —    
+    // OK и банк должны показывать фактическое значение.    
+    if (best->type == PT_I16 &&    
+        (strcmp(best->label, "txeq lo")  == 0 ||    
+         strcmp(best->label, "txeq mid") == 0 ||    
+         strcmp(best->label, "txeq hi")  == 0)) {    
+        if (val >  240) val =  240;    
+        if (val < -240) val = -240;    
+    }
+    
     best->set(val);      
     af_fm_request_sync();   // cur изменился — SET.TXT перерендерить    
     if (best->type == PT_GAIN) {    
@@ -1222,19 +1240,16 @@ static void cli_exec(char* line) {
     else if (strcmp(cmd, "sig") == 0) {    
         // Уровень входа и усиление АРУ — одной строкой, для опроса из панели.    
         // Формат: "# sig lvl=<q15> inpk=<q15> avg=<q15> agc=<x.xx> dbfs=<-xx.x>"    
-        int32_t lvl = af_dsp_rx_in_lvl();    
-        int32_t pk  = af_dsp_rx_in_peak();    
-        int32_t avg = af_dsp_agc_avg();        // уровень на входе АРУ (после NT/NR)    
-        float   g   = af_dsp_agc_gain();    
-        // dBFS по среднему уровню: 20*log10(lvl/32768), lvl=0 -> -120    
-        float dbfs = (lvl > 0) ? 20.0f * log10f((float)lvl / 32768.0f) : -120.0f;    
-        // dbfs печатаем вручную: знак + целая + десятая (printf %f может быть выключен)    
-        long db_i = (long)dbfs;                       // -23    
-        long db_f = (long)(fabsf(dbfs) * 10.0f) % 10; // 4    
+        int32_t lvl = af_dsp_rx_in_lvl();  
+        int32_t pk  = af_dsp_rx_in_peak();  
+        int32_t avg = af_dsp_agc_avg();  
         int32_t apk = af_dsp_agc_peak();  
-        Serial.printf("# sig lvl=%ld inpk=%ld avg=%ld pk=%ld agc=%ld.%02ld dbfs=%ld.%ld\n",  
-                      (long)lvl, (long)pk,  
-                      (long)avg, (long)apk,  
+        int32_t opk = af_dsp_out_peak();  
+        int32_t bst = af_dsp_boost_est();  
+        float   g   = af_dsp_agc_gain();  
+        float dbfs = (lvl > 0) ? 20.0f * log10f((float)lvl / 32768.0f) : -120.0f;  
+        Serial.printf("# sig lvl=%ld inpk=%ld avg=%ld pk=%ld opk=%ld bst=%ld agc=%ld.%02ld dbfs=%ld.%ld\n",  
+                      (long)lvl, (long)pk, (long)avg, (long)apk, (long)opk, (long)bst,  
                       (long)g, (long)(g * 100.0f) % 100,  
                       (long)dbfs, (long)(fabsf(dbfs) * 10.0f) % 10);  
     }  

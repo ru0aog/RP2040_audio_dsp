@@ -1287,13 +1287,13 @@ uint32_t af_tx_notch2(void) { return tx_notch2_hz; }
 
 // --- 3-полосный TX EQ ---  
 // band: 0=lo (low-shelf), 1=mid (peaking), 2=hi (high-shelf).  
-void af_tx_set_txeq(uint8_t band, int32_t db_x10) {  
-    if (band > 2) return;  
-    if (db_x10 < -120) db_x10 = -120;  
-    if (db_x10 >  120) db_x10 =  120;  
-    txeq_db_x10[band] = db_x10;  
-    txeq_design(band);  
-}  
+void af_tx_set_txeq(uint8_t band, int32_t db_x10) {    
+    if (band > 2) return;    
+    if (db_x10 < -240) db_x10 = -240;    
+    if (db_x10 >  240) db_x10 =  240;    
+    txeq_db_x10[band] = db_x10;    
+    txeq_design(band);    
+}    
 int32_t af_tx_txeq(uint8_t band) {  
     return (band <= 2) ? txeq_db_x10[band] : 0;  
 }  
