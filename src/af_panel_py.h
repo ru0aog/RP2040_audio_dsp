@@ -49,10 +49,10 @@ BAUD = 115200
 GROUPS = [      
     ("Полоса приёма", "rx band",      
      ["band lo", "band hi"], 0),      
-    ("АРУ / лимитер", "agc",      
-     ["gain", "agc ref", "agc max", "agc min", "lim ceil"], 0),      
-    ("CW-фильтр / декодер", "cw",      
-     ["cw f0", "cw bw", "cw noise", "cw dec", "cw wpm", "cw sql"], 0),      
+    ("АРУ / лимитер", "agc",  
+     ["gain", "agc ref", "agc max", "cw agcmax", "agc min", "lim ceil"], 0),    
+    ("CW-фильтр / декодер", "cw",          
+     ["cw f0", "cw bw", "cw noise", "cw dec", "cw wpm", "cw sql"], 0),          
     ("RX shelf / exciter", "rx shelf on",      
      ["rx shelf", "rx shelf f", "rx shelf q", "rx exc", "rx excmix"], 0),      
     ("Шумоподавление NR", "nr",      
@@ -112,24 +112,32 @@ RUNTIME_MODES = [
 def _unit(label):  
     w = label.split()  
     last = w[-1] if w else ""  
-    if last in ("f", "f0", "f1", "f2", "ctr"):      # частоты  
-        return "Гц"  
-    if last == "q":                                  # добротность x100  
-        return "x100"  
-    if last in ("lo", "mid", "hi") and "eq" in label:  # EQ gain, дБx10    
-        return "x0.1 дБ"    
-    if label in ("band lo", "band hi"):  # полоса приёма, Гц    
+    if label == "rx shelf q":                     # добротность shelf, Q x100    
+        return "x0.01 Q"                          # до общего правила last=="q"  
+    if last in ("f", "f0", "f1", "f2", "ctr"):      # частоты    
         return "Гц"    
+    if last == "q":                                  # добротность x100    
+        return "x100"    
+    if last in ("lo", "mid", "hi") and "eq" in label:  # EQ gain, дБx10      
+        return "x0.1 дБ"      
+    if label in ("band lo", "band hi", "cw bw"):  # полоса приёма / CW-фильтр, Гц        
+        return "Гц"        
+    if label == "cw noise":                       # уровень тестового шума CW, %        
+        return "%"
+    if label == "rx excmix":                      # подмес эксайтера, %  
+        return "%"  
+    if label == "rx shelf":                       # подъём НЧ, дБ x10    
+        return "x0.1 дБ"  
     if label == "agc ref":          # целевой уровень АРУ, нормированный    
         return "норм"    
     if label == "lim ceil":         # потолок лимитера, пиковый уровень    
         return "пик"    
-    if last in ("ref", "ceil", "tgt", "thr", "cthr", "gfloor", "depth",    
-                "makeup", "max", "min", "presmax", "duckmax", "bst",  
-                "cut", "shelf", "exc", "excmix", "clip", "soft", "ap",  
-                "lr2", "split", "2band", "intel", "noise", "dec", "sql",  
-                "vol", "bw"):  
-        return ""                                    # без единицы / неизвестно  
+    if last in ("ref", "ceil", "tgt", "thr", "cthr", "gfloor", "depth",      
+                "makeup", "max", "min", "presmax", "duckmax", "bst",    
+                "cut", "shelf", "exc", "excmix", "clip", "soft", "ap",    
+                "lr2", "split", "2band", "intel", "noise", "dec", "sql",    
+                "vol"):    
+        return ""                                    # без единицы / неизвестно    
     if last == "mu":  
         return "x1000"  
     if last == "wpm":  
@@ -191,7 +199,7 @@ class Panel(tk.Tk):
     def __init__(self):  
         super().__init__()  
         self.title("RP2040 audio DSP by RU0AOG 2026 — панель настроек")  
-        self.geometry("1150x810")    
+        self.geometry("1200x860")    
   
         self.w = SerialWorker()  
         self.params = {}          # label -> {"type":..., "var":...}  
@@ -1483,10 +1491,13 @@ class Panel(tk.Tk):
         if not self.schema_ok:
             self._log(f"# read-only: {cmd} не отправлено")
             return
-        self._cmd(f"{cmd} {'on' if val else 'off'}")    
-        # Перечитать живое состояние — плата могла отклонить (nr при nt on и т.п.)  
-        self._pending.append("state dump")  
-        self.after(300, self._send_next)  
+        self._cmd(f"{cmd} {'on' if val else 'off'}")      
+        # Перечитать живое состояние — плата могла отклонить (nr при nt on и т.п.)    
+        # params dump тоже: cw/rtty переписывают band lo/hi (cw_band_follow    
+        # ставит f0±250), иначе поля и красные маркеры спектра покажут    
+        # старую полосу.    
+        self._pending += ["params dump", "state dump"]    
+        self.after(300, self._send_next)    
   
     def _show_state(self, lines):    
         parts = []    

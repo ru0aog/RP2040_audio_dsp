@@ -108,20 +108,22 @@ RUNTIME_MODES = [
 def _unit(label):  
     w = label.split()  
     last = w[-1] if w else ""  
-    if last in ("f", "f0", "f1", "f2", "ctr"):      # частоты  
-        return "Гц"  
-    if last == "q":                                  # добротность x100  
-        return "x100"  
-    if last in ("lo", "mid", "hi") and "eq" in label:  # EQ gain, дБx10    
-        return "x0.1 дБ"    
-    if label in ("band lo", "band hi", "cw bw"):  # полоса приёма / CW-фильтр, Гц      
-        return "Гц"      
-    if label == "cw noise":                       # уровень тестового шума CW, %      
+    if label == "rx shelf q":                     # добротность shelf, Q x100    
+        return "x0.01 Q"                          # до общего правила last=="q"  
+    if last in ("f", "f0", "f1", "f2", "ctr"):      # частоты    
+        return "Гц"    
+    if last == "q":                                  # добротность x100    
+        return "x100"    
+    if last in ("lo", "mid", "hi") and "eq" in label:  # EQ gain, дБx10      
+        return "x0.1 дБ"      
+    if label in ("band lo", "band hi", "cw bw"):  # полоса приёма / CW-фильтр, Гц        
+        return "Гц"        
+    if label == "cw noise":                       # уровень тестового шума CW, %        
         return "%"
-    if label == "rx shelf":                       # подъём НЧ, дБ x10  
-        return "x0.1 дБ"
-    if label == "rx shelf q":                     # добротность shelf, Q x100  
-        return "x0.01"  
+    if label == "rx excmix":                      # подмес эксайтера, %  
+        return "%"  
+    if label == "rx shelf":                       # подъём НЧ, дБ x10    
+        return "x0.1 дБ"  
     if label == "agc ref":          # целевой уровень АРУ, нормированный    
         return "норм"    
     if label == "lim ceil":         # потолок лимитера, пиковый уровень    
@@ -193,7 +195,7 @@ class Panel(tk.Tk):
     def __init__(self):  
         super().__init__()  
         self.title("RP2040 audio DSP by RU0AOG 2026 — панель настроек")  
-        self.geometry("1200x840")    
+        self.geometry("1200x860")    
   
         self.w = SerialWorker()  
         self.params = {}          # label -> {"type":..., "var":...}  

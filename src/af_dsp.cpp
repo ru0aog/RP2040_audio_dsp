@@ -550,7 +550,7 @@ static inline int32_t __not_in_flash_func(rxeq_push)(int32_t x) {
 // на тихом сигнале/шуме подмес ∝ x² сам затухает.  
 // ---------------------------------------------------------------------------  
 static volatile bool    rx_exc_on      = (AF_RX_EXC_ON_DEFAULT != 0);  
-static volatile int32_t rx_exc_mix_q15 = AF_RX_EXC_MIX_Q15_DEFAULT;  
+static volatile int32_t rx_exc_mix_q15 = AF_RX_EXC_MIX_PCT_DEFAULT * 32768 / 100;  
 static int32_t          rxe_harm_lvl   = 0;   // EMA |hp2| — уровень гармоник до подмеса  
 static int32_t          rxe_harm_peak  = 0;   // пик |hp2|; чтение сбрасывает (как rx_in_peak)  
   
@@ -1210,12 +1210,12 @@ void af_dsp_set_rxexc(bool on) {
     rx_exc_on = on;  
 }  
 bool    af_dsp_rxexc_on(void) { return rx_exc_on; }  
-void    af_dsp_set_rxexcmix(int32_t q15) {  
-    if (q15 < 0)     q15 = 0;  
-    if (q15 > 16384) q15 = 16384;         // потолок 50%  
-    rx_exc_mix_q15 = q15;  
+void    af_dsp_set_rxexcmix(int32_t pct) {  
+    if (pct < 0)  pct = 0;  
+    if (pct > 50) pct = 50;               // потолок 50%  
+    rx_exc_mix_q15 = pct * 32768 / 100;  
 }  
-int32_t af_dsp_rxexcmix(void) { return rx_exc_mix_q15; }  
+int32_t af_dsp_rxexcmix(void) { return rx_exc_mix_q15 * 100 / 32768; }  
 int32_t af_dsp_rxexc_harm(void) { return rxe_harm_lvl; }  
 int32_t af_dsp_rxexc_hpeak(void) {  
     int32_t v = rxe_harm_peak;  

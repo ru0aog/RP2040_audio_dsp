@@ -628,7 +628,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].rx_shelf_freq = AF_RX_SHELF_FREQ_HZ;         // 450    
         b[i].rx_shelf_q    = AF_RX_SHELF_Q_X100;          // 70    
         b[i].rx_exc_on     = AF_RX_EXC_ON_DEFAULT;        // 0 — выключен        
-        b[i].rx_exc_mix    = AF_RX_EXC_MIX_Q15_DEFAULT;   // 3277 = ~10%        
+        b[i].rx_exc_mix    = AF_RX_EXC_MIX_PCT_DEFAULT;   // 10 = 10%  
         // Bypass-флаги блоков: по умолчанию всё в тракте (поведение как раньше)  
         b[i].rxband_on = 1;  b[i].rxeq_on = 1;  b[i].rxshelf_on = 1;  
         b[i].txband_on = 1;  b[i].txeq_on = 1;  b[i].txagc_on = 1;  

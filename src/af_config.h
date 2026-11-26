@@ -130,7 +130,7 @@
   
 // --- RX harmonic exciter (Чебышёв T2) ---  
 #define AF_RX_EXC_ON_DEFAULT          0     // выключен по умолчанию  
-#define AF_RX_EXC_MIX_Q15_DEFAULT  3277     // подмес ~10%  
+#define AF_RX_EXC_MIX_PCT_DEFAULT     10    // подмес 10% (0..50)  
 #define AF_RX_EXC_PRE_HZ           1500     // pre-HP: полоса для нелинейности  
 #define AF_RX_EXC_POST_HZ          2500     // post-HP: отбор 2-й гармоники  
 

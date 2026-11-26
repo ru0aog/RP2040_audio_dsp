@@ -1016,6 +1016,12 @@ static bool cli_param_try(char* line) {
         if (val > 60) val = 60;    
         if (val < 0)  val = 0;    
     } 
+    // rx excmix: подмес эксайтера в процентах, сеттер клампит 0..50 —  
+    // OK и банк должны показывать фактическое значение.  
+    if (best->type == PT_U16 && strcmp(best->label, "rx excmix") == 0) {  
+        if (val > 50) val = 50;  
+        if (val < 0)  val = 0;  
+    }  
 
     best->set(val);      
     af_fm_request_sync();   // cur изменился — SET.TXT перерендерить    
