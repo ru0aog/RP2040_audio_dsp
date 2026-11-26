@@ -141,6 +141,7 @@ static inline bool __not_in_flash_func(hb_push)(hb_state_t* st, int32_t x, int32
 // Порт af_lp_* из rx_dsp.cpp — пересчёт на лету  
 // Работает на AF_FS_OUT_HZ = 15.625 ksps.  
 // ---------------------------------------------------------------------------  
+
 static volatile uint32_t af_lo_hz = AF_FIR_LO_HZ_DEFAULT;
 static volatile uint32_t af_hi_hz = AF_FIR_HI_HZ_DEFAULT;
 // Полоса, сохранённая при включении CW — восстанавливается по cw off.  
@@ -154,23 +155,32 @@ static volatile const int16_t* af_fir_taps_cur = af_fir_taps[0];
 static uint8_t af_fir_taps_w = 0;              // индекс записи (0/1)    
 static int32_t af_fir_buf[AF_FIR_N] = {};      
 static int     af_fir_idx = 0;  
-// Второй экземпляр FIR — постфильтр на самом выходе тракта (после    
+// Пост-FIR 2 и 3 — укороченные, 63 отвода (переход шире ~x2, нагрузка    
+// вдвое меньше: ~32 MAC/отсчёт каждый вместо 64).    
+#define AF_FIR23_N 63    
+  
+// Второй экземпляр FIR — подчистка после АРУ/нотчей: та же полоса band,    
+// но свой набор тапов на 63 отвода — срезает внеполосный мусор, который    
+// АРУ поднимает и нотчи нагенерировали (звон Q15-нотчей на 3/4/5 кГц).    
+static int32_t af_fir_buf2[AF_FIR23_N] = {};    
+static int     af_fir_idx2 = 0;    
+static int16_t af_fir_taps2[2][AF_FIR23_N];    
+static volatile const int16_t* af_fir_taps2_cur = af_fir_taps2[0];    
+static uint8_t af_fir_taps2_w = 0;    
+  
+// Третий экземпляр FIR — постфильтр на самом выходе тракта (после    
 // EQ/shelf/exciter, до rx_soft_clip): финальная гарантия полосы band2.    
 // Свои границы af_lo2/hi2_hz и свой набор тапов — независим от входного    
 // band: срезает гармоники эксайтера и подъёмы EQ за пределами band2.    
-static int32_t af_fir_buf2[AF_FIR_N] = {};      
-static int     af_fir_idx2 = 0;
-// Подчисточный FIR после АРУ/нотчей: те же тапы, что у входного band —  
-// срезает внеполосный мусор, который АРУ поднимает. Отдельный буфер.  
-static int32_t af_fir_buf3[AF_FIR_N] = {};  
-static int     af_fir_idx3 = 0;  
+static int32_t af_fir_buf3[AF_FIR23_N] = {};    
+static int     af_fir_idx3 = 0;    
 static volatile uint32_t af_lo2_hz = 100;    
 static volatile uint32_t af_hi2_hz = 3100;    
 static volatile bool     rxband2_on = false;   // 0 = пост-фильтр мимо    
 // Два набора тапов band2: Core 0 пишет в неактивный, атомарно переключает.    
-static int16_t af_fir_taps2[2][AF_FIR_N];    
-static volatile const int16_t* af_fir_taps2_cur = af_fir_taps2[0];    
-static uint8_t af_fir_taps2_w = 0;    
+static int16_t af_fir_taps3[2][AF_FIR23_N];    
+static volatile const int16_t* af_fir_taps3_cur = af_fir_taps3[0];    
+static uint8_t af_fir_taps3_w = 0;    
   
 // Bypass полосового FIR RX (входной + подчисточный): 0 = сигнал идёт мимо.  
 // Пост-фильтр band2 независим — свой флаг rxband2_on.  
@@ -179,43 +189,50 @@ static volatile bool rxband_on = true;
     
 // Расчёт полосового FIR lo..hi в набор тапов taps[2][AF_FIR_N] с    
 // double-buffer публикацией через *cur/*widx. Core 0, float допустим.    
-static void af_fir_design(uint32_t lo_hz, uint32_t hi_hz,    
-                          int16_t taps[2][AF_FIR_N],    
-                          volatile const int16_t** cur, uint8_t* widx) {      
-    const int   M     = (AF_FIR_N - 1) / 2;      
-    const float fc_hi = (float)hi_hz / AF_FS_OUT_HZ;      
-    const float fc_lo = (float)lo_hz / AF_FS_OUT_HZ;      
-    float h[AF_FIR_N];      
-    float sum_dc = 0.0f;      
-    for (int n = 0; n < AF_FIR_N; n++) {    
-        const int m = n - M;    
+// n — длина фильтра (127 входной, 63 пост-FIR): тапы и окно под n.    
+static void af_fir_design_n(uint32_t lo_hz, uint32_t hi_hz, int n,  
+                            volatile const int16_t** cur, uint8_t* widx,  
+                            int16_t* taps_base) {  
+    const int   M     = (n - 1) / 2;    
+    const float fc_hi = (float)hi_hz / AF_FS_OUT_HZ;    
+    const float fc_lo = (float)lo_hz / AF_FS_OUT_HZ;    
+    float h[AF_FIR_N];                       // под максимальную длину    
+    float sum_dc = 0.0f;    
+    for (int i = 0; i < n; i++) {    
+        const int m = i - M;    
         float s_hi = (m == 0) ? (2.0f * fc_hi)    
                               : sinf(2.0f * PI * fc_hi * m) / (PI * m);    
         float s_lo = (m == 0) ? (2.0f * fc_lo)    
                               : sinf(2.0f * PI * fc_lo * m) / (PI * m);    
-        const float a = 2.0f * PI * n / (AF_FIR_N - 1);    
+        const float a = 2.0f * PI * i / (n - 1);    
         float w = 0.35875f - 0.48829f * cosf(a)    
                          + 0.14128f * cosf(2.0f * a)    
                          - 0.01168f * cosf(3.0f * a);    
-        h[n] = (s_hi - s_lo) * w;    
-        sum_dc += fabsf(h[n]);    
+        h[i] = (s_hi - s_lo) * w;    
+        sum_dc += fabsf(h[i]);    
     }    
-    const float norm = (sum_dc > 0.0f) ? (2.0f / sum_dc) : 1.0f;      
+    const float norm = (sum_dc > 0.0f) ? (2.0f / sum_dc) : 1.0f;    
     const uint8_t w = *widx ^ 1;    
-    for (int n = 0; n < AF_FIR_N; n++)      
-        taps[w][n] = (int16_t)lroundf(h[n] * norm * 32768.0f);      
+    int16_t* dst = taps_base + (int32_t)w * n;    
+    for (int i = 0; i < n; i++)    
+        dst[i] = (int16_t)lroundf(h[i] * norm * 32768.0f);    
     __dmb();    
-    *cur  = taps[w];    
-    *widx = w;      
-}      
-    
-static void af_fir_init(void) {      
-    af_fir_design(af_lo_hz, af_hi_hz, af_fir_taps, &af_fir_taps_cur,    
-                  &af_fir_taps_w);    
+    *cur  = dst;    
+    *widx = w;    
 }    
-static void af_fir_init2(void) {      
-    af_fir_design(af_lo2_hz, af_hi2_hz, af_fir_taps2, &af_fir_taps2_cur,    
-                  &af_fir_taps2_w);    
+  
+static void af_fir_init(void) {    
+    af_fir_design_n(af_lo_hz, af_hi_hz, AF_FIR_N,
+                    &af_fir_taps_cur, &af_fir_taps_w, &af_fir_taps[0][0]);    
+}    
+// Подчистка: та же полоса band, свои тапы на 63 отвода.    
+static void af_fir_init2(void) {    
+    af_fir_design_n(af_lo_hz, af_hi_hz, AF_FIR23_N,
+                    &af_fir_taps2_cur, &af_fir_taps2_w, &af_fir_taps2[0][0]);    
+}    
+static void af_fir_init3(void) {    
+    af_fir_design_n(af_lo2_hz, af_hi2_hz, AF_FIR23_N,
+                    &af_fir_taps3_cur, &af_fir_taps3_w, &af_fir_taps3[0][0]);    
 }    
   
 // Один отсчёт полосового FIR — симметричная свёртка (порт af_lp_push):  
@@ -238,41 +255,40 @@ static inline int32_t __not_in_flash_func(af_fir_push)(int32_t x) {
     return (int32_t)((acc + (1 << 14)) >> 15);   // Q15 → масштаб, +0.5 LSB    
 }    
 
-// Подчисточный FIR — тапы входного band (af_fir_taps_cur).  
-static inline int32_t __not_in_flash_func(af_fir_push3)(int32_t x) {  
-    af_fir_buf3[af_fir_idx3] = x;  
-    if (++af_fir_idx3 >= AF_FIR_N) af_fir_idx3 = 0;  
+// Подчисточный FIR — та же полоса band, свои тапы на 63 отвода.    
+static inline int32_t __not_in_flash_func(af_fir_push2)(int32_t x) {    
+    af_fir_buf2[af_fir_idx2] = x;    
+    if (++af_fir_idx2 >= AF_FIR23_N) af_fir_idx2 = 0;    
+    
+    const int16_t* taps = (const int16_t*)af_fir_taps2_cur;    
+    int64_t acc = 0;    
+    int lo = af_fir_idx2, hi = (af_fir_idx2 + AF_FIR23_N - 1) % AF_FIR23_N;    
+    for (int k = 0; k < AF_FIR23_N / 2; k++) {    
+        acc += (int32_t)taps[k] * (af_fir_buf2[lo] + af_fir_buf2[hi]);    
+        if (++lo >= AF_FIR23_N) lo = 0;    
+        if (--hi < 0)        hi = AF_FIR23_N - 1;    
+    }    
+    acc += (int32_t)taps[AF_FIR23_N / 2] * af_fir_buf2[lo];    
+    return (int32_t)((acc + (1 << 14)) >> 15);    
+}    
   
-    const int16_t* taps = (const int16_t*)af_fir_taps_cur;  
-    int64_t acc = 0;  
-    int lo = af_fir_idx3, hi = (af_fir_idx3 + AF_FIR_N - 1) % AF_FIR_N;  
-    for (int k = 0; k < AF_FIR_N / 2; k++) {  
-        acc += (int32_t)taps[k] * (af_fir_buf3[lo] + af_fir_buf3[hi]);  
-        if (++lo >= AF_FIR_N) lo = 0;  
-        if (--hi < 0)        hi = AF_FIR_N - 1;  
-    }  
-    acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf3[lo];  
-    return (int32_t)((acc + (1 << 14)) >> 15);  
-}  
-
-// Постфильтр на выходе — свой набор тапов band2, своё состояние.    
-static inline int32_t __not_in_flash_func(af_fir_push2)(int32_t x) {
-    af_fir_buf2[af_fir_idx2] = x;  
-    if (++af_fir_idx2 >= AF_FIR_N) af_fir_idx2 = 0;  
-  
-    const int16_t* taps = (const int16_t*)af_fir_taps2_cur; 
-    int64_t acc = 0;  
-    int lo = af_fir_idx2;  
-    int hi = af_fir_idx2 + AF_FIR_N - 1;  
-    if (hi >= AF_FIR_N) hi -= AF_FIR_N;  
-    for (int k = 0; k < AF_FIR_N / 2; k++) {  
-        acc += (int32_t)taps[k] * (af_fir_buf2[lo] + af_fir_buf2[hi]);  
-        if (++lo >= AF_FIR_N) lo = 0;  
-        if (--hi < 0)        hi = AF_FIR_N - 1;  
-    }  
-    acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf2[lo];  
-    return (int32_t)((acc + (1 << 14)) >> 15);  
-}
+// Постфильтр на выходе — свой набор тапов band2, своё состояние.  
+static inline int32_t __not_in_flash_func(af_fir_push3)(int32_t x) {    
+    af_fir_buf3[af_fir_idx3] = x;    
+    if (++af_fir_idx3 >= AF_FIR23_N) af_fir_idx3 = 0;    
+    
+    const int16_t* taps = (const int16_t*)af_fir_taps3_cur;    
+    int64_t acc = 0;    
+    int lo = af_fir_idx3, hi = af_fir_idx3 - 1;    
+    if (hi < 0) hi = AF_FIR23_N - 1;    
+    for (int k = 0; k < AF_FIR23_N / 2; k++) {    
+        acc += (int32_t)taps[k] * (af_fir_buf3[lo] + af_fir_buf3[hi]);    
+        if (++lo >= AF_FIR23_N) lo = 0;    
+        if (--hi < 0)        hi = AF_FIR23_N - 1;    
+    }    
+    acc += (int32_t)taps[AF_FIR23_N / 2] * af_fir_buf3[lo];    
+    return (int32_t)((acc + (1 << 14)) >> 15);    
+}    
 
 
 
@@ -713,15 +729,16 @@ static void cw_design(void) {
 
 
 // Подтяжка FIR под центральную частоту CW: f0 ± 250 Гц.  
-static void cw_band_follow(void) {    
-    int32_t lo = (int32_t)cw_f0 - 250;    
-    int32_t hi = (int32_t)cw_f0 + 250;    
-    if (lo < 50)   lo = 50;    
-    if (hi > 7000) hi = 7000;    
-    af_lo_hz = (uint32_t)lo;    
-    af_hi_hz = (uint32_t)hi;    
-    af_fir_init();    
-}
+static void cw_band_follow(void) {      
+    int32_t lo = (int32_t)cw_f0 - 250;      
+    int32_t hi = (int32_t)cw_f0 + 250;      
+    if (lo < 50)   lo = 50;      
+    if (hi > 7000) hi = 7000;      
+    af_lo_hz = (uint32_t)lo;      
+    af_hi_hz = (uint32_t)hi;      
+    af_fir_init();  
+    af_fir_init2();   // подчистка следует за band — и в CW тоже  
+}  
 
 // Состояния y1/y2 — Q19 (int32 с 4 битами дробной части): на узкой полосе  
 // (Q~15-17 при bw 80) квантование int16 давало предельные циклы.  
@@ -977,10 +994,14 @@ static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {
             // gain <= 32767/(pk*B)  =>  avg >= ref*pk*B/32767.  
             // B = boost_est_q16 (Q16): без EQ B=x1 -> как раньше (32767/pk);  
             // с полкой +24 дБ B~x16 -> gain в 16 раз ниже, насыщения нет.  
-            int64_t b = boost_est_q16;                       // Q16  
-            int32_t avg_pk = (int32_t)(((int64_t)agc_ref * pk * b)  
-                                       / ((int64_t)32767 << 16));  
-            if (avg < avg_pk) avg = avg_pk;      
+            int64_t b = boost_est_q16;                       // Q16    
+            // Маржа 28000 (~-1.4 дБ) вместо 32767: bst — оценка по пикам    
+            // (нижняя граница реального подъёма), плюс звон 63-отводного    
+            // band2 на фронтах — без запаса sat16 после фильтра работал    
+            // непрерывно (clip ~96k).    
+            int32_t avg_pk = (int32_t)(((int64_t)agc_ref * pk * b)    
+                                       / ((int64_t)28000 << 16));    
+            if (avg < avg_pk) avg = avg_pk;  
         }      
         // Точное деление вместо >>k: сдвиг по старшему биту давал    
         // gain с ошибкой до 2x и СКАЧКИ gain при пересечении avg    
@@ -1162,10 +1183,11 @@ bool af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz) {
     const uint32_t FS2 = AF_FS_OUT_HZ / 2;  
     if (f_hi_hz > FS2 - 200) f_hi_hz = FS2 - 200;  
     if (f_lo_hz >= f_hi_hz)  f_lo_hz = (f_hi_hz > 100) ? (f_hi_hz - 100) : 0;  
-    af_lo_hz = f_lo_hz;  
-    af_hi_hz = f_hi_hz;  
+    af_lo_hz = f_lo_hz;    
+    af_hi_hz = f_hi_hz;    
     af_fir_init();  
-    return true;  
+    af_fir_init2();   // подчистка следует за band  
+    return true;    
 }
   
 uint32_t af_dsp_af_lo_hz(void) { return af_lo_hz; }    
@@ -1175,7 +1197,7 @@ void af_dsp_set_rxband(bool on) {
     if (on && !rxband_on) {          // чистый старт обоих FIR входного band:  
         // без сброса линии задержки стартуют с мусором — щелчок на выходе  
         memset(af_fir_buf,  0, sizeof(af_fir_buf));  af_fir_idx  = 0;  
-        memset(af_fir_buf3, 0, sizeof(af_fir_buf3)); af_fir_idx3 = 0;  
+        memset(af_fir_buf2, 0, sizeof(af_fir_buf2)); af_fir_idx2 = 0;  
     }  
     rxband_on = on;  
 }  
@@ -1187,20 +1209,20 @@ bool af_dsp_set_band2(uint32_t f_lo_hz, uint32_t f_hi_hz) {
     const uint32_t FS2 = AF_FS_OUT_HZ / 2;    
     if (f_hi_hz > FS2 - 200) f_hi_hz = FS2 - 200;    
     if (f_lo_hz >= f_hi_hz)  f_lo_hz = (f_hi_hz > 100) ? (f_hi_hz - 100) : 0;    
-    af_lo2_hz = f_lo_hz;    
-    af_hi2_hz = f_hi_hz;    
-    af_fir_init2();    
-    return true;    
+    af_lo2_hz = f_lo_hz;  
+    af_hi2_hz = f_hi_hz;  
+    af_fir_init3();  
+    return true;  
 }    
 uint32_t af_dsp_band2_lo_hz(void) { return af_lo2_hz; }    
 uint32_t af_dsp_band2_hi_hz(void) { return af_hi2_hz; }    
-void af_dsp_set_rxband2(bool on) {      
-    if (on && !rxband2_on) {          // чистый старт — без переходного звона      
-        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));    
-        af_fir_idx2 = 0;    
-    }      
-    rxband2_on = on;      
-}      
+void af_dsp_set_rxband2(bool on) {  
+    if (on && !rxband2_on) {          // чистый старт — без переходного звона  
+        memset(af_fir_buf3, 0, sizeof(af_fir_buf3));  
+        af_fir_idx3 = 0;  
+    }  
+    rxband2_on = on;  
+}  
 bool af_dsp_rxband2_on(void) { return rxband2_on; }    
 
 // Возврат: 0 = выключено, 1 = включено, 2 = включено и NR снят (приоритет NT),  
@@ -1430,10 +1452,11 @@ void af_dsp_set_cw(bool on) {
     }  
     if (!on && cw_on) {    
         cwdec_stop();               // добить последнюю букву, очистить очередь    
-        // Восстановить полосу, которая была до включения CW.    
-        af_lo_hz = af_saved_lo_hz;    
-        af_hi_hz = af_saved_hi_hz;    
+        // Восстановить полосу, которая была до включения CW.      
+        af_lo_hz = af_saved_lo_hz;      
+        af_hi_hz = af_saved_hi_hz;      
         af_fir_init();  
+        af_fir_init2();   // тапы подчистки — под восстановленную полосу   
     }    
     cw_on = on;    
 }  
@@ -1617,8 +1640,9 @@ void af_dsp_init(void) {
     memset(cic_comb, 0, sizeof(cic_comb));  
     cic_cnt = 0;  
   
-    af_fir_init();
-    af_fir_init2();       // тапы band2 по дефолтным af_lo2/hi2_hz 
+    af_fir_init();  
+    af_fir_init2();   // тапы подчистки (band, 63 отвода)  
+    af_fir_init3();  
     cw_design();          // начальные коэффициенты CW-секций  
     rx_notch_design();    // коэффициенты фиксированных нотчей RX
     rx_pres_hp_design();      // HP-детектор presence    
@@ -1687,9 +1711,9 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         }
         memset(af_fir_buf, 0, sizeof(af_fir_buf));
         af_fir_idx = 0;
-        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));  
+        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));   // подчисточный FIR  
         af_fir_idx2 = 0;  
-        memset(af_fir_buf3, 0, sizeof(af_fir_buf3));   // подчисточный FIR  
+        memset(af_fir_buf3, 0, sizeof(af_fir_buf3));   // пост-фильтр band2  
         af_fir_idx3 = 0;  
         memset(notch_buf, 0, sizeof(notch_buf));
         memset(notch_w,   0, sizeof(notch_w));
@@ -1870,7 +1894,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // внеполосный мусор, который АРУ подняла и нотчи нагенерировали    
             // (предельный цикл Q15-нотчей звенит на 3/4/5 кГц). Привязан    
             // к rxband_on — как входной фильтр, отдельной команды нет.    
-            if (rxband_on) s = sat16(af_fir_push3(s));   // подчистка: sat16, не cast —  
+            if (rxband_on) s = sat16(af_fir_push2(s));   // подчистка: sat16, не cast —  
                                                        // FIR в полосе до x2, пики > int16  
               
             // Presence EQ (SNR-адаптивный подъём ~2.3 кГц)  
@@ -1902,15 +1926,14 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // Пост-фильтр band2 — на самом выходе, после EQ/shelf/exciter:    
             // финальная полоса независимо от подъёмов «вкусовых» каскадов.    
             // До out_peak: B-петля АРУ видит реальный выходной пик.    
-            if (rxband2_on) {      
-                // Мягкий клиппер ДО фильтра нельзя — он уже отработал на EQ.  
-                // После band2 — только sat16: кубический soft_clip здесь сам  
-                // генерирует гармоники выше band2 hi («хвост на ВЧ»), а FIR  
-                // выход ограничен — жёсткий кламп сработает лишь на редком  
-                // звоне фронтов.  
-                pre_clip = af_fir_push2(pre_clip);      
-                s = sat16(pre_clip);      
-            }      
+            if (rxband2_on) {        
+                // После band2 — мягкий клиппер: sat16 на звоне фронтов давал    
+                // жёсткий срез и гармоники выше полосы (бугры на спектре).    
+                // rx_soft_clip ограничивает до ±21845 — его собственные    
+                // гармоники на ~20 дБ ниже, чем у жёсткого клампа.    
+                pre_clip = af_fir_push3(pre_clip);      // band2 — выходной пост-фильтр    
+                s = rx_soft_clip(pre_clip);    
+            }        
     
             // Пик-детектор выхода тракта (до rx_soft_clip): мгновенная атака,    
             {    
@@ -2051,10 +2074,10 @@ float af_dsp_agc_gain(void) {
     float pk = (float)agc_peak_q16 / 65536.0f;      
     float bst = (float)boost_est_q16 / 65536.0f;  
     if (bst < 1.0f) bst = 1.0f;  
-    if (pk > 0.0f) {      
-        float g_pk = 32767.0f / (pk * bst);      
-        if (g > g_pk) g = g_pk;      
-    }      
+    if (pk > 0.0f) {        
+        float g_pk = 28000.0f / (pk * bst);   // та же маржа, что в agc_limit    
+        if (g > g_pk) g = g_pk;        
+    }        
     return g;      
 }  
 
