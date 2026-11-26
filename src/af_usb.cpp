@@ -459,9 +459,11 @@ void af_usb_set_muted(bool m) {
 
 // Сброс состояния ресемплера/пост-фильтра к исходному — вызывать из  
 // af_store_save после af_dsp_reset_state(), пока USB ещё в mute.  
-void af_usb_reset_state(void) {  
-    rs_xm1 = rs_x0 = rs_x1 = rs_x2 = 0;  
-    rs_started = false;  
+void af_usb_reset_state(void) {    
+    cur_blk = nullptr;   // очередь out_usb обнулена dsp_reset — указатель    
+    pos = 0;             // протух: не release'ить чужой слот, не читать старьё    
+    rs_xm1 = rs_x0 = rs_x1 = rs_x2 = 0;    
+    rs_started = false;    
     rs_init_count = 0;  
     rs_advance_pending = false;  
     rs_phase_q = 0;  
