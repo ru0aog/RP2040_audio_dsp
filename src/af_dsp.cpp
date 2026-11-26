@@ -159,7 +159,11 @@ static int     af_fir_idx = 0;
 // Свои границы af_lo2/hi2_hz и свой набор тапов — независим от входного    
 // band: срезает гармоники эксайтера и подъёмы EQ за пределами band2.    
 static int32_t af_fir_buf2[AF_FIR_N] = {};      
-static int     af_fir_idx2 = 0;      
+static int     af_fir_idx2 = 0;
+// Подчисточный FIR после АРУ/нотчей: те же тапы, что у входного band —  
+// срезает внеполосный мусор, который АРУ поднимает. Отдельный буфер.  
+static int32_t af_fir_buf3[AF_FIR_N] = {};  
+static int     af_fir_idx3 = 0;  
 static volatile uint32_t af_lo2_hz = 100;    
 static volatile uint32_t af_hi2_hz = 3100;    
 static volatile bool     rxband2_on = false;   // 0 = пост-фильтр мимо    
@@ -168,9 +172,10 @@ static int16_t af_fir_taps2[2][AF_FIR_N];
 static volatile const int16_t* af_fir_taps2_cur = af_fir_taps2[0];    
 static uint8_t af_fir_taps2_w = 0;    
   
-// Bypass полосового FIR RX (pre + post): 0 = сигнал идёт мимо фильтра.  
+// Bypass полосового FIR RX (входной + подчисточный): 0 = сигнал идёт мимо.  
+// Пост-фильтр band2 независим — свой флаг rxband2_on.  
 // Тапы и полоса сохраняются — включение возвращает фильтр в тракт.  
-static volatile bool rxband_on = true;  
+static volatile bool rxband_on = true;    
     
 // Расчёт полосового FIR lo..hi в набор тапов taps[2][AF_FIR_N] с    
 // double-buffer публикацией через *cur/*widx. Core 0, float допустим.    
@@ -232,7 +237,24 @@ static inline int32_t __not_in_flash_func(af_fir_push)(int32_t x) {
     acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf[lo];      
     return (int32_t)((acc + (1 << 14)) >> 15);   // Q15 → масштаб, +0.5 LSB    
 }    
+
+// Подчисточный FIR — тапы входного band (af_fir_taps_cur).  
+static inline int32_t __not_in_flash_func(af_fir_push3)(int32_t x) {  
+    af_fir_buf3[af_fir_idx3] = x;  
+    if (++af_fir_idx3 >= AF_FIR_N) af_fir_idx3 = 0;  
   
+    const int16_t* taps = (const int16_t*)af_fir_taps_cur;  
+    int64_t acc = 0;  
+    int lo = af_fir_idx3, hi = (af_fir_idx3 + AF_FIR_N - 1) % AF_FIR_N;  
+    for (int k = 0; k < AF_FIR_N / 2; k++) {  
+        acc += (int32_t)taps[k] * (af_fir_buf3[lo] + af_fir_buf3[hi]);  
+        if (++lo >= AF_FIR_N) lo = 0;  
+        if (--hi < 0)        hi = AF_FIR_N - 1;  
+    }  
+    acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf3[lo];  
+    return (int32_t)((acc + (1 << 14)) >> 15);  
+}  
+
 // Постфильтр на выходе — свой набор тапов band2, своё состояние.    
 static inline int32_t __not_in_flash_func(af_fir_push2)(int32_t x) {
     af_fir_buf2[af_fir_idx2] = x;  
@@ -250,7 +272,9 @@ static inline int32_t __not_in_flash_func(af_fir_push2)(int32_t x) {
     }  
     acc += (int32_t)taps[AF_FIR_N / 2] * af_fir_buf2[lo];  
     return (int32_t)((acc + (1 << 14)) >> 15);  
-}  
+}
+
+
 
 // ---------------------------------------------------------------------------  
 // Фиксированные узкие нотчи RX — гребёнка наводок 1/2/3/4/5 кГц.
@@ -1147,7 +1171,14 @@ bool af_dsp_set_band(uint32_t f_lo_hz, uint32_t f_hi_hz) {
 uint32_t af_dsp_af_lo_hz(void) { return af_lo_hz; }    
 uint32_t af_dsp_af_hi_hz(void) { return af_hi_hz; }    
   
-void af_dsp_set_rxband(bool on) { rxband_on = on; }    
+void af_dsp_set_rxband(bool on) {  
+    if (on && !rxband_on) {          // чистый старт обоих FIR входного band:  
+        // без сброса линии задержки стартуют с мусором — щелчок на выходе  
+        memset(af_fir_buf,  0, sizeof(af_fir_buf));  af_fir_idx  = 0;  
+        memset(af_fir_buf3, 0, sizeof(af_fir_buf3)); af_fir_idx3 = 0;  
+    }  
+    rxband_on = on;  
+}  
 bool af_dsp_rxband_on(void)     { return rxband_on; }    
 
 // Пост-фильтр band2: свои границы, независимые от входного band.    
@@ -1163,13 +1194,13 @@ bool af_dsp_set_band2(uint32_t f_lo_hz, uint32_t f_hi_hz) {
 }    
 uint32_t af_dsp_band2_lo_hz(void) { return af_lo2_hz; }    
 uint32_t af_dsp_band2_hi_hz(void) { return af_hi2_hz; }    
-void af_dsp_set_rxband2(bool on) {    
-    if (on && !rxband2_on) {          // чистый старт — без переходного звона    
+void af_dsp_set_rxband2(bool on) {      
+    if (on && !rxband2_on) {          // чистый старт — без переходного звона      
         memset(af_fir_buf2, 0, sizeof(af_fir_buf2));    
         af_fir_idx2 = 0;    
-    }    
-    rxband2_on = on;    
-}    
+    }      
+    rxband2_on = on;      
+}      
 bool af_dsp_rxband2_on(void) { return rxband2_on; }    
 
 // Возврат: 0 = выключено, 1 = включено, 2 = включено и NR снят (приоритет NT),  
@@ -1392,8 +1423,7 @@ void af_dsp_set_cw(bool on) {
         // Восстановить полосу, которая была до включения CW.    
         af_lo_hz = af_saved_lo_hz;    
         af_hi_hz = af_saved_hi_hz;    
-        af_fir_init();
-        af_fir_init2();       // тапы пост-фильтра band2    
+        af_fir_init();  
     }    
     cw_on = on;    
 }  
@@ -1647,8 +1677,10 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         }
         memset(af_fir_buf, 0, sizeof(af_fir_buf));
         af_fir_idx = 0;
-        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));
-        af_fir_idx2 = 0;
+        memset(af_fir_buf2, 0, sizeof(af_fir_buf2));  
+        af_fir_idx2 = 0;  
+        memset(af_fir_buf3, 0, sizeof(af_fir_buf3));   // подчисточный FIR  
+        af_fir_idx3 = 0;  
         memset(notch_buf, 0, sizeof(notch_buf));
         memset(notch_w,   0, sizeof(notch_w));
         memset(notch_v,   0, sizeof(notch_v));
@@ -1821,9 +1853,15 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // Гребёнка — после АРУ (контур не «отменяет» нотчи), но ДО пост-FIR:  
             // предельный цикл Q15-нотчей звенит на частотах 3/4/5 кГц вне полосы —  
             // постфильтр этот звон отрезает. Нотчи 1/2 кГц внутри полосы работают.  
-            if (rx_notch_on) s = (int16_t)rx_notch_push(s);    
-            
-            // Presence EQ (SNR-адаптивный подъём ~2.3 кГц)
+            if (rx_notch_on) s = (int16_t)rx_notch_push(s);      
+              
+            // Подчисточный FIR — те же тапы, что у входного band: срезает    
+            // внеполосный мусор, который АРУ подняла и нотчи нагенерировали    
+            // (предельный цикл Q15-нотчей звенит на 3/4/5 кГц). Привязан    
+            // к rxband_on — как входной фильтр, отдельной команды нет.    
+            if (rxband_on) s = (int16_t)af_fir_push3(s);    
+              
+            // Presence EQ (SNR-адаптивный подъём ~2.3 кГц)  
             if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —    
                                                            // подъём до +6 дБ может превысить int16
             
@@ -1899,7 +1937,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             int64_t out_pk = out_peak_q16 >> 16;  
             int64_t g_last = agc_gain_blk_q16;              // Q16  
             if (in_pk < 1) in_pk = 1;  
-            if (g_last < (int64_t)1 << 16) g_last = (int64_t)1 << 16;  // не делим на <x1  
+            if (g_last < (int64_t)1 << 14) g_last = (int64_t)1 << 14;  // x0.25 min —  
+            // при ручном gain <x1 кламп x1.0 завышал bst  
             int64_t denom = (in_pk * g_last) >> 16;       // in_pk × g, отсчёты  
             if (denom < 1) denom = 1;  
             int64_t b = (out_pk << 16) / denom;  
