@@ -83,7 +83,7 @@ typedef struct {
 static hb_state_t hb[AF_HB_STAGES];  
   
 // ---------------------------------------------------------------------------  
-// CIC R=2, N=3 — интеграторы на 250 ksps, гребёнки на 125 ksps.  
+// CIC R=4, N=3 — интеграторы на 494.8 ksps, гребёнки на 123.7 ksps
 // Переполнение int32 в интеграторах — штатное (по модулю 2^32).  
 // ---------------------------------------------------------------------------  
 static int32_t cic_int[AF_CIC_N], cic_comb[AF_CIC_N];  
@@ -102,9 +102,6 @@ static inline bool __not_in_flash_func(cic_push)(int32_t x, int32_t* y) {
     }  
 
     // компенсация усиления фильтра-дециматора CIC
-    // DC-gain CIC = R^N = 2^3 = 8 → масштаб с округлением (+0.5 LSB)
-    // *y = (t + 4) >> 3;
-    
     *y = (t + 32) >> 6;   // DC-gain CIC = 4^3 = 64, +32 = округление +0.5 LSB
     
     return true;  
@@ -1598,23 +1595,27 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         snr_reset_req = false;  
         af_snr_reset();  
         __dmb();  
-    }  
-        
-    const volatile uint16_t* blk;           
-    while (budget-- > 0 && (blk = af_capture_get_block()) != NULL) {  
-        const uint32_t t0 = time_us_32();   // busy = только обработка блока    
-  
+    }
+    
+    const volatile uint16_t* blk;
+
+    // Получение блока АЦП
+    while (budget-- > 0 && (blk = af_capture_get_block()) != NULL) {
+        const uint32_t t0 = time_us_32();   // busy = только обработка блока
+
         for (uint32_t i = 0; i < AF_BLOCK_SAMPLES; i++) {  
-            // Сырой отсчёт ADC: 12 бит в младших разрядах.  
-            int32_t meas = (int32_t)blk[i] & 0x0FFF;  
-  
-            // Центрирование: EMA среднего, вычитаем из измерения.  
+        // обработка одного отсчёта
+            // Сырой отсчёт ADC: 12 бит в младших разрядах
+            int32_t meas = (int32_t)blk[i] & 0x0FFF;
+
+            // Центрирование DC: EMA среднего, вычитаем из измерения.  
             dc_est += ((meas << 8) - dc_est) >> 8;  
             int32_t x = (meas - (dc_est >> 8)) << 4;   // 12 -> 16 бит  
   
-            // Децимация 250k -> 15.625k: CIC/2 -> HB/2 -> HB/2 -> HB/2
-            int32_t y;  
-            if (!cic_push(x, &y))        continue;  
+            // Четырёхсупенчатая децимация 495k -> 15.464k: CIC/4 -> HB/2 -> HB/2 -> HB/2
+            int32_t y;
+            if (!cic_push(x, &y))        continue;          // первый шаг децимации CIC/4 (с компенсацией усиления)
+
 #if 0   // NB ЗАГЛУШЕН — см. af_dsp_set_nb. Оставлено для будущей доработки.  
             // Noise Blanker: импульсные помехи до HB/FIR (125 ksps).    
             // |y| > env*thr -> hold последнего чистого отсчёта + AF_NB_HOLD    
@@ -1635,12 +1636,14 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 if (nb_hold_cnt > 0) nb_hold_cnt--;    
             }    
 #endif    
-            if (!hb_push(&hb[0], y, &y)) continue;    
-            if (!hb_push(&hb[1], y, &y)) continue;  
-            if (!hb_push(&hb[2], y, &y)) continue;  
-            y >>= 3;    // компенсация DC-gain трёх HB (2^3 = 8)
+
+            if (!hb_push(&hb[0], y, &y)) continue;          // второй шаг децимации     HB /2 (15 отв.)
+            if (!hb_push(&hb[1], y, &y)) continue;          // третий шаг децимации     HB /2 (31 отв.)
+            if (!hb_push(&hb[2], y, &y)) continue;          // четвёртый шаг децимации  HB /2 (31 отв.)
+            y >>= 3;                     // компенсация DC-gain трёх HB (2^3 = 8)
   
-            // НЧ-тракт на 15.625 ksps.    
+            //  ------------------------------- НЧ-тракт на 15.464 ksps -------------------------------
+            // Bypass-ветка (обход всего тракта)
             if (bypass_on) {      
                 // Обход: децимированный вход напрямую на выход,      
                 // без FIR/CW/NT/NR/АРУ/лимитера.  
@@ -1651,7 +1654,9 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 out_emit(sb);  
                 //out_emit(sat16(y));      
                 continue;      
-            }      
+            }
+            
+            // ТХ-ветка (передача)
             if (tx_on) {        
                 // TX-тракт: FIR -> компрессор -> клиппер -> постфильтр.        
                 // RX-цепочка (FIR/CW/NT/NR/AGC) в TX не работает.        
@@ -1683,67 +1688,98 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                 }    
                 out_emit(t);      
                 continue;        
-            }        
-            if (rxband_on) y = af_fir_push(y);   // bypass: сигнал мимо FIR  
-            {   // S-meter: EMA |y| Q16, ~10 мс — уровень в полосе до АРУ    
-                int32_t ay = (y < 0) ? -y : y;  
-                rx_in_lvl_q16 += (((int64_t)ay << 16) - rx_in_lvl_q16) >> 6;  
-                if (ay > rx_in_peak) rx_in_peak = ay;   // пик за интервал чтения  
-            }  
+            }
+
+            // Полосовой FIR RX (установка полосы пропускания RX-тракта)
+            if (rxband_on) y = af_fir_push(y); {  // bypass: сигнал мимо FIR
+                // S-meter: EMA |y| Q16, ~10 мс — уровень в полосе до АРУ
+                int32_t ay = (y < 0) ? -y : y;
+                rx_in_lvl_q16 += (((int64_t)ay << 16) - rx_in_lvl_q16) >> 6;
+                if (ay > rx_in_peak) rx_in_peak = ay;   // пик за интервал чтения
+            }
+
+            // CW-фильтр и декодер
             if (cw_on) {  
-                cw_lfsr ^= cw_lfsr << 13;  
+                cw_lfsr ^= cw_lfsr << 13;  // LFSR-шум
                 cw_lfsr ^= cw_lfsr >> 17;  
                 cw_lfsr ^= cw_lfsr << 5;  
-                int32_t noise = ((int32_t)(cw_lfsr & 0xFFFF) - 32768) >> 6; // ~±512  
+                int32_t noise = ((int32_t)(cw_lfsr & 0xFFFF) - 32768) >> 6; // ~±512, масштаб cw_noise
                 noise = (noise * (int32_t)cw_noise) >> 9;  
-                y = cw_push(sat16(y + noise));  
-                if (cwdec_on) cwdec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));  
-            }  
+                y = cw_push(sat16(y + noise));                              // 3 биквада BPF
+                if (cwdec_on) cwdec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));  // отвод в CW-декодер
+            }
+
             // Отвод для RTTY-декодера: после полосового FIR, до NT/NR/АРУ.  
             // TX и bypass выше уходят по continue — гейтить только rtty_on.  
-            if (rtty_on) rttydec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));  
-            if (notch_on) y = notch_lms_push(y);  
-            if (nr_on)    y = (nr_mode == 1) ? af_snr_push(y) : nr_lms_push(y); 
-            int16_t s = agc_limit(y);  
+            if (rtty_on) rttydec_push((int16_t)(y > 32767 ? 32767 : (y < -32768 ? -32768 : y)));
+
+            // Автонотч NT
+            if (notch_on) y = notch_lms_push(y);
+
+            // Шумоподавление NR
+            if (nr_on)    y = (nr_mode == 1) ? af_snr_push(y) : nr_lms_push(y);
+
+            // АРУ + лимитер
+            int16_t s = agc_limit(y);
+
+            // Фиксированные нотчи
             // Гребёнка — после АРУ (контур не «отменяет» нотчи), но ДО пост-FIR:  
             // предельный цикл Q15-нотчей звенит на частотах 3/4/5 кГц вне полосы —  
             // постфильтр этот звон отрезает. Нотчи 1/2 кГц внутри полосы работают.  
             if (rx_notch_on) s = (int16_t)rx_notch_push(s);  
             if (rxband_on) s = sat16(af_fir_push2(s));   // пост-FIR: срез внеполосного  
                                                        // мусора после АРУ/NR  
+            
+            // Presence EQ (SNR-адаптивный подъём ~2.3 кГц)
             if (rx_pres_on)  s = sat16(rx_pres_push(s));     // presence: sat16, не cast —    
-                                                           // подъём до +6 дБ может превысить int16    
-            // Хвост RX: shelf + exciter стоят ПОСЛЕ лимитера — их подъём  
+                                                           // подъём до +6 дБ может превысить int16
+            
+            // Shelf + Exciter + Soft-clip
+            // shelf + exciter стоят ПОСЛЕ лимитера — их подъём  
             // не контролируется контуром B. Вместо жёсткого sat16 на каждом  
             // каскаде — один мягкий клиппер в конце: пики плавно прижимаются  
             // к ~−3.5 dBFS, clip_count не растёт, щелчков нет.  
             if ((rxshelf_on && rx_shelf_db_x10) || (rx_exc_on && !cw_on)) {      
                 int32_t s32 = s;      
-                if (rxshelf_on && rx_shelf_db_x10) s32 = rx_shelf_push(s32); // low-shelf: «бас»      
-                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);   // эксайтер: только речь      
+                if (rxshelf_on && rx_shelf_db_x10) s32 = rx_shelf_push(s32);    // low-shelf: «бас»      
+                if (rx_exc_on && !cw_on)   s32 = rx_exc_push(s32);              // эксайтер: только речь      
                 s = rx_soft_clip(s32);      
-            }      
-            // 3-полосный EQ — последним в RX-цепочке, после лимитера и    
-            // soft-clip: его подъём до +12 дБ тоже может превысить int16,    
-            // поэтому свой мягкий клиппер на выходе.    
+            }
+
+            // 3-полосный EQ
+            // 3-полосный EQ — последним в RX-цепочке, после лимитера и
+            // soft-clip: его подъём до +12 дБ тоже может превысить int16,
+            // поэтому свой мягкий клиппер на выходе
             if (rxeq_on && (rxeq_lo_db_x10 || rxeq_mid_db_x10 || rxeq_hi_db_x10))      
-                s = rx_soft_clip(rxeq_push(s));      
-            if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса      
-            s = af_voice_mix(s);                       // голосовые сообщения          
+                s = rx_soft_clip(rxeq_push(s));
+            
+            // Запись магнитофона
+            if (af_rec_active == 1) af_rec_push(s);    // запись: чистый тракт, до голоса
+
+            // Голосовые подсказки
+            s = af_voice_mix(s);                       // голосовые сообщения
+
+            // Воспроизведение слота
             if (af_rec_active == 2) s = af_rec_mix(s); // подмес воспроизведения слота
             
+            // Ramp-тест
             if (ramp_on) {    
                 // Пила: +100 на отсчёт при 15.625 ksps → период ~21 мс,    
                 // амплитуда полная. Скачок ≠ +100 (mod 65536) = потеря/дубль.    
                 s = ramp_val;    
                 ramp_val += 100;    
-            }    
-            out_emit(sat16(s));  
+            }
+
+            // Выход
+            out_emit(sat16(s));
+        
         }  // конец for по отсчётам блока  
         if (rx_pres_on && !tx_on && !bypass_on) rx_pres_block_update();  
-
+        
+        // Освобождение блока АЦП
         af_capture_release();    
-    
+
+        // Учёт загрузки Core 1
         const uint32_t dt = time_us_32() - t0;    
         core1_busy_us += dt;    
         if (dt > core1_max_us) core1_max_us = dt;   // пиковая стоимость блока    
@@ -1753,6 +1789,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
         af_store_core1_park_poll();  
     }    
     
+    // Обновление статистики
     core1_update_load(time_us_32());    
 }    
 
