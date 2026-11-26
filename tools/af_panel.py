@@ -114,18 +114,20 @@ def _unit(label):
         return "x100"  
     if last in ("lo", "mid", "hi") and "eq" in label:  # EQ gain, дБx10    
         return "x0.1 дБ"    
-    if label in ("band lo", "band hi"):  # полоса приёма, Гц    
-        return "Гц"    
+    if label in ("band lo", "band hi", "cw bw"):  # полоса приёма / CW-фильтр, Гц      
+        return "Гц"      
+    if label == "cw noise":                       # уровень тестового шума CW, %      
+        return "%"      
     if label == "agc ref":          # целевой уровень АРУ, нормированный    
         return "норм"    
     if label == "lim ceil":         # потолок лимитера, пиковый уровень    
         return "пик"    
-    if last in ("ref", "ceil", "tgt", "thr", "cthr", "gfloor", "depth",    
-                "makeup", "max", "min", "presmax", "duckmax", "bst",  
-                "cut", "shelf", "exc", "excmix", "clip", "soft", "ap",  
-                "lr2", "split", "2band", "intel", "noise", "dec", "sql",  
-                "vol", "bw"):  
-        return ""                                    # без единицы / неизвестно  
+    if last in ("ref", "ceil", "tgt", "thr", "cthr", "gfloor", "depth",      
+                "makeup", "max", "min", "presmax", "duckmax", "bst",    
+                "cut", "shelf", "exc", "excmix", "clip", "soft", "ap",    
+                "lr2", "split", "2band", "intel", "noise", "dec", "sql",    
+                "vol"):    
+        return ""                                    # без единицы / неизвестно    
     if last == "mu":  
         return "x1000"  
     if last == "wpm":  
@@ -187,7 +189,7 @@ class Panel(tk.Tk):
     def __init__(self):  
         super().__init__()  
         self.title("RP2040 audio DSP by RU0AOG 2026 — панель настроек")  
-        self.geometry("1150x810")    
+        self.geometry("1200x840")    
   
         self.w = SerialWorker()  
         self.params = {}          # label -> {"type":..., "var":...}  
