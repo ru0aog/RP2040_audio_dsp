@@ -296,10 +296,11 @@
   
 // Peaking-биквад: центр ~2.3 кГц, Q ~1.0, потолок подъёма txpresmax.  
 // Коэффициенты пересчитываются при смене txpresmax (не в горячем пути).  
-#define AF_TX_PRES_FREQ_HZ      2300u   // центр presence-пика  
-#define AF_TX_PRES_Q_X100       100u    // Q = 1.00  
-#define AF_TX_PRES_MAX_Q15      (int32_t)(1.1885f * 32768.0f)  // множитель 1.1885 ≈ +1.5 дБ 
-#define AF_TX_PRES_ON_DEFAULT   1       // 1 = включён при старте  
+#define AF_TX_PRES_FREQ_HZ      2300u   // центр presence-пика    
+#define AF_TX_PRES_Q_X100       100u    // Q = 1.00    
+// Потолок подъёма — AF_TX_PRES_MAX_DB_X10 (дБx10); Q15 считает    
+// af_tx_set_presmax() в af_tx_init — единый путь с CLI/банками.    
+#define AF_TX_PRES_ON_DEFAULT   1       // 1 = включён при старте    
 
 // ---------------------------------------------------------------------------  
 // Автонотч NT — NLMS-предиктор (порт notch_lms_push из rx_dsp.cpp)  

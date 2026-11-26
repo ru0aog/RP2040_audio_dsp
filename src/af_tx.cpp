@@ -241,7 +241,7 @@ static uint16_t tx_gate_hold = 0;   // счётчик hangover, в отсчёт�
 
 // --- Этап 2: Dynamic Presence EQ (SNR-адаптивный) ---  
 static volatile uint8_t  tx_pres_on    = AF_TX_PRES_ON_DEFAULT;    
-static volatile int32_t  tx_presmax_q15 = AF_TX_PRES_MAX_Q15;  // потолок подъёма, Q15    
+static volatile int32_t  tx_presmax_q15 = 0;  // потолок подъёма, Q15 — задаёт af_tx_set_presmax в init      
 static volatile uint32_t tx_pres_freq_hz = AF_TX_PRES_FREQ_HZ; // центр пика, Гц    
 static volatile uint32_t tx_pres_q_x100  = AF_TX_PRES_Q_X100;  // добротность x100    
   
@@ -983,7 +983,8 @@ void af_tx_init(void) {
     tx_rtty_fir1.n    = TX_RTTY_FIR_N;    
     tx_rtty_fir2.taps = tx_rtty_taps;    
     tx_rtty_fir2.n    = TX_RTTY_FIR_N;
-    af_tx_set_duckmax(AF_TX_DUCK_MAX_DB_X10);   // единый дефолт: дБx10 -> Q15  
+    af_tx_set_duckmax(AF_TX_DUCK_MAX_DB_X10);   // единый дефолт: дБx10 -> Q15
+    af_tx_set_presmax(AF_TX_PRES_MAX_DB_X10);   // единый дефолт: дБx10 -> Q15 + pe-дизайн  
     tx_tt_fir_design();  
     memset(&tx_tt_fir1, 0, sizeof(tx_tt_fir1));  
     memset(&tx_tt_fir2, 0, sizeof(tx_tt_fir2));  
