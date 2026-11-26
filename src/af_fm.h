@@ -46,9 +46,16 @@
 #define AF_FM_WAV_FILES     4    // 4 слота магнитофона = 4 сообщения (селектор GP13/GP28)      
 //   LBA 98       CW.TXT (1 кластер, 4 строки сообщений магнитофона)            
 //   LBA 99..     REC1..REC4.WAV            
-#define AF_FM_CW_CLUSTERS   1u          
-#define AF_FM_CW_LBA        (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)   // 98       
-#define AF_FM_WAV_LBA(i)    (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)   // 99+        
+#define AF_FM_CW_CLUSTERS   1u            
+#define AF_FM_CW_LBA        (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)   // 98         
+  
+// AF_PANEL.PY — read-only копия tools/af_panel.py, вшитая в прошивку    
+// (rodata, не в fm_disk). Резерв 192 кластера = 96 КБ: файл ~73 КБ,    
+// запас под рост. Размер в dir-записи = фактический sizeof(af_panel_py).    
+#define AF_FM_PANEL_CLUSTERS  192u                                 // 96 КБ резерв    
+#define AF_FM_PANEL_LBA       (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS)   // 99    
+  
+#define AF_FM_WAV_LBA(i)    (AF_FM_PANEL_LBA + AF_FM_PANEL_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)   // 291+        
   
 // В RAM только boot+dir+SET+CW — 19 секторов (~10 КБ). FAT и WAV  
 // синтезируются в af_fm_msc_read. Маппинг LBA -> индекс fm_disk:  

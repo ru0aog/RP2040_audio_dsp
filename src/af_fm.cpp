@@ -38,6 +38,10 @@
 #include "af_cli.h"
 #include "af_usb.h"          // af_usb_reenumerate — перемонтирование диска
 #include "af_store.h"        // af_cw_msgs, af_store_cw_save — CW.TXT 
+#include "af_panel_py.h"      // af_panel_py[] — вшитая копия tools/af_panel.py  
+
+static_assert(af_panel_py_len <= AF_FM_PANEL_CLUSTERS * AF_FM_SECTOR_SIZE,  
+              "af_panel.py larger than AF_FM_PANEL_CLUSTERS reserve");  
 
 // Рендер таблицы banks в буфер (af_cli.cpp — там AF_PARAMS/bank_field).    
 // Возвращает длину текста без NUL.    
@@ -141,15 +145,15 @@ static void dir_track(const uint8_t* d) {
 // создаст каталог заново — цикл безвредный.    
 // Вызывается после memcpy dir-сектора в af_fm_msc_write, до dir_track. 
 static void dir_fix_foreign(uint8_t* d) {  
-    static const char known[6][12] = {  
-        "SET     TXT", "CW      TXT",  
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };  
+    static const char known[7][12] = {    
+        "SET     TXT", "CW      TXT", "AF_PANELPY ",    
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };    
     for (uint8_t e = 0; e < 16; e++) {  
         uint8_t* p = d + e * 32;  
         if (p[0] == 0xE5 || p[0] == 0x00 || p[0] == 0x05) continue;  // удалённая/пустая  
         if (p[11] == 0x0F) continue;                                 // LFN-запись  
         bool ours = false;    
-        for (uint8_t i = 0; i < 6; i++)    
+        for (uint8_t i = 0; i < 7; i++)    
             if (memcmp(p, known[i], 11) == 0) { ours = true; break; }    
         if (ours) continue;      
         // Удалённая запись — chkdsk пропускает. Вместе с ней помечаем  
@@ -209,10 +213,14 @@ static uint16_t fat_entry(uint16_t n) {
     if (n >= cl && n < cl + AF_FM_SET_CLUSTERS)    
         return (n == cl + AF_FM_SET_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);    
     cl += AF_FM_SET_CLUSTERS;    
-    // CW.TXT: 1 кластер    
-    if (n == cl) return 0xFFFF;    
-    cl += AF_FM_CW_CLUSTERS;    
-    // RECn.WAV: фиксированная сетка AF_FM_WAV_CLUSTERS на файл    
+    // CW.TXT: 1 кластер      
+    if (n == cl) return 0xFFFF;      
+    cl += AF_FM_CW_CLUSTERS;      
+    // AF_PANEL.PY: цепочка AF_FM_PANEL_CLUSTERS (read-only, rodata)      
+    if (n >= cl && n < cl + AF_FM_PANEL_CLUSTERS)      
+        return (n == cl + AF_FM_PANEL_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);      
+    cl += AF_FM_PANEL_CLUSTERS;      
+    // RECn.WAV: фиксированная сетка AF_FM_WAV_CLUSTERS на файл      
     for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
         if (n >= cl && n < cl + AF_FM_WAV_CLUSTERS)    
             return (n == cl + AF_FM_WAV_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);    
@@ -246,16 +254,21 @@ static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,
     uint8_t* d = fm_disk[AF_FM_DIR_RAM];    // dir — fm_disk[1], не LBA 81    
     memset(d, 0, AF_FM_SECTOR_SIZE);    
     dir_entry(&d[0], "SET     TXT", set_clusters ? 2 : 0, set_size);      
-    dir_entry(&d[32], "CW      TXT", (uint16_t)(2 + AF_FM_SET_CLUSTERS),    
-              AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);   // размер = кластер,    
-                                                        // хвост — пробелы    
-    static const char wav_names[AF_FM_WAV_FILES][12] = {    
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" }; 
-    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {      
-        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS    
-                                    + i * AF_FM_WAV_CLUSTERS);      
-        dir_entry(&d[32 * (i + 2)], wav_names[i], wav_sizes[i] ? first : 0, wav_sizes[i]);    
-    }      
+    dir_entry(&d[32], "CW      TXT", (uint16_t)(2 + AF_FM_SET_CLUSTERS),      
+              AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);   // размер = кластер,      
+                                                        // хвост — пробелы      
+    // AF_PANEL.PY: первый кластер 19, размер = фактический (не резерв)      
+    dir_entry(&d[64], "AF_PANELPY ",      
+              (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS),      
+              af_panel_py_len);      
+    static const char wav_names[AF_FM_WAV_FILES][12] = {      
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };   
+    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {        
+        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS      
+                                    + AF_FM_PANEL_CLUSTERS      
+                                    + i * AF_FM_WAV_CLUSTERS);        
+        dir_entry(&d[32 * (i + 3)], wav_names[i], wav_sizes[i] ? first : 0, wav_sizes[i]);      
+    }        
 }    
   
 // ---------------------------------------------------------------------------  
@@ -513,15 +526,15 @@ static uint8_t ul_adpcm_enc(int16_t s) {
     if (diff < 0) { nib = 8; diff = -diff; }      
     int32_t delta = step >> 3;      
     if (diff >= step)      { nib |= 4; diff -= step;      delta += step; }      
-    if (diff >= (step>>1)) { nib |= 2; diff -= (step>>1); delta += (step>>1); }      
-    if (diff >= (step>>2)) { nib |= 1;                    delta += (step>>2); }      
-    ul_enc_pred += (nib & 8) ? -delta : delta;      
-    if (ul_enc_pred > 32767) ul_enc_pred = 32767;      
-    else if (ul_enc_pred < -32768) ul_enc_pred = -32768;      
-    ul_enc_idx += fm_adpcm_idx[nib & 15];      
-    if (ul_enc_idx < 0) ul_enc_idx = 0; else if (ul_enc_idx > 88) ul_enc_idx = 88;      
-    return nib;      
-}      
+    if (diff >= (step>>1)) { nib |= 2; diff -= (step>>1); delta += (step>>1); }
+    if (diff >= (step>>2)) { nib |= 1;                    delta += (step>>2); }
+    ul_enc_pred += (nib & 8) ? -delta : delta;
+    if (ul_enc_pred > 32767) ul_enc_pred = 32767;
+    else if (ul_enc_pred < -32768) ul_enc_pred = -32768;
+    ul_enc_idx += fm_adpcm_idx[nib & 15];
+    if (ul_enc_idx < 0) ul_enc_idx = 0; else if (ul_enc_idx > 88) ul_enc_idx = 88;
+    return nib;
+}
       
 // Синтез одного сектора WAV-файла слота (bank = 1..4) в buffer.
 // off_in_file = (lba - file_lba) * 512.      
@@ -815,11 +828,25 @@ int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {
                AF_FM_SECTOR_SIZE);      
         return (int32_t)AF_FM_SECTOR_SIZE;      
     }      
-    if (lba == AF_FM_CW_LBA) {                     // CW.TXT    
-        memcpy(buffer, fm_disk[AF_FM_CW_RAM], AF_FM_SECTOR_SIZE);      
+    if (lba == AF_FM_CW_LBA) {                     // CW.TXT      
+        memcpy(buffer, fm_disk[AF_FM_CW_RAM], AF_FM_SECTOR_SIZE);        
+        return (int32_t)AF_FM_SECTOR_SIZE;        
+    }        
+    // AF_PANEL.PY: данные из rodata прошивки; хвост за концом файла — нули.      
+    if (lba >= AF_FM_PANEL_LBA &&      
+        lba < AF_FM_PANEL_LBA + AF_FM_PANEL_CLUSTERS) {      
+        uint32_t off = (lba - AF_FM_PANEL_LBA) * AF_FM_SECTOR_SIZE;      
+        if (off < af_panel_py_len) {      
+            uint32_t n = af_panel_py_len - off;      
+            if (n > AF_FM_SECTOR_SIZE) n = AF_FM_SECTOR_SIZE;      
+            memcpy(buffer, af_panel_py + off, n);      
+            memset((uint8_t*)buffer + n, 0, AF_FM_SECTOR_SIZE - n);      
+        } else {      
+            memset(buffer, 0, AF_FM_SECTOR_SIZE);      
+        }      
         return (int32_t)AF_FM_SECTOR_SIZE;      
     }      
-    // WAV-область: определяем файл по диапазону LBA.    
+    // WAV-область: определяем файл по диапазону LBA.        
     for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
         uint32_t start = AF_FM_WAV_LBA(i);    
         if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {    
