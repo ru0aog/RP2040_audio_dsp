@@ -348,14 +348,14 @@ void af_usb_poll(void) {
             // Flash-окно: тишина в поток. Первые ~6 мс — fade-out:      
             // продолжаем ресемплировать живой вход с убывающей рампой,      
             // иначе стык живой->нули сам по себе щёлкает.      
-            while (frames < avail_frames) {      
-                if (usb_fade) {                      // fade-out 256->0    
-                    if (!next_frame(&s)) s = 0;    
-                    s = (int16_t)(((int32_t)s * usb_fade) >> 8);    
-                    if (--usb_fade == 0) break;      // рампа кончилась    
-                } else {    
-                    s = 0;    
-                }    
+            while (frames < avail_frames) {        
+                if (usb_fade) {                      // fade-out 255->0      
+                    if (!next_frame(&s)) s = 0;      
+                    s = (int16_t)(((int32_t)s * usb_fade) >> 8);      
+                    if (usb_fade == 0 || --usb_fade == 0) break;  // рампа кончилась    
+                } else {      
+                    s = 0;      
+                }      
                 pcm_buffer[frames * 2]     = s;    
                 pcm_buffer[frames * 2 + 1] = s;    
                 ++frames;    
@@ -451,11 +451,12 @@ void af_usb_ur_log(uint32_t* t, uint16_t* n) {
 
 // Мьют USB-выхода на время flash-окна: poll пишет нули в TinyUSB.      
 // Вызывается из af_store до/после окна (при живом XIP).      
-void af_usb_set_muted(bool m) {      
-    if (usb_muted && !m)  usb_fade = 1;     // unmute -> fade-in 0->256    
-    if (!usb_muted && m)  usb_fade = 255;   // mute   -> fade-out 256->0    
-    usb_muted = m;      
-}
+void af_usb_set_muted(bool m) {        
+    if (!m)       usb_fade = 1;     // unmute -> fade-in 1->256      
+    else          usb_fade = 255;   // mute   -> fade-out 255->0 (безусловно:    
+                                    //  иначе --0 в poll уходит в 65535)    
+    usb_muted = m;        
+}  
 
 // Сброс состояния ресемплера/пост-фильтра к исходному — вызывать из  
 // af_store_save после af_dsp_reset_state(), пока USB ещё в mute.  

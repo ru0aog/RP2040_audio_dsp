@@ -199,10 +199,13 @@ class Panel(tk.Tk):
         self._dump_retries = 0
         self._state_lines = []  
         self._state_active = False  
-        self._pending = []        # очередь команд после connect      
+        self._pending = []        # очередь команд после connect        
+        self._save_pending = False  # ждём "# OK saved" -> рестарт монитора      
+        self._save_timer = None     # after-id страховочного рестарта      
         self.audio_in = None    # sd.InputStream при активном мониторинге  
         self.audio_out = None   # sd.OutputStream  
-        self.audio_q = queue.Queue(maxsize=50)  # блоки вход->выход  
+        self.audio_q = queue.Queue(maxsize=4)   # блоки вход->выход;    
+                                                # 4x20 мс = 80 мс потолок лага    
         self.audio_vol = 0.3      # громкость монитора 0.0..1.0 (читается из audio-потока)      
         self.rec_stream = None    # sd.InputStream при активной записи      
         self.rec_file = None      # wave.Wave_write или file для MP3  
@@ -519,22 +522,35 @@ class Panel(tk.Tk):
                 except queue.Full:    
                     pass    
   
-            def out_cb(outdata, frames, time_, status):    
-                try:    
-                    data = self.audio_q.get_nowait()    
-                    # Вход ch может отличаться от выхода (моно-микрофон    
-                    # -> стерео-выход): привести каналы до копирования.    
-                    if data.ndim > 1 and data.shape[1] != outdata.shape[1]:    
-                        data = np.repeat(data[:, :1], outdata.shape[1], axis=1)    
-                    n = min(len(data), len(outdata))    
-                    outdata[:n] = data[:n] * self.audio_vol    
-                    outdata[n:] = 0    
-                except queue.Empty:    
-                    outdata[:] = 0    
+            def out_cb(outdata, frames, time_, status):        
+                try:        
+                    data = self.audio_q.get_nowait()        
+                    # Дренаж: часы входа/выхода расходятся — очередь        
+                    # накапливает лаг. Выкидываем старые блоки, играем        
+                    # только самый свежий.        
+                    while True:        
+                        try:        
+                            data = self.audio_q.get_nowait()        
+                        except queue.Empty:        
+                            break        
+                    # Вход ch может отличаться от выхода: привести каналы        
+                    # до копирования. Сначала берём канал 0 (моно), затем        
+                    # дублируем до числа каналов выхода — покрывает оба        
+                    # случая: моно->стерео и стерео->моно.        
+                    if data.ndim > 1 and data.shape[1] != outdata.shape[1]:        
+                        data = np.repeat(data[:, :1], outdata.shape[1], axis=1)        
+                    elif data.ndim == 1 and outdata.shape[1] > 1:        
+                        data = np.repeat(data[:, None], outdata.shape[1], axis=1)        
+                    n = min(len(data), len(outdata))        
+                    outdata[:n] = data[:n] * self.audio_vol        
+                    outdata[n:] = 0        
+                except queue.Empty:        
+                    outdata[:] = 0        
   
-            self.audio_out = sd.OutputStream(  
-                samplerate=fs_out, channels=ch, dtype="float32",  
-                blocksize=fs_out // 50, callback=out_cb)  # выход по умолчанию  
+            self.audio_out = sd.OutputStream(    
+                samplerate=fs_out, channels=ch, dtype="float32",    
+                blocksize=fs_out // 50, latency="low",    
+                callback=out_cb)  # выход по умолчанию    
             self.audio_in = sd.InputStream(  
                 device=idx, samplerate=fs_in, channels=ch,  
                 dtype="float32", blocksize=blk, callback=in_cb)  
@@ -587,6 +603,23 @@ class Panel(tk.Tk):
         if hasattr(self, "spec_cv"):    
             self.spec_cv.delete("all")    
         self.audio_btn.configure(text="Монитор")    
+
+    def _audio_restart(self):    
+        # Перезапуск монитора после save: стоп/старт обоих потоков.    
+        # Если монитор выключен — ничего не делаем.    
+        if self.audio_in is None:    
+            return    
+        self._log("# audio: рестарт после save")    
+        self._audio_stop()    
+        self._audio_toggle()    
+
+    def _save_timeout(self):      
+        # "# OK saved" не пришёл за 800 мс — рестарт по таймауту.      
+        self._save_timer = None      
+        if self._save_pending:      
+            self._save_pending = False      
+            self._log("# audio: рестарт по таймауту (OK saved не пришёл)")      
+            self._audio_restart()      
 
     def _rec_toggle(self):  
         if self.rec_stream is not None:  
@@ -1139,14 +1172,24 @@ class Panel(tk.Tk):
             self._log("> " + cmd)  
             self.w.send(cmd)  
   
-    def _cmd(self, cmd, redump=False):    
-        self._log("> " + cmd)    
-        self.w.send(cmd)    
-        if redump:    
-            # Ответ на load — "# OK ...", не фрейм: _send_next по нему не сработает.    
-            # Ставим дампы в очередь и запускаем её сами — иначе зависнут.    
-            self._pending += ["params dump", "state dump"]    
-            self.after(300, self._send_next)   # дать плате ответить на load    
+    def _cmd(self, cmd, redump=False):      
+        self._log("> " + cmd)      
+        self.w.send(cmd)      
+        if redump:      
+            # Ответ на load — "# OK ...", не фрейм: _send_next по нему не сработает.      
+            # Ставим дампы в очередь и запускаем её сами — иначе зависнут.      
+            self._pending += ["params dump", "state dump"]      
+            self.after(300, self._send_next)   # дать плате ответить на load      
+        if cmd.split()[0] == "save":          
+            # save глушит USB-поток на время flash-erase; после него          
+            # в ресемплере иногда остаются артефакты — перезапускаем          
+            # монитор по приходу "# OK saved" (см. _on_line).          
+            self._save_pending = True          
+            # Страховка: если OK не придёт (обрыв, плата молчит) —          
+            # рестарт по таймауту, чтобы флаг не висел вечно.          
+            if self._save_timer is not None:          
+                self.after_cancel(self._save_timer)          
+            self._save_timer = self.after(800, self._save_timeout)          
   
     def _send_manual(self):    
         cmd = self.cmd_var.get().strip()    
@@ -1239,9 +1282,23 @@ class Panel(tk.Tk):
             self._send_next()  
             return  
   
-        # --- ответ на set: обновить cur в таблице ---  
-        if line.startswith("# OK ") and "=" in line:  
-            self._refresh_param(line[5:])  
+        # --- подтверждение save -> рестарт монитора ---      
+        if self._save_pending:      
+            if line.startswith("# OK saved"):      
+                self._save_pending = False      
+                if self._save_timer is not None:      
+                    self.after_cancel(self._save_timer)      
+                    self._save_timer = None      
+                self._audio_restart()      
+            elif line.startswith("# ERR"):      
+                self._save_pending = False   # save не прошёл — рестарт не нужен      
+                if self._save_timer is not None:      
+                    self.after_cancel(self._save_timer)      
+                    self._save_timer = None      
+    
+        # --- ответ на set: обновить cur в таблице ---    
+        if line.startswith("# OK ") and "=" in line:    
+            self._refresh_param(line[5:])    
   
     def _on_version(self, line):  
         # "# version: RP2040_audio_dsp 2026.11.24 (schema=1 store=11)"  
