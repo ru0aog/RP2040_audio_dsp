@@ -1479,10 +1479,13 @@ class Panel(tk.Tk):
         if not self.schema_ok:
             self._log(f"# read-only: {cmd} не отправлено")
             return
-        self._cmd(f"{cmd} {'on' if val else 'off'}")    
-        # Перечитать живое состояние — плата могла отклонить (nr при nt on и т.п.)  
-        self._pending.append("state dump")  
-        self.after(300, self._send_next)  
+        self._cmd(f"{cmd} {'on' if val else 'off'}")      
+        # Перечитать живое состояние — плата могла отклонить (nr при nt on и т.п.)    
+        # params dump тоже: cw/rtty переписывают band lo/hi (cw_band_follow    
+        # ставит f0±250), иначе поля и красные маркеры спектра покажут    
+        # старую полосу.    
+        self._pending += ["params dump", "state dump"]    
+        self.after(300, self._send_next)    
   
     def _show_state(self, lines):    
         parts = []    

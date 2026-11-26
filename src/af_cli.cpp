@@ -1003,7 +1003,13 @@ static bool cli_param_try(char* line) {
         int32_t hi = (int32_t)(AF_GAIN_MAX * 100.0f);  // x2000.00      
         if (val < lo) val = lo;      
         if (val > hi) val = hi;      
-    }    
+    }
+    // cw noise: сеттер клампит в 0..100 — OK и банк должны  
+    // показывать фактическое значение, а не запрошенное.  
+    if (best->type == PT_U16 && strcmp(best->label, "cw noise") == 0) {  
+        if (val > 100) val = 100;  
+        if (val < 0)   val = 0;  
+    }  
     best->set(val);      
     af_fm_request_sync();   // cur изменился — SET.TXT перерендерить    
     if (best->type == PT_GAIN) {    

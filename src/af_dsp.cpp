@@ -630,7 +630,7 @@ static volatile uint32_t cw_noise = 0;     // подмес шума выключ
 // --- Постоянная добавка шума на вход CW-фильтра ---------------------------  
 // LFSR-шум малого уровня суммируется с сигналом: фильтр всегда возбуждён  
 // (не звенит на тишине, АРУ не хлопает), слабые сигналы проходят без  
-// порогов — сквелча нет. Уровень задаётся командой `cw noise` (0..2000).  
+// порогов — сквелча нет. Уровень задаётся командой `cw noise` (0..100).    
 static uint32_t cw_lfsr = 0x1ACEu;   // состояние ГПСП (не ноль!)  
   
 typedef struct {  
@@ -1328,10 +1328,10 @@ void af_dsp_set_cw_bw(uint32_t hz) {
     if (cw_on) cw_band_follow();  
 }
   
-void af_dsp_set_cw_noise(uint32_t lvl) {  
-    if (lvl > 2000) lvl = 2000;  
-    cw_noise = lvl;  
-}
+void af_dsp_set_cw_noise(uint32_t lvl) {    
+    if (lvl > 100) lvl = 100;    
+    cw_noise = lvl;    
+}  
 
 void af_dsp_set_agc(bool on) {  
     agc_on = on;  
