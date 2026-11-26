@@ -1237,6 +1237,18 @@ void af_dsp_set_rxnotch(bool on) {
 }  
 bool af_dsp_rxnotch_on(void) { return rx_notch_on; }
 
+void af_dsp_set_rxeq_on(bool on) {  
+    if (on && !rxeq_on)  
+        for (int i = 0; i < 3; i++)  
+            rxeq[i].x1 = rxeq[i].x2 = rxeq[i].y1 = rxeq[i].y2 = 0;  
+    rxeq_on = on;  
+}  
+void af_dsp_set_rxshelf_on(bool on) {  
+    if (on && !rxshelf_on)  
+        rxs_x1 = rxs_x2 = rxs_y1 = rxs_y2 = 0;  
+    rxshelf_on = on;  
+}  
+
 void af_dsp_set_rxpres(bool on) {  
     if (on && !rx_pres_on) {              // чистый старт — без щелчка  
         rxp_hp_x1 = rxp_hp_x2 = rxp_hp_y1 = rxp_hp_y2 = 0;  
@@ -1292,11 +1304,10 @@ void af_dsp_set_rxshelfq(uint32_t q_x100) {
     rx_shelf_q_x100 = q_x100;  
     rx_shelf_design();  
 }  
-int32_t  af_dsp_rxshelf(void)  { return rx_shelf_db_x10; }    
-uint32_t af_dsp_rxshelff(void) { return rx_shelf_freq_hz; }    
-uint32_t af_dsp_rxshelfq(void) { return rx_shelf_q_x100; }    
-void     af_dsp_set_rxshelf_on(bool on) { rxshelf_on = on; }    
-bool     af_dsp_rxshelf_on(void)        { return rxshelf_on; }    
+int32_t  af_dsp_rxshelf(void)  { return rx_shelf_db_x10; }      
+uint32_t af_dsp_rxshelff(void) { return rx_shelf_freq_hz; }      
+uint32_t af_dsp_rxshelfq(void) { return rx_shelf_q_x100; }      
+bool     af_dsp_rxshelf_on(void)        { return rxshelf_on; }      
 
 void af_dsp_set_rxeq(uint8_t band, int32_t db_x10) {   // band 0=lo 1=mid 2=hi    
     if (db_x10 < -240) db_x10 = -240;    
@@ -1312,10 +1323,9 @@ void af_dsp_set_rxeqf(uint8_t band, uint32_t hz) {     // частоты пол�
     else                { if (hz<1500) hz=1500; if (hz>5000) hz=5000; rxeq_hi_f=hz; }  
     rxeq_design();  
 }  
-int32_t  af_dsp_rxeq(uint8_t band)  { return band==0?rxeq_lo_db_x10:band==1?rxeq_mid_db_x10:rxeq_hi_db_x10; }    
-uint32_t af_dsp_rxeqf(uint8_t band) { return band==0?rxeq_lo_f:band==1?rxeq_mid_f:rxeq_hi_f; }    
-void     af_dsp_set_rxeq_on(bool on) { rxeq_on = on; }    
-bool     af_dsp_rxeq_on(void)        { return rxeq_on; }    
+int32_t  af_dsp_rxeq(uint8_t band)  { return band==0?rxeq_lo_db_x10:band==1?rxeq_mid_db_x10:rxeq_hi_db_x10; }      
+uint32_t af_dsp_rxeqf(uint8_t band) { return band==0?rxeq_lo_f:band==1?rxeq_mid_f:rxeq_hi_f; }      
+bool     af_dsp_rxeq_on(void)        { return rxeq_on; }      
 
 void af_dsp_set_rxexc(bool on) {  
     if (on && !rx_exc_on) {              // чистый старт — без щелчка  
@@ -1818,12 +1828,12 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             }
 
             // Полосовой FIR RX (установка полосы пропускания RX-тракта)
-            if (rxband_on) y = af_fir_push(y); {
-                // S-meter: EMA |y| Q16, ~10 мс — уровень в полосе до АРУ
-                int32_t ay = (y < 0) ? -y : y;
-                rx_in_lvl_q16 += (((int64_t)ay << 16) - rx_in_lvl_q16) >> 6;
-                if (ay > rx_in_peak) rx_in_peak = ay;   // пик за интервал чтения
-            }
+            if (rxband_on) { y = af_fir_push(y);    
+            if (y > 32767) y = 32767; if (y < -32768) y = -32768; }    
+            // S-meter: EMA |y| Q16, ~10 мс — уровень в полосе до АРУ  
+            int32_t ay = (y < 0) ? -y : y;  
+            rx_in_lvl_q16 += (((int64_t)ay << 16) - rx_in_lvl_q16) >> 6;  
+            if (ay > rx_in_peak) rx_in_peak = ay;   // пик за интервал чтения  
 
             // CW-фильтр и декодер
             if (cw_on) {  
@@ -1853,7 +1863,8 @@ void __not_in_flash_func(af_dsp_poll)(void) {
             // Гребёнка — после АРУ (контур не «отменяет» нотчи), но ДО пост-FIR:  
             // предельный цикл Q15-нотчей звенит на частотах 3/4/5 кГц вне полосы —  
             // постфильтр этот звон отрезает. Нотчи 1/2 кГц внутри полосы работают.  
-            if (rx_notch_on) s = (int16_t)rx_notch_push(s);      
+            if (rx_notch_on) s = sat16(rx_notch_push(s));   // звон нотчей > int16 —  
+                                                           // sat16, не cast  
               
             // Подчисточный FIR — те же тапы, что у входного band: срезает    
             // внеполосный мусор, который АРУ подняла и нотчи нагенерировали    
