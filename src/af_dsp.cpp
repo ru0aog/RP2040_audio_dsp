@@ -1354,7 +1354,7 @@ void af_dsp_set_agcref(int32_t v) {
 }  
 void af_dsp_set_agcmax(float g) {  
     if (g < 1.0f)    g = 1.0f;  
-    if (g > 1000.0f) g = 1000.0f;  
+    if (g > AF_GAIN_MAX) g = AF_GAIN_MAX;     // единый потолок с gain
     agc_max_gain = g;  
 }  
 void af_dsp_set_agcmin(float g) {  

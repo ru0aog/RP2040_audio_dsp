@@ -975,24 +975,37 @@ static bool cli_param_try(char* line) {
     } else {    
         val = (int32_t)strtol(v, NULL, 10);    
     }    
-    // gain: ввод множителем — кламп к [AF_GAIN_MIN..AF_GAIN_MAX] до записи,  
-    // чтобы банк и OK отражали фактическое значение, а не запрошенное.  
-    if (best->type == PT_GAIN) {  
-        int32_t lo = (int32_t)(AF_GAIN_MIN * 256.0f);  
-        int32_t hi = (int32_t)(AF_GAIN_MAX * 256.0f);  
-        if (val < lo) val = lo;  
-        if (val > hi) val = hi;  
+    // gain: ввод множителем — кламп к [AF_GAIN_MIN..AF_GAIN_MAX] до записи,    
+    // чтобы банк и OK отражали фактическое значение, а не запрошенное.    
+    if (best->type == PT_GAIN) {    
+        int32_t lo = (int32_t)(AF_GAIN_MIN * 256.0f);    
+        int32_t hi = (int32_t)(AF_GAIN_MAX * 256.0f);    
+        if (val < lo) val = lo;    
+        if (val > hi) val = hi;    
+    }  
+    // agc max/min (x100): тот же кламп — [x1 .. AF_GAIN_MAX] в единицах x100.    
+    // Сеттер af_dsp_set_agcmax/agcmin клампит runtime, но банк и OK    
+    // должны показывать фактическое значение, а не запрошенное.    
+    if (best->type == PT_X100) {    
+        int32_t lo = 100;                              // x1.00    
+        int32_t hi = (int32_t)(AF_GAIN_MAX * 100.0f);  // x2000.00    
+        if (val < lo) val = lo;    
+        if (val > hi) val = hi;    
     }  
     best->set(val);      
     af_fm_request_sync();   // cur изменился — SET.TXT перерендерить    
-    if (best->type == PT_GAIN) {  
-        // OK в кратности (как query-ответ выше): "OK gain=1.50"  
-        unsigned g100 = (unsigned)val * 100u / 256u;  
-        Serial.printf("# OK %s=%u.%02u\n", best->label,  
-                      g100 / 100u, g100 % 100u);  
-    } else {  
-        Serial.printf("# OK %s=%ld\n", best->label, (long)val);  
-    }  
+    if (best->type == PT_GAIN) {    
+        // OK в кратности (как query-ответ выше): "OK gain=1.50"    
+        unsigned g100 = (unsigned)val * 100u / 256u;    
+        Serial.printf("# OK %s=%u.%02u\n", best->label,    
+                      g100 / 100u, g100 % 100u);    
+    } else if (best->type == PT_X100) {    
+        // OK в множителе (как query-ответ выше): "OK agc max=100.00"    
+        Serial.printf("# OK %s=%ld.%02ld\n", best->label,    
+                      (long)(val / 100), (long)(val % 100));    
+    } else {    
+        Serial.printf("# OK %s=%ld\n", best->label, (long)val);    
+    }    
     return true;      
 }    
 

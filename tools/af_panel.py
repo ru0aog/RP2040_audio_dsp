@@ -1389,16 +1389,15 @@ class Panel(tk.Tk):
         if not parts:    
             return    
         val = parts[0]
-        p = self.params.get(label)      
-        if p:      
-            try:          
-                f = float(val)          
-                if p["type"] == "x100":        
-                    f /= 100.0          # OK отдаёт raw x100 -> множитель        
-                # gain: OK отдаёт множитель напрямую ("# OK gain=100.00")    
-                p["var"].set(int(f) if f == int(f) else f)             
-            except ValueError:      
-                p["var"].set(val)      
+        p = self.params.get(label)        
+        if p:        
+            try:            
+                f = float(val)            
+                # gain и x100: OK отдаёт множитель напрямую    
+                # ("# OK gain=100.00", "# OK agc max=2000.00") — без конверсии    
+                p["var"].set(int(f) if f == int(f) else f)               
+            except ValueError:        
+                p["var"].set(val)        
   
     def _mode_set(self, cmd, val):    
         # Флажок runtime-режима: команда немедленно, в банк не пишется.    
