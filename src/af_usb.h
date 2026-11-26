@@ -34,3 +34,5 @@ uint32_t af_usb_avail_max(void);   // макс. avail_frames ≈ ёмкость 
 void af_usb_set_muted(bool m);   // тишина в USB на время flash-окна    
 
 void af_usb_reenumerate(void);  
+
+void af_usb_reset_state(void);   // сброс Фарроу/bq_af/primed — после flash-окна  

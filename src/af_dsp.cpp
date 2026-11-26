@@ -1,6 +1,6 @@
 // src/af_dsp.cpp  
 // ============================================================================  
-// af_dsp.cpp — моно DSP-тракт НЧ (Core 1)  
+// af_dsp.cpp — DSP-тракт НЧ (Core 1)  
 //  
 // Тракт: uint16-блоки ADC (495 ksps) -> DC-EMA -> CIC /4 -> HB /2 -> HB /2  
 // -> HB /2 (15.625 ksps) -> полосовой FIR 127 (симметричный) -> CW-биквады ->  
@@ -10,15 +10,13 @@
 // TX-тракт (tx_on): тот же дециматор -> af_tx_process (FIR-компрессор-  
 // клиппер-постфильтр) -> те же очереди; выход PWM переключается GP0->GP1.  
 //  
-// Порт src/dsp/rx_dsp.cpp и src/audio/rx_audio.cpp из RP2040_receiver.  
-// Коэффициенты HB и константы NT/NR/AGC — 1:1 из приёмника.  
 // Весь горячий путь — целочисленный Q15/int64, без float, в RAM.  
 // ============================================================================  
-#include <Arduino.h>  
-#include <math.h>  
-#include <string.h>  
-#include "af_dsp.h"  
-#include "af_config.h"  
+#include <Arduino.h>
+#include <math.h>
+#include <string.h>
+#include "af_dsp.h"
+#include "af_config.h"
 #include "af_capture.h"
 #include "af_store.h"
 #include "af_voice.h"       // подмес голосовых клипов в выход
@@ -1545,7 +1543,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
     // в линиях задержки и сбитые EMA — на выходе гребёнка до ребута
     if (dsp_reset_req) {
         dsp_reset_req = false;
-        dc_est = 0;
+        dc_est = (int64_t)2048 << 8;
         memset(cic_int, 0, sizeof(cic_int));
         memset(cic_comb, 0, sizeof(cic_comb));
         cic_cnt = 0;

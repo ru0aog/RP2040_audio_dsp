@@ -414,9 +414,11 @@ bool af_store_save(uint8_t idx) {
                                         // XIP-кэше -> вис
     restore_interrupts(ints);
     af_capture_resume();                // рестарт цепочки A->B->A  
-    af_dsp_reset_state();               // сброс dc_est/FIR/NT/NR/АРУ на Core 1 —  
-                                        // иначе протухшие буферы дают гребёнку  
-    af_usb_set_muted(false);            // USB -> звук  
+    af_dsp_reset_state();               // сброс dc_est/FIR/NT/NR/АРУ на Core 1 —    
+                                        // иначе протухшие буферы дают гребёнку    
+    af_usb_reset_state();               // Фарроу/bq_af/primed — иначе стык через    
+                                        // 45-мс разрыв и раскачка rs_step    
+    af_usb_set_muted(false);            // USB -> звук (fade-in, если предусмотрен)    
     af_set_clk();                       // возврат на 320 МГц — обязательно,    
                                         // иначе следующий save входит в окно
                                         // на 125 МГц в нештатном состоянии

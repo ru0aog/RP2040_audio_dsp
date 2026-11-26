@@ -455,6 +455,20 @@ void af_usb_set_muted(bool m) {
     if (usb_muted && !m)  usb_fade = 1;     // unmute -> fade-in 0->256    
     if (!usb_muted && m)  usb_fade = 255;   // mute   -> fade-out 256->0    
     usb_muted = m;      
+}
+
+// Сброс состояния ресемплера/пост-фильтра к исходному — вызывать из  
+// af_store_save после af_dsp_reset_state(), пока USB ещё в mute.  
+void af_usb_reset_state(void) {  
+    rs_xm1 = rs_x0 = rs_x1 = rs_x2 = 0;  
+    rs_started = false;  
+    rs_init_count = 0;  
+    rs_advance_pending = false;  
+    rs_phase_q = 0;  
+    rs_step   = (float)AF_FS_OUT_HZ;                    // номинал, без adj  
+    rs_step_q = (uint32_t)((double)rs_step * (4294967296.0 / (double)AF_USB_FS_HZ));  
+    biquad_reset(bq_af);  
+    usb_primed = false;                                 // перезаправка с подушкой TARGET  
 }  
 
 // Пере-энумерация: хост перечитывает дескрипторы и каталог FAT.  
