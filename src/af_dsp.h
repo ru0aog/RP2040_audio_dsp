@@ -58,6 +58,7 @@ int32_t af_dsp_rxpres_nf(void);                // шумовой пол (stats)
 int32_t af_dsp_rx_in_lvl(void);                // уровень входа после FIR (S-meter)  
 int32_t af_dsp_rx_in_peak(void);               // пик |x| после FIR с прошлого чтения (сбрасывает)  
 float   af_dsp_agc_gain(void);                 // текущее усиление АРУ, множитель (stats)
+int32_t af_dsp_agc_avg(void);                  // средний уровень на входе АРУ, отсчёты (avg_q16>>16)  
 
 // Noise Blanker RX: подавитель импульсных помех на 125 ksps (после CIC).  
 void     af_dsp_set_nb(bool on);  

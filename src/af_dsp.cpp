@@ -31,7 +31,7 @@
 #include "modes/rtty_tx.h"  // RTTY-передатчик: rttytx_sample (Core 1) / rttytx_* (Core 0)  
 #include "modes/tt_gen.h"
 
-static uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
+static volatile uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
 static volatile bool snr_reset_req = false;  // запрос сброса spec-NR (Core 0 -> Core 1)  
   
 uint8_t af_dsp_nrmode(void) { return nr_mode; }  
@@ -1863,6 +1863,12 @@ float af_dsp_agc_gain(void) {
     if (g > max_g) g = max_g;  
     if (g < min_g) g = min_g;  
     return g;  
+}  
+
+// Средний уровень на входе АРУ (после NT/NR), отсчёты.  
+// agc_gain ≈ agc_ref / avg — для диагностики в sig.  
+int32_t af_dsp_agc_avg(void) {  
+    return (int32_t)(agc_avg_q16 >> 16);  
 }  
 
 uint32_t af_dsp_band_lo_hz(void) { return af_lo_hz; }  

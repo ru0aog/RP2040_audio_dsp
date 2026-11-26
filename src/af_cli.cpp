@@ -1219,20 +1219,23 @@ static void cli_exec(char* line) {
     AF_FM_WAV_CLUSTERS, AF_FM_FREE_LBA, AF_FM_SECTOR_COUNT,  
     (unsigned long)AF_FM_WAV_MAX_SAMP);  
     }
-    else if (strcmp(cmd, "sig") == 0) {  
-        // Уровень входа и усиление АРУ — одной строкой, для опроса из панели.  
-        // Формат: "# sig lvl=<q15> inpk=<q15> agc=<x.xx> dbfs=<-xx.x>"  
-        int32_t lvl = af_dsp_rx_in_lvl();  
-        int32_t pk  = af_dsp_rx_in_peak();  
-        float   g   = af_dsp_agc_gain();  
-        // dBFS по среднему уровню: 20*log10(lvl/32768), lvl=0 -> -120  
-        float dbfs = (lvl > 0) ? 20.0f * log10f((float)lvl / 32768.0f) : -120.0f;  
-        Serial.printf("# sig lvl=%ld inpk=%ld agc=%ld.%02ld dbfs=%ld.%01ld\n",  
-            (long)lvl, (long)pk,  
-            (long)g, (long)(g * 100.0f) % 100,  
-            (long)dbfs, (long)(fabsf(dbfs) * 10.0f) % 10);  
+    else if (strcmp(cmd, "sig") == 0) {    
+        // Уровень входа и усиление АРУ — одной строкой, для опроса из панели.    
+        // Формат: "# sig lvl=<q15> inpk=<q15> avg=<q15> agc=<x.xx> dbfs=<-xx.x>"    
+        int32_t lvl = af_dsp_rx_in_lvl();    
+        int32_t pk  = af_dsp_rx_in_peak();    
+        int32_t avg = af_dsp_agc_avg();        // уровень на входе АРУ (после NT/NR)    
+        float   g   = af_dsp_agc_gain();    
+        // dBFS по среднему уровню: 20*log10(lvl/32768), lvl=0 -> -120    
+        float dbfs = (lvl > 0) ? 20.0f * log10f((float)lvl / 32768.0f) : -120.0f;    
+        // dbfs печатаем вручную: знак + целая + десятая (printf %f может быть выключен)    
+        long db_i = (long)dbfs;                       // -23    
+        long db_f = (long)(fabsf(dbfs) * 10.0f) % 10; // 4    
+        Serial.printf("# sig lvl=%ld inpk=%ld avg=%ld agc=%ld.%02ld dbfs=%ld.%ld\n",    
+                      (long)lvl, (long)pk, (long)avg,    
+                      (long)g, (long)(g * 100.0f) % 100,    
+                      db_i, db_f);    
     }  
-
 
     else if (strcmp(cmd, "version") == 0) {  
         Serial.printf("# version: %s %s (schema=%u store=%u)\n",  
