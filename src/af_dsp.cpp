@@ -30,6 +30,7 @@
 #include "modes/rtty_rx.h"  // RTTY-декодер: rttydec_push (Core 1) / rttydec_poll (Core 0)
 #include "modes/rtty_tx.h"  // RTTY-передатчик: rttytx_sample (Core 1) / rttytx_* (Core 0)  
 #include "modes/tt_gen.h"
+#include "modes/jtty_tx.h"  // JTTY-передатчик: jttytx_sample (Core 1) / jttytx_* (Core 0)  
 
 static volatile uint8_t nr_mode = 0;              // 0=LMS ALE, 1=spectral  
 static volatile bool snr_reset_req = false;  // запрос сброса spec-NR (Core 0 -> Core 1)  
@@ -946,7 +947,9 @@ static volatile int32_t lim_ceil     = LIMIT_CEIL;     // потолок лим�
 static volatile bool tx_on = false;   // false=RX, true=TX (PTT GP8 / "tx on")      
 static volatile bool cwtx_started = false;   // TX поднят командой `cw tx` —    
                                              // авто-возврат в RX по концу посылки    
-static volatile bool rttytx_started = false; // то же для `rtty tx`    
+static volatile bool rttytx_started = false; // то же для `rtty tx`
+static volatile bool jttytx_started = false; // то же для `jtty tx`  
+
 
 static inline int16_t __not_in_flash_func(agc_limit)(int32_t x) {  
     // --- Контур A: медленное среднее |x| ---  
@@ -1620,7 +1623,20 @@ bool af_dsp_rttytx_start(const char* text) {
 bool af_dsp_rttytx_started(void) { return rttytx_started; }    
 void af_dsp_rttytx_clear_started(void) { rttytx_started = false; }    
 bool af_dsp_rttytx_busy(void) { return rttytx_busy(); }    
-  
+
+// --- JTTY-передатчик (Core 0) ---  
+// Постановка текста + подъём TX; возврат в RX — в loop() по !jttytx_busy().  
+bool af_dsp_jttytx_start(const char* text) {  
+    if (cwtx_busy() || rttytx_busy()) return false;  // взаимоисключение  
+    if (!jttytx_send(text)) return false;  // упаковка не удалась — TX не поднимаем  
+    jttytx_started = true;  
+    af_dsp_set_tx(true);  
+    return true;  
+}  
+bool af_dsp_jttytx_started(void) { return jttytx_started; }  
+void af_dsp_jttytx_clear_started(void) { jttytx_started = false; }  
+bool af_dsp_jttytx_busy(void) { return jttytx_busy(); }  
+
 // ---------------------------------------------------------------------------  
 // Инициализация (Core 0, до af_capture_start)  
 // ---------------------------------------------------------------------------  
@@ -1641,19 +1657,20 @@ void af_dsp_init(void) {
     cic_cnt = 0;  
   
     af_fir_init();  
-    af_fir_init2();   // тапы подчистки (band, 63 отвода)  
+    af_fir_init2();           // тапы подчистки (band, 63 отвода)  
     af_fir_init3();  
-    cw_design();          // начальные коэффициенты CW-секций  
-    rx_notch_design();    // коэффициенты фиксированных нотчей RX
+    cw_design();              // начальные коэффициенты CW-секций  
+    rx_notch_design();        // коэффициенты фиксированных нотчей RX
     rx_pres_hp_design();      // HP-детектор presence    
     rx_pres_pk_design(32768); // peaking = байпас при старте      
     rx_shelf_design();        // коэффициенты RX low-shelf    
     rxeq_design();            // коэффициенты 3-полосного EQ (старт = байпас)    
     rx_exc_design();          // ФВЧ-биквады эксайтера  
     af_snr_init();            // таблицы окна/twiddles/bit-reverse спектрального NR    
-    af_tx_init();         // TX: FIR-компрессор-клиппер          
+    af_tx_init();             // TX: FIR-компрессор-клиппер          
     cwtx_init((float)cw_f0);  // NCO + LUT синуса CW-передатчика (Core 0, float)        
-    rttytx_init();            // NCO + LUT синуса RTTY-передатчика (mark=1085, space=915)        
+    rttytx_init();            // NCO + LUT синуса RTTY-передатчика (mark=1085, space=915)
+    jttytx_init();            // NCO + LUT синуса JTTY-передатчика (4 тона, центр 1000 Гц)  
     tt_gen_init();            // LUT синуса двухтонального генератора (700/1900)        
   
     memset(&out_pwm, 0, sizeof(out_pwm));    
@@ -1847,6 +1864,11 @@ void __not_in_flash_func(af_dsp_poll)(void) {
                     // Полосовой FIR 200..1800 срезает шумовой пол и
                     // гармоники LUT вне полосы — спектр на USB чистый.
                     t = sat16(af_tx_rtty_fir_push(rttytx_sample()));
+                } else if (jttytx_busy()) {  
+                    // JTTY-посылка: 4-FSK 31.25 Бод, непрерывная фаза —  
+                    // в обход af_tx_process (клиппер исказил бы тоны).  
+                    // Тот же FIR 700..1400: тоны 953..1047 Гц в полосе.  
+                    t = sat16(af_tx_rtty_fir_push(jttytx_sample()));  
                 } else {
                     t = af_tx_process(tx_in);            // play: запись вместо микрофона
                 }

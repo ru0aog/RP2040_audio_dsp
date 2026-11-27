@@ -31,6 +31,7 @@
 #include "src/modes/cw_tx.h"
 #include "src/modes/rtty_rx.h"    // rttydec_poll — RTTY-декодер на Core 0
 #include "src/modes/rtty_tx.h"    // rttytx_poll — RTTY-передатчик на Core 0
+#include "src/modes/jtty_tx.h"    // jttytx_poll — JTTY-передатчик на Core 0  
 
 volatile bool core0_ready = false;    
 static uint32_t core0_busy_us = 0;    
@@ -228,17 +229,24 @@ void loop() {
     rttydec_poll();     // RTTY: дренаж очереди + RSID/сканер/декодер
     cwtx_poll();        // CW-передатчик: подача элементов/пауз в cwtx_el_rem        
     rttytx_poll();      // RTTY-передатчик: подача битов в rttytx_bit_rem    
-    af_oled_poll();     // OLED: отложенная перерисовка (пачками, не на каждый символ)    
+    jttytx_poll();      // JTTY-передатчик: подача символов в tx_pend_* 
+    af_oled_poll();     // OLED: отложенная перерисовка (пачками, не на каждый символ)
+    
     // CW-посылка отыграна — вернуться в RX (ADC обратно на GP26, PWM на GP0)      
     if (af_dsp_cwtx_started() && !af_dsp_cwtx_busy()) {      
         af_dsp_cwtx_clear_started();    
         af_dsp_set_tx(false);    
     }    
-    // RTTY-посылка отыграна — то же самое    
-    if (af_dsp_rttytx_started() && !af_dsp_rttytx_busy()) {      
-        af_dsp_rttytx_clear_started();    
-        af_dsp_set_tx(false);    
-    }    
+    // RTTY-посылка отыграна — то же самое      
+    if (af_dsp_rttytx_started() && !af_dsp_rttytx_busy()) {        
+        af_dsp_rttytx_clear_started();      
+        af_dsp_set_tx(false);      
+    }      
+    // JTTY-посылка отыграна — то же самое  
+    if (af_dsp_jttytx_started() && !af_dsp_jttytx_busy()) {  
+        af_dsp_jttytx_clear_started();  
+        af_dsp_set_tx(false);  
+    }  
     af_usb_poll();      // и ещё раз в конце — сглаживает джиттер итерации     
 
     watchdog_update();  

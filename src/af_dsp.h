@@ -187,6 +187,12 @@ bool af_dsp_rttytx_started(void);
 void af_dsp_rttytx_clear_started(void);    
 bool af_dsp_rttytx_busy(void);    
 
+// --- JTTY-передатчик ---  
+bool af_dsp_jttytx_start(const char* text);   // текст -> упаковка + TX on; false = занято/ошибка упаковки  
+bool af_dsp_jttytx_started(void);             // TX поднят командой jtty tx  
+void af_dsp_jttytx_clear_started(void);       // сброс флага после возврата в RX  
+bool af_dsp_jttytx_busy(void);                // посылка ещё играет  
+
 // двухтоновый генератор
 bool af_dsp_tt_start(uint32_t f1, uint32_t f2);    
 void af_dsp_tt_stop(void);    

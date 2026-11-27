@@ -45,6 +45,7 @@
 #include "modes/cw_tx.h"     // cwtx_set_wpm/cwtx_abort
 #include "modes/rtty_rx.h"   // rttydec_set_* — RTTY-декодер
 #include "modes/rtty_tx.h"   // rttytx_abort — RTTY-передатчик 
+#include "modes/jtty_tx.h"   // jttytx_abort/jttytx_selftest — JTTY-передатчик  
 
 // Загрузка Core 0 из RP2040_audio_dsp.cpp (busy-время loop, ‰).  
 extern uint32_t af_core0_load_permille(void);  
@@ -104,7 +105,9 @@ static void cli_help(void) {
     Serial.println("#   rtty sql <0..1>   — сквелч декодера (0 = off, 0.15 = дефолт)");
     Serial.println("#   rtty dbg on|off   — диагностика # scan:/# trk: в Serial");    
     Serial.println("#   rtty tx <текст>   — передать посылку RTTY 45.45/170 (центр 1000 Гц, авто-возврат в RX)");    
-    Serial.println("#   rtty abort        — оборвать посылку RTTY");    
+    Serial.println("#   rtty abort        — оборвать посылку RTTY");
+    Serial.println("#   jtty tx <текст>   — передать посылку JTTY (4-FSK 31.25 Бод, центр 1000 Гц, авто-возврат в RX)");  
+    Serial.println("#   jtty abort        — оборвать посылку JTTY;  jtty test — эталонные вектора кодека");  
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
     Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
     Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
@@ -1331,7 +1334,9 @@ static void cli_exec(char* line) {
             Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);      
             Serial.printf("R|vbcn|%u\n",     af_gpio_vbcn_on() ? 1 : 0);      
             Serial.printf("R|cwtx|%u\n",     af_dsp_cwtx_busy() ? 1 : 0);    
-            Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);    
+            Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);
+            Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);      
+            Serial.printf("R|jttytx|%u\n",   af_dsp_jttytx_busy() ? 1 : 0);      
             Serial.printf("R|tt|%u\n",       af_dsp_tt_busy() ? 1 : 0);    
             Serial.printf("R|rec|%u\n",      af_rec_is_recording() ? 1 : 0);    
             Serial.printf("R|play|%u\n",     af_rec_is_playing() ? 1 : 0);    
@@ -1666,7 +1671,34 @@ static void cli_exec(char* line) {
             Serial.println("# ERR: rtty tx <текст>|abort (on|off|scan|rsid|rev|ctr|sql|dbg — метки)");    
         }    
     }    
-
+    else if (strcmp(cmd, "jtty") == 0) {  
+        // Подкоманды с аргументом-строкой: tx, abort, test.  
+        char* sub = strtok(NULL, " \t");  
+        if (sub == NULL) { Serial.println("# ERR: jtty tx <текст>|abort|test"); return; }  
+  
+        if (strcmp(sub, "tx") == 0) {  
+            char* v = strtok(NULL, "");          // весь остаток строки — текст посылки  
+            if (v == NULL) { Serial.println("# ERR: jtty tx <текст>"); return; }  
+            while (*v == ' ' || *v == '\t') ++v;  
+            if (*v == '\0') { Serial.println("# ERR: jtty tx <текст>"); return; }  
+            if (af_dsp_jttytx_start(v)) {  
+                // '>' печатает сам jttytx_send — здесь не дублируем  
+                Serial.printf("# OK jtty tx: %s\n", v);  
+            } else {  
+                Serial.println("# ERR jtty tx: busy или ошибка упаковки");  
+            }  
+        }  
+        else if (strcmp(sub, "abort") == 0) {  
+            jttytx_abort();  
+            Serial.println("# OK jtty tx abort");  
+        }  
+        else if (strcmp(sub, "test") == 0) {  
+            jttytx_selftest();                   // эталонные вектора WSJT-X -> Serial  
+        }  
+        else {  
+            Serial.println("# ERR: jtty tx <текст>|abort|test");  
+        }  
+    }  
     else if (strcmp(cmd, "save") == 0) {  
         char* v = strtok(NULL, " \t");  
         if (v == NULL) { Serial.println("# ERR: save <1..7>"); return; }  
