@@ -32,7 +32,7 @@ void    af_gpio_vbcn_set(uint32_t period_s);   // голосовой маяк, 0
 bool    af_gpio_vbcn_on(void);    
 
 // Мультимодовый маяк GP7: CW -> JTTY -> RTTY, стоп по концу цикла.  
-void af_gpio_mbcn_set(bool on);    // on=false — запрос стопа (цикл доиграется)  
+bool af_gpio_mbcn_set(bool on);    // on=false — запрос стопа; false = отказ (пустой слот)  
 bool af_gpio_mbcn_on(void);  
 void af_gpio_mbcn_abort(void);     // немедленный обрыв посылки и маяка  
 

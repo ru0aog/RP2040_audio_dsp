@@ -1705,8 +1705,8 @@ static void cli_exec(char* line) {
         // off — стоп по завершении полного цикла; abort — немедленный обрыв.  
         char* s = strtok(NULL, " \t");  
         if (s && strcmp(s, "on") == 0) {  
-            af_gpio_mbcn_set(true);  
-            Serial.println("# OK mbcn on");  
+            if (af_gpio_mbcn_set(true)) Serial.println("# OK mbcn on");  
+            else                        Serial.println("# ERR mbcn: slot empty");  
         } else if (s && strcmp(s, "off") == 0) {  
             af_gpio_mbcn_set(false);  
             Serial.println("# OK mbcn off (стоп после конца цикла)");  

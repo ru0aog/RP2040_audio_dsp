@@ -163,13 +163,14 @@ static void apply_nt(bool grounded) {
 // --- Мультимодовый маяк: CW -> JTTY -> RTTY, стоп по концу цикла ---  
 // on=true — запуск (пустой слот -> отказ), on=false — запрос остановки  
 // (фактический стоп после завершения текущего цикла, в poll).  
-void af_gpio_mbcn_set(bool on) {  
-    if (on) {  
-        if (mbcn_on) return;  
-        if (af_cw_msgs[af_gpio_msg_sel()][0] == '\0') {  
-            Serial.println(F("[GPIO] mbcn: slot empty"));  
-            return;  
-        }  
+void af_gpio_mbcn_set(bool on) {    
+    if (on) {    
+        if (mbcn_on) { mbcn_stop_req = false; return; }  // повторный LOW отменяет отложенный стоп  
+        Serial.printf("[GPIO] GP%u GND -> mbcn on\n", ctl_bypass.pin);  
+        if (af_cw_msgs[af_gpio_msg_sel()][0] == '\0') {    
+            Serial.println(F("[GPIO] mbcn: slot empty"));    
+            return;    
+        }    
         beacon_on = false;                       // взаимоисключение маяков  
         vbcn_on   = false;  
         mbcn_on = true; mbcn_stop_req = false;  
@@ -178,6 +179,7 @@ void af_gpio_mbcn_set(bool on) {
         Serial.println(F("[GPIO] mbcn on"));  
     } else {  
         if (!mbcn_on) return;  
+        Serial.printf("[GPIO] GP%u open -> mbcn stop req\n", ctl_bypass.pin);  
         mbcn_stop_req = true;                    // стоп после конца цикла  
         Serial.println(F("[GPIO] mbcn: stop after cycle"));  
     }  
@@ -197,15 +199,9 @@ void af_gpio_mbcn_abort(void) {
     Serial.println(F("[GPIO] mbcn abort"));  
 }  
   
-// GP7: LOW -> старт, open -> запрос стопа (цикл доигрывается до конца)  
-static void apply_mbcn(bool grounded) {  
-    if (grounded) {  
-        Serial.printf("[GPIO] GP%u GND -> mbcn on\n", ctl_bypass.pin);  
-        af_gpio_mbcn_set(true);  
-    } else {  
-        Serial.printf("[GPIO] GP%u open -> mbcn stop req\n", ctl_bypass.pin);  
-        af_gpio_mbcn_set(false);  
-    }  
+// GP7: LOW -> старт, open -> запрос стопа (цикл доигрывается до конца)    
+static void apply_mbcn(bool grounded) {    
+    af_gpio_mbcn_set(grounded);   // печать событий — внутри сеттера  
 }  
 
 static void apply_ptt(bool grounded) {      
@@ -546,7 +542,6 @@ void af_gpio_vbcn_set(uint32_t period_s) {
 bool af_gpio_vbcn_on(void) { return vbcn_on; }    
 
 
-// добиватель РТТ
 void af_gpio_ctl_poll(void) {    
     const uint32_t now = millis();    
     if ((int32_t)(now - t_next_poll) < 0) return;    
