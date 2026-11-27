@@ -92,7 +92,7 @@ static void cli_help(void) {
     Serial.println("#   cw agcmax <1..2000> — потолок АРУ ТЛГ, множитель (дефолт x50)");  
     Serial.println("#   cw tx <текст>     — передать посылку CW (тон = cw f0, авто-возврат в RX)");    
     Serial.println("#   cw txwpm <5..60>  — скорость передачи;  cw abort — оборвать посылку");
-    Serial.println("#   cw msg <1..4> [cw|rtty|jtty|null] <текст> — слот CW.TXT (мода по умолч. cw; null = пустой слот)");        
+    Serial.println("#   cw msg <0..3> [mode]|msgs|clr|key <mode> <текст> — слот CW.TXT (мода по умолч. cw; null = пустой слот)");
     Serial.println("#   cw msgs           — показать 4 сообщения магнитофона");      
     Serial.println("#   cw key off|on|iambic_a|iambic_b|straight — ключ на GP11/GP12");        
     Serial.println("#   cw beacon <5..3600> <текст> — CW-маяк с автоповтором; off — стоп");
@@ -1507,9 +1507,9 @@ static void cli_exec(char* line) {
         else if (strcmp(sub, "msg") == 0) {      
             char* n = strtok(NULL, " \t");      
             char* v = strtok(NULL, "");      
-            if (n == NULL) { Serial.println("# ERR: cw msg <1..4> [cw|rtty|jtty|null] <текст>"); return; }      
-            int idx = (int)strtoul(n, NULL, 10);      
-            if (idx < 1 || idx > AF_CW_MSGS) { Serial.println("# ERR: cw msg <1..4>"); return; }      
+            if (n == NULL) { Serial.println("# ERR: cw msg <0..3> [cw|rtty|jtty|null] <текст>"); return; }        
+            int idx = (int)strtoul(n, NULL, 10);        
+            if (idx < 0 || idx >= AF_CW_MSGS) { Serial.println("# ERR: cw msg <0..3>"); return; }        
             if (v == NULL) v = (char*)"";      
             while (*v == ' ' || *v == '\t') ++v;      
   
@@ -1529,17 +1529,18 @@ static void cli_exec(char* line) {
                 while (*v == ' ' || *v == '\t') ++v;  
             }  
   
-            strncpy(af_cw_msgs[idx - 1], v, AF_CW_MSG_LEN - 1);        
-            af_cw_msgs[idx - 1][AF_CW_MSG_LEN - 1] = '\0';        
-            if (mode < 0)  
-                mode = (af_cw_msgs[idx - 1][0] != '\0') ? AF_CW_MODE_CW : AF_CW_MODE_NULL;  
-            if (mode == AF_CW_MODE_NULL)  
-                af_cw_msgs[idx - 1][0] = '\0';   // null — текст не храним  
-            af_cw_mode[idx - 1] = (uint8_t)mode;  
-            if (af_store_cw_save()) {  
-                static const char* mn[] = { "NULL", "CW", "RTTY", "JTTY" };  
-                Serial.printf("# OK cw msg %d: %s \"%s\"\n", idx,  
-                              mn[mode], af_cw_msgs[idx - 1]);  
+            strncpy(af_cw_msgs[idx], v, AF_CW_MSG_LEN - 1);          
+            af_cw_msgs[idx][AF_CW_MSG_LEN - 1] = '\0';          
+            if (mode < 0)    
+                mode = (af_cw_msgs[idx][0] != '\0') ? AF_CW_MODE_CW : AF_CW_MODE_NULL;    
+            if (mode == AF_CW_MODE_NULL)    
+                af_cw_msgs[idx][0] = '\0';   // null — текст не храним    
+            af_cw_mode[idx] = (uint8_t)mode;    
+            if (af_store_cw_save()) {    
+                af_fm_request_sync();   // CW.TXT на диске перерендерить  
+                static const char* mn[] = { "NULL", "CW", "RTTY", "JTTY" };    
+                Serial.printf("# OK cw msg %d: %s \"%s\"\n", idx,    
+                              mn[mode], af_cw_msgs[idx]);    
             } else {        
                 Serial.println("# ERR cw msg: flash write failed");   
             }  
@@ -1548,10 +1549,26 @@ static void cli_exec(char* line) {
             static const char* mn[] = { "NULL", "CW", "RTTY", "JTTY" };  
             for (uint8_t i = 0; i < AF_CW_MSGS; i++) {  
                 uint8_t m = af_cw_mode[i];  
-                Serial.printf("# msg %u: %s \"%s\"\n", (unsigned)(i + 1),  
-                              mn[m <= AF_CW_MODE_JTTY ? m : 0], af_cw_msgs[i]);  
+                Serial.printf("# msg %u: %s \"%s\"\n", (unsigned)i,    
+                              mn[m <= AF_CW_MODE_JTTY ? m : 0], af_cw_msgs[i]);    
             }  
         }      
+        else if (strcmp(sub, "clr") == 0) {  
+            // Сброс слотов на дефолты AF_CW_DEFAULTS (CW+RTTY+JTTY+NULL)  
+            memset(af_cw_msgs, 0, sizeof(af_cw_msgs));  
+            memset(af_cw_mode, 0, sizeof(af_cw_mode));  
+            for (uint8_t i = 0; i < AF_CW_MSGS; i++) {  
+                af_cw_mode[i] = AF_CW_DEFAULTS[i].mode;  
+                if (AF_CW_DEFAULTS[i].text[0])  
+                    strncpy(af_cw_msgs[i], AF_CW_DEFAULTS[i].text, AF_CW_MSG_LEN - 1);  
+            }  
+            if (af_store_cw_save()) {  
+                af_fm_request_sync();   // CW.TXT на диске перерендерить  
+                Serial.println("# OK cw clr: defaults restored");  
+            } else {  
+                Serial.println("# ERR cw clr: flash write failed");  
+            }  
+        }  
 
         else if (strcmp(sub, "key") == 0) {      
             char* a2 = strtok(NULL, " \t");      
@@ -1685,9 +1702,9 @@ static void cli_exec(char* line) {
             if (v == NULL) { Serial.println("# ERR: rtty tx <текст>"); return; }    
             while (*v == ' ' || *v == '\t') ++v;    
             if (*v == '\0') { Serial.println("# ERR: rtty tx <текст>"); return; }    
-            if (af_dsp_rttytx_start(v)) {    
-                af_oled_putc('>');      // маркер начала передачи на экране    
-                Serial.printf("# OK rtty tx: %s\n", v);    
+            if (af_dsp_rttytx_start(v)) {      
+                // '>' печатает сам rttytx_send — здесь не дублируем    
+                Serial.printf("# OK rtty tx: %s\n", v);      
             } else {    
                 Serial.println("# ERR rtty tx: busy или пустая посылка");    
             }    
@@ -1729,8 +1746,8 @@ static void cli_exec(char* line) {
         }  
     }
     else if (strcmp(cmd, "mbcn") == 0) {  
-        // Маяк GP7: слот GP13/GP28 в его моде, повтор 3 с; off/abort — немедленный обрыв.
-        // off — стоп по завершении полного цикла; abort — немедленный обрыв.  
+        // Маяк GP7: слот в его моде (CW.TXT), повтор 3 с; off/abort — немедленный обрыв.  
+        // on [0..3] — слот из команды, без N — с пинов GP13/GP28.  
         char* s = strtok(NULL, " \t");  
         if (s && strcmp(s, "on") == 0) {  
             char* n = strtok(NULL, " \t");  
