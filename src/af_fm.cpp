@@ -17,8 +17,10 @@
 // SET.TXT генерируется af_cli_format_banks() — тот же текст, что 'banks'.      
 // Запись с ПК: дебаунс 800 мс -> af_cli_apply_set_txt -> банки во flash.      
 //
-// CW.TXT — 4 строки вызовов (af_cw_msgs, af_store.cpp). Пустая строка =      
-// голосовой слот. Запись с ПК: дебаунс 800 мс -> парсер -> af_store_cw_save.    
+// CW.TXT — 4 слота сообщений (af_cw_msgs + af_cw_mode, af_store.cpp).  
+// Формат записи: N=MODE:TEXT (N=0..3, MODE=CW|RTTY|JTTY) или N=NULL.  
+// Записи разделяются переводом строки или '|'. Запись с ПК:  
+// дебаунс 800 мс -> парсер -> af_store_cw_save.  
 //      
 // Аплоад: перезапись RECn.WAV -> стриминг-конвертер -> инкрементальный      
 // ADPCM-encode -> ram_buf (нибблы, ~29 с) -> слот n. Любой WAV (PCM 8/16/24/32 бит,      
@@ -351,51 +353,113 @@ void af_fm_sync(void) {
         prev_sizes[i] = wav_sizes[i];      
     }        
     first_sync = false;    
-    // CW.TXT: 4 строки из af_cw_msgs, CRLF, хвост — пробелы (чистый вид    
-    // в редакторе; парсер пробелы/CRLF пропускает).    
-    {    
-        uint8_t* cw = &fm_disk[AF_FM_CW_RAM][0];      
-        memset(cw, ' ', AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE);    
-        uint32_t off = 0;    
-        for (uint8_t i = 0; i < AF_CW_MSGS; i++) {    
-            size_t l = strlen(af_cw_msgs[i]);    
-            if (off + l + 2 > AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE) break;    
-            memcpy(cw + off, af_cw_msgs[i], l);    
-            off += l;    
-            cw[off++] = '\r'; cw[off++] = '\n';    
-        }    
-    }    
+    // CW.TXT: 4 записи N=MODE:TEXT / N=NULL из af_cw_msgs+af_cw_mode,  
+    // CRLF между записями, хвост — пробелы.  
+    {  
+        static const char mode_names[4][5] = { "NULL", "CW", "RTTY", "JTTY" };  
+        uint8_t* cw = &fm_disk[AF_FM_CW_RAM][0];  
+        uint32_t cap = AF_FM_CW_CLUSTERS * AF_FM_SECTOR_SIZE;  
+        memset(cw, ' ', cap);  
+        uint32_t off = 0;  
+        for (uint8_t i = 0; i < AF_CW_MSGS; i++) {  
+            uint8_t m = af_cw_mode[i];  
+            if (m > AF_CW_MODE_JTTY) m = AF_CW_MODE_NULL;  
+            // "N=MODE:" или "N=NULL"  
+            int h = snprintf((char*)cw + off, cap - off, "%u=%s",  
+                             (unsigned)i, mode_names[m]);  
+            if (h < 0 || (uint32_t)h >= cap - off) break;  
+            off += (uint32_t)h;  
+            if (m != AF_CW_MODE_NULL && af_cw_msgs[i][0]) {  
+                size_t l = strlen(af_cw_msgs[i]);  
+                if (off + 1 + l + 2 > cap) break;  
+                cw[off++] = ':';  
+                memcpy(cw + off, af_cw_msgs[i], l);  
+                off += l;  
+            }  
+            if (off + 2 > cap) break;  
+            cw[off++] = '\r'; cw[off++] = '\n';  
+        }  
+    }  
     fm_build_dir(fm_set_len, set_clusters, wav_sizes);   // FAT — синтез    
     fm_stale = false;        
 }      
 
 static void ul_commit(void);   // определена ниже — коммит аплоада по таймауту  
 
-// Парсер CW.TXT: до 4 непустых строк -> af_cw_msgs -> flash.    
-// Пустые строки пропускаются; строка > AF_CW_MSG_LEN-1 обрезается.    
-static void cw_txt_parse(const char* txt, uint32_t cap) {    
-    uint8_t idx = 0;    
-    uint32_t pos = 0;    
-    while (pos < cap && idx < AF_CW_MSGS) {    
-        // пропустить пробелы/CR/LF    
-        while (pos < cap && (txt[pos] == ' ' || txt[pos] == '\r' ||    
-                             txt[pos] == '\n' || txt[pos] == '\t')) pos++;    
-        if (pos >= cap || txt[pos] == '\0') break;    
-        char line[AF_CW_MSG_LEN];    
-        uint8_t l = 0;    
-        while (pos < cap && txt[pos] != '\r' && txt[pos] != '\n' &&    
-               l < AF_CW_MSG_LEN - 1)    
-            line[l++] = txt[pos++];    
-        line[l] = '\0';    
-        // обрезать хвостовые пробелы    
-        while (l > 0 && line[l - 1] == ' ') line[--l] = '\0';    
-        memcpy(af_cw_msgs[idx], line, l + 1);   // l==0 -> пустая строка = голосовой слот    
-        idx++;      
-        while (pos < cap && (txt[pos] == '\r' || txt[pos] == '\n')) pos++;    
-    }    
-    // Оставшиеся строки — пустые (голосовые слоты)    
-    for (; idx < AF_CW_MSGS; idx++) af_cw_msgs[idx][0] = '\0';    
-}    
+// Парсер CW.TXT: записи "N=MODE:TEXT" или "N=NULL" -> af_cw_msgs+af_cw_mode.  
+// Разделитель записей — перевод строки или '|'. N = номер слота 0..3  
+// (явный — порядок записей в файле произвольный). MODE = CW|RTTY|JTTY;  
+// NULL или отсутствие MODE/TEXT = пустой слот. Неупомянутые слоты не трогаем.  
+static void cw_txt_parse(const char* txt, uint32_t cap) {  
+    uint32_t pos = 0;  
+    while (pos < cap) {  
+        // пропустить разделители и пробелы  
+        while (pos < cap && (txt[pos] == ' ' || txt[pos] == '\r' ||  
+                             txt[pos] == '\n' || txt[pos] == '\t' ||  
+                             txt[pos] == '|')) pos++;  
+        if (pos >= cap || txt[pos] == '\0') break;  
+  
+        // N= — номер слота  
+        if (txt[pos] < '0' || txt[pos] >= '0' + AF_CW_MSGS) {  
+            // не запись — пропустить до разделителя  
+            while (pos < cap && txt[pos] != '\r' && txt[pos] != '\n' &&  
+                   txt[pos] != '|') pos++;  
+            continue;  
+        }  
+        uint8_t idx = (uint8_t)(txt[pos++] - '0');  
+        if (pos >= cap || txt[pos] != '=') {  
+            while (pos < cap && txt[pos] != '\r' && txt[pos] != '\n' &&  
+                   txt[pos] != '|') pos++;  
+            continue;  
+        }  
+        pos++;   // за '='  
+  
+        // MODE — до ':' или разделителя записи  
+        char mode[8];  
+        uint8_t ml = 0;  
+        while (pos < cap && txt[pos] != ':' && txt[pos] != '\r' &&  
+               txt[pos] != '\n' && txt[pos] != '|' && ml < sizeof(mode) - 1)  
+            mode[ml++] = (char)toupper((unsigned char)txt[pos++]);  
+        mode[ml] = '\0';  
+        // хвостовые пробелы в MODE  
+        while (ml > 0 && mode[ml - 1] == ' ') mode[--ml] = '\0';  
+  
+        if (strcmp(mode, "NULL") == 0 || ml == 0) {  
+            af_cw_msgs[idx][0] = '\0';  
+            af_cw_mode[idx] = AF_CW_MODE_NULL;  
+            // пропустить остаток записи (если был ":текст" после NULL — игнор)  
+            while (pos < cap && txt[pos] != '\r' && txt[pos] != '\n' &&  
+                   txt[pos] != '|') pos++;  
+            continue;  
+        }  
+  
+        uint8_t m;  
+        if      (strcmp(mode, "CW")   == 0) m = AF_CW_MODE_CW;  
+        else if (strcmp(mode, "RTTY") == 0) m = AF_CW_MODE_RTTY;  
+        else if (strcmp(mode, "JTTY") == 0) m = AF_CW_MODE_JTTY;  
+        else {  
+            // неизвестная мода — запись пропустить, слот не трогать  
+            while (pos < cap && txt[pos] != '\r' && txt[pos] != '\n' &&  
+                   txt[pos] != '|') pos++;  
+            continue;  
+        }  
+  
+        // ':' перед текстом обязателен  
+        if (pos < cap && txt[pos] == ':') pos++;  
+        // TEXT — до разделителя записи  
+        uint16_t l = 0;  
+        while (pos < cap && txt[pos] != '\r' && txt[pos] != '\n' &&  
+               txt[pos] != '|' && l < AF_CW_MSG_LEN - 1)  
+            af_cw_msgs[idx][l++] = txt[pos++];  
+        af_cw_msgs[idx][l] = '\0';  
+        while (l > 0 && af_cw_msgs[idx][l - 1] == ' ')  
+            af_cw_msgs[idx][--l] = '\0';  
+        af_cw_mode[idx] = m;  
+        // дочитать обрезанный хвост записи  
+        while (pos < cap && txt[pos] != '\r' && txt[pos] != '\n' &&  
+               txt[pos] != '|') pos++;  
+    }  
+}  
 
 void af_fm_poll(void) {        
     // Отложенная печать из MSC-колбэков — здесь обычный контекст,    

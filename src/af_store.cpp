@@ -23,7 +23,8 @@
 //   [3]      last-bank: номер последнего 'save N' (1..7), 0xFF = нет.  
 //            При boot af_store_init применяет его через af_store_load.  
 //   [4..]    7 записей по sizeof(af_bank_rec_t)      
-//   [0x800]  CW.TXT: 'C','W',ver,crc + 4 строки по 64 Б (сообщения магнитофона)    
+//   [0x800]  CW.TXT: 'C','W',ver,crc + 4 строки по 256 Б + 4 Б мод      
+//            (сообщения магнитофона/маяка, ver 2)      
 //  
 // Запись — по 'save x' / 'banks clr' и один раз при старте, если сектор    
 // пустой/чужой: af_store_init заполняет образ дефолтами и ставит флаг,    
@@ -129,39 +130,50 @@ static int rec_addr(uint8_t idx) {           // idx = 1..7
     return 4 + (idx - 1) * (int)sizeof(af_bank_rec_t);  
 }  
 
-#define AF_CW_OFF   0x800u          // область CW.TXT в секторе банков    
-#define AF_CW_VER   1    
-  
-char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];    
+#define AF_CW_OFF   0x800u          // область CW.TXT в секторе банков      
+#define AF_CW_VER   2               // ver 2: + af_cw_mode[4] после текстов      
+    
+char    af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];      
+uint8_t af_cw_mode[AF_CW_MSGS];     // AF_CW_MODE_* — мода каждого слота      
 
 // Forward: RAM-функция записи сектора, определена ниже.  
 static void __not_in_flash_func(do_flash_write)(void* param);  
 
-void af_store_cw_init(void) {      
-    const uint8_t* m = &s_sector_img[AF_CW_OFF];      
-    if (m[0] == 'C' && m[1] == 'W' && m[2] == AF_CW_VER &&      
-        m[3] == crc8(m + 4, AF_CW_MSGS * AF_CW_MSG_LEN)) {      
-        memcpy(af_cw_msgs, m + 4, AF_CW_MSGS * AF_CW_MSG_LEN);      
-    } else {        
-        // Чистая плата / битый блок: стандартные вызовы во все слоты.        
-        // af_store_poll зафиксирует их во flash (запись из init висла).        
-        memset(af_cw_msgs, 0, sizeof(af_cw_msgs));        
-        if (AF_CW_DEFAULT[0]) {                       // "" = дефолты не подставлять  
-            for (uint8_t i = 0; i < AF_CW_MSGS; i++)        
-                strncpy(af_cw_msgs[i], AF_CW_DEFAULT, AF_CW_MSG_LEN - 1);        
-            s_need_cw_save = true;        
-        }  
+void af_store_cw_init(void) {        
+    const uint8_t* m = &s_sector_img[AF_CW_OFF];        
+    // Блок ver 2: 'C','W',ver,crc + msgs[4][256] + mode[4].        
+    // crc считается по данным (msgs + mode), заголовок не входит.        
+    if (m[0] == 'C' && m[1] == 'W' && m[2] == AF_CW_VER &&        
+        m[3] == crc8(m + 4, AF_CW_MSGS * AF_CW_MSG_LEN + AF_CW_MSGS)) {        
+        memcpy(af_cw_msgs, m + 4, AF_CW_MSGS * AF_CW_MSG_LEN);        
+        memcpy(af_cw_mode, m + 4 + AF_CW_MSGS * AF_CW_MSG_LEN, AF_CW_MSGS);        
+    } else {          
+        // Чистая плата / битый блок / старый ver: демонстрационные слоты          
+        // из AF_CW_DEFAULTS (CW + RTTY + JTTY + NULL).          
+        // af_store_poll зафиксирует их во flash (запись из init висла).          
+        memset(af_cw_msgs, 0, sizeof(af_cw_msgs));          
+        memset(af_cw_mode, 0, sizeof(af_cw_mode));          
+        for (uint8_t i = 0; i < AF_CW_MSGS; i++) {          
+            af_cw_mode[i] = AF_CW_DEFAULTS[i].mode;          
+            if (AF_CW_DEFAULTS[i].text[0])          
+                strncpy(af_cw_msgs[i], AF_CW_DEFAULTS[i].text, AF_CW_MSG_LEN - 1);          
+        }          
+        s_need_cw_save = true;          
+    }          
+    for (uint8_t i = 0; i < AF_CW_MSGS; i++) {        
+        af_cw_msgs[i][AF_CW_MSG_LEN - 1] = '\0';     // страховка от мусора        
+        if (af_cw_mode[i] > AF_CW_MODE_JTTY)         // страховка от мусора в моде        
+            af_cw_mode[i] = AF_CW_MODE_NULL;        
     }        
-    for (uint8_t i = 0; i < AF_CW_MSGS; i++)      
-        af_cw_msgs[i][AF_CW_MSG_LEN - 1] = '\0';     // страховка от мусора      
-}      
+}        
 
 bool af_store_cw_save(void) {    
     memcpy(s_sector_img, (const void*)(XIP_BASE + AF_FLASH_OFF), sizeof(s_sector_img));    
-    uint8_t* m = &s_sector_img[AF_CW_OFF];    
-    m[0] = 'C'; m[1] = 'W'; m[2] = AF_CW_VER;    
-    memcpy(m + 4, af_cw_msgs, AF_CW_MSGS * AF_CW_MSG_LEN);    
-    m[3] = crc8(m + 4, AF_CW_MSGS * AF_CW_MSG_LEN);    
+    uint8_t* m = &s_sector_img[AF_CW_OFF];      
+    m[0] = 'C'; m[1] = 'W'; m[2] = AF_CW_VER;      
+    memcpy(m + 4, af_cw_msgs, AF_CW_MSGS * AF_CW_MSG_LEN);      
+    memcpy(m + 4 + AF_CW_MSGS * AF_CW_MSG_LEN, af_cw_mode, AF_CW_MSGS);      
+    m[3] = crc8(m + 4, AF_CW_MSGS * AF_CW_MSG_LEN + AF_CW_MSGS);      
   
     if (!af_store_core1_park(5000)) {    
         Serial.println("# cw msg: park TIMEOUT — abort");    

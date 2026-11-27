@@ -49,8 +49,8 @@
 #define AF_FM_WAV_FILES     4    // 4 слота магнитофона = 4 сообщения (селектор GP13/GP28)      
 //   LBA 98       CW.TXT (1 кластер, 4 строки сообщений магнитофона)              
 //   LBA 99..290  AF_PANEL.PY   LBA 291..338 README.TXT   LBA 339.. REC1..REC4.WAV              
-#define AF_FM_CW_CLUSTERS   1u            
-#define AF_FM_CW_LBA        (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)   // 98         
+#define AF_FM_CW_CLUSTERS   4u            // 2 КБ: 4 слота по ~270 Б (N=MODE:TEXT)  
+#define AF_FM_CW_LBA        (AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)   // 98           
   
 // AF_PANEL.PY — read-only копия tools/af_panel.py, вшитая в прошивку      
 // Резерв 96 КБ запас под рост.   

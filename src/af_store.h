@@ -13,18 +13,33 @@
 // Число ячеек банка (коды 001..111 на GP2..GP4; 000 = ручной режим).    
 #define AF_STORE_BANKS  7  
 
-#define AF_CW_MSGS     4    
-#define AF_CW_MSG_LEN  64    // включая '\0' — строка до 63 символов    
+#define AF_CW_MSGS     4      
+#define AF_CW_MSG_LEN  256   // включая '\0' — строка до 255 символов      
   
-// Дефолтный вызов для всех слотов при невалидном CW-блоке во flash    
-// (чистая плата / битый crc). Пустая строка "" = дефолты не подставлять.    
-#define AF_CW_DEFAULT  "VVV TESTING BEACON K"    
+// Мода слота сообщения: 0=пустой(NULL), 1=CW, 2=RTTY, 3=JTTY.  
+// Задаётся в CW.TXT записью N=MODE:TEXT; хранится вместе с текстом.  
+#define AF_CW_MODE_NULL  0  
+#define AF_CW_MODE_CW    1  
+#define AF_CW_MODE_RTTY  2  
+#define AF_CW_MODE_JTTY  3  
   
-#define AF_STORE_VER      15  // было 14: +lo2_hz/hi2_hz/band2_on (пост-фильтр  
-                            // на выходе со своими границами band2).  
-                            // Старые банки невалидны.  
+// Дефолтный вызов для всех слотов при невалидном CW-блоке во flash      
+// (чистая плата / битый crc / старый ver). Пустая строка "" = дефолты      
+// не подставлять. Мода дефолтных слотов — AF_CW_MODE_CW.      
+#define AF_CW_DEFAULT  "VVV TESTING BEACON K"
+  
+// Дефолтные слоты при невалидном CW-блоке во flash (чистая плата /  
+// битый crc / смена AF_CW_VER). Демонстрационный набор: все три моды  
+// + пустой слот NULL. Текст пустой строки "" = слот без сообщения.  
+static const struct { uint8_t mode; const char* text; } AF_CW_DEFAULTS[AF_CW_MSGS] = {  
+    { AF_CW_MODE_CW,   "CQ CQ CQ DE RU0AOG RU0AOG RU0AOG K" },  
+    { AF_CW_MODE_RTTY, "CQ DE RU0AOG K" },  
+    { AF_CW_MODE_JTTY, "CQ RU0AOG" },  
+    { AF_CW_MODE_NULL, "" },  
+};  
 
-extern char af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];  
+extern char    af_cw_msgs[AF_CW_MSGS][AF_CW_MSG_LEN];    
+extern uint8_t af_cw_mode[AF_CW_MSGS];   // AF_CW_MODE_* — мода каждого слота  
   
 void af_store_cw_init(void);   // чтение из образа сектора (в af_store_init);    
                                // при невалидном блоке — дефолты AF_CW_DEFAULT    
