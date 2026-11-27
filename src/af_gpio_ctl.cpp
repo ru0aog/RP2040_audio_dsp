@@ -81,10 +81,12 @@ static bool     vbcn_playing  = false;   // посылка идёт — пери
 
 // --- Маяк GP7: слот GP13/GP28 в его моде, повтор 3 с, обрыв по open ---  
 #define MBCN_GAP_MS  3000u              // пауза между посылками  
-static bool     mbcn_on       = false;  
-static bool     mbcn_tx       = false;  // посылка идёт  
-static uint32_t mbcn_gap_ms   = 0;      // время следующей посылки  
-static uint32_t mbcn_stage_t0 = 0;      // millis() старта посылки (для лога)  
+static bool     mbcn_on       = false;    
+static bool     mbcn_tx       = false;  // посылка идёт    
+static uint8_t  mbcn_sel      = 0;      // слот, зафиксированный на посылку    
+static uint8_t  mbcn_mode     = 0;      // мода, зафиксированная на посылку    
+static uint32_t mbcn_gap_ms   = 0;      // время следующей посылки    
+static uint32_t mbcn_stage_t0 = 0;      // millis() старта посылки (для лога)    
 
 static uint32_t t_next_poll = 0;      
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
@@ -184,8 +186,8 @@ bool af_gpio_mbcn_set(bool on) {
 }  
 bool af_gpio_mbcn_on(void) { return mbcn_on; }  
   
-// Немедленный обрыв: в отличие от mbcn_set(false) не ждёт конца цикла.  
-void af_gpio_mbcn_abort(void) {  
+// Немедленный обрыв посылки и стоп маяка (вызывается и из mbcn_set(false)).    
+void af_gpio_mbcn_abort(void) {    
     if (!mbcn_on && !mbcn_tx) return;  
     mbcn_on = false;  
     mbcn_tx = false;  
@@ -516,8 +518,8 @@ void af_gpio_vbcn_set(uint32_t period_s) {
         return;    
     }    
     if (beacon_on) { beacon_on = false; Serial.println("[BEACON] off (vbcn on)"); }    
-    if (mbcn_on) { af_gpio_mbcn_abort(); Serial.println("[MBCN] off (cw beacon on)"); }  
-    vbcn_period  = period_s * 1000u;    
+    if (mbcn_on) { af_gpio_mbcn_abort(); Serial.println("[MBCN] off (vbcn on)"); }    
+    vbcn_period  = period_s * 1000u;      
     vbcn_next_ms = millis();              // первая посылка сразу    
     vbcn_playing = false;    
     vbcn_on      = true;    
@@ -624,29 +626,34 @@ void af_gpio_ctl_poll(void) {
         if (mode == AF_CW_MODE_NULL || msg[0] == '\0') {   // слот стёрли на ходу  
             af_gpio_mbcn_abort();  
             Serial.println(F("[GPIO] mbcn: slot empty -> stop"));  
-        } else if (mbcn_tx) {  
-            // ждём конца посылки  
-            bool busy = (mode == AF_CW_MODE_CW)   ? af_dsp_cwtx_busy()  
-                      : (mode == AF_CW_MODE_RTTY) ? af_dsp_rttytx_busy()  
-                                                : af_dsp_jttytx_busy();  
-            if (!busy) {  
-                mbcn_tx = false;  
-                uint32_t dt = millis() - mbcn_stage_t0;  
-                Serial.printf("[GPIO] mbcn: %s done (%lu.%lu s)\n", mname,  
-                              (unsigned long)(dt / 1000u),  
-                              (unsigned long)((dt % 1000u) / 100u));  
-                mbcn_gap_ms = millis() + MBCN_GAP_MS;   // пауза 3 с -> повтор  
-            }  
+        } else if (mbcn_tx) {    
+            // ждём конца посылки — по моде, зафиксированной при старте    
+            // (смена GP13/GP28 на ходу не ломает проверку)    
+            bool busy = (mbcn_mode == AF_CW_MODE_CW)   ? af_dsp_cwtx_busy()    
+                      : (mbcn_mode == AF_CW_MODE_RTTY) ? af_dsp_rttytx_busy()    
+                                                     : af_dsp_jttytx_busy();    
+            if (!busy) {    
+                mbcn_tx = false;    
+                uint32_t dt = millis() - mbcn_stage_t0;    
+                const char* dname = (mbcn_mode == AF_CW_MODE_CW)   ? "CW"    
+                                  : (mbcn_mode == AF_CW_MODE_RTTY) ? "RTTY" : "JTTY";    
+                Serial.printf("[GPIO] mbcn: %s done (%lu.%lu s)\n", dname,    
+                              (unsigned long)(dt / 1000u),    
+                              (unsigned long)((dt % 1000u) / 100u));    
+                mbcn_gap_ms = millis() + MBCN_GAP_MS;   // пауза 3 с -> повтор    
+            }    
         } else if ((int32_t)(millis() - mbcn_gap_ms) >= 0) {  
             if (!af_rec_is_playing() && !af_rec_is_recording() && !key_tx) {  
                 bool ok;  
                 if (mode == AF_CW_MODE_CW)        ok = af_dsp_cwtx_start(msg);  
                 else if (mode == AF_CW_MODE_RTTY) ok = af_dsp_rttytx_start(msg);  
                 else                              ok = af_dsp_jttytx_start(msg);  
-                if (ok) {  
-                    af_gpio_ptt_tx_on();            // PTT LOW на посылку  
-                    mbcn_tx = true;  
-                    mbcn_stage_t0 = millis();  
+                if (ok) {    
+                    af_gpio_ptt_tx_on();            // PTT LOW на посылку    
+                    mbcn_tx = true;    
+                    mbcn_sel  = sel;                // зафиксировать слот/моду    
+                    mbcn_mode = mode;               // на время посылки    
+                    mbcn_stage_t0 = millis();    
                     Serial.printf("[GPIO] mbcn: slot %u %s tx '%s'\n",  
                                   (unsigned)sel, mname, msg);  
                 } else {  
