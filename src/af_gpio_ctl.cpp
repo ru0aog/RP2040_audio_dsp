@@ -190,11 +190,15 @@ bool af_gpio_mbcn_on(void) { return mbcn_on; }
     
 // Запуск маяка из CLI с явным слотом: mbcn on <0..3>.    
 // Пины GP13/GP28 игнорируются до стопа (abort сбрасывает override).    
-bool af_gpio_mbcn_set_sel(uint8_t slot) {    
-    if (slot >= AF_CW_MSGS) return false;    
-    mbcn_sel_ovr = (int8_t)slot;    
-    return af_gpio_mbcn_set(true);    
-}    
+bool af_gpio_mbcn_set_sel(uint8_t slot) {      
+    if (slot >= AF_CW_MSGS) return false;      
+    mbcn_sel_ovr = (int8_t)slot;      
+    if (!af_gpio_mbcn_set(true)) {    
+        mbcn_sel_ovr = -1;          // отказ — слот снова с пинов    
+        return false;    
+    }    
+    return true;    
+}      
     
 // Немедленный обрыв посылки и стоп маяка (вызывается и из mbcn_set(false)).      
 void af_gpio_mbcn_abort(void) {      
