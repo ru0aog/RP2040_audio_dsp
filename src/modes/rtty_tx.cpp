@@ -260,7 +260,6 @@ bool rttytx_send(const char* text) {
     tx_pend_valid = false;    
     tail_mark = false;    
     af_oled_putc('>');                  // префикс TX на экране
-    Serial.write('>');                  // то же в порт  
     tx_active = true;    
     return true;  
 }  

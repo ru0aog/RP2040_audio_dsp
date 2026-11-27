@@ -657,7 +657,6 @@ bool jttytx_send(const char* text) {
     tx_pend_valid = false;  
     tail_tone = false;  
     af_oled_putc('>');                           // префикс TX на экране, как у CW/RTTY    
-    Serial.write('>');                           // то же в порт  
     tx_active = true;    
     return true;  
 }  
