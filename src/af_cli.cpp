@@ -1334,7 +1334,6 @@ static void cli_exec(char* line) {
             Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);      
             Serial.printf("R|vbcn|%u\n",     af_gpio_vbcn_on() ? 1 : 0);      
             Serial.printf("R|cwtx|%u\n",     af_dsp_cwtx_busy() ? 1 : 0);    
-            Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);
             Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);      
             Serial.printf("R|jttytx|%u\n",   af_dsp_jttytx_busy() ? 1 : 0);      
             Serial.printf("R|tt|%u\n",       af_dsp_tt_busy() ? 1 : 0);    

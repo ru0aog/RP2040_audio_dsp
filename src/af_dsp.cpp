@@ -1598,7 +1598,8 @@ bool af_dsp_tx_on(void) { return tx_on; }
 // --- CW-передатчик (Core 0) ---    
 // Постановка текста в очередь + подъём TX. Возврат в RX — автоматически    
 // в loop() по !cwtx_busy() при cwtx_started.    
-bool af_dsp_cwtx_start(const char* text) {      
+bool af_dsp_cwtx_start(const char* text) {
+    if (rttytx_busy() || jttytx_busy()) return false;
     if (!cwtx_send(text)) return false;  // очередь занята — посылка не встала,  
                                          // TX не поднимаем, флаг не взводим  
     //cwtx_set_tone((float)cw_f0);   // тон следует за текущим cw f0      
@@ -1613,7 +1614,8 @@ bool af_dsp_cwtx_busy(void) { return cwtx_busy(); }
   
 // --- RTTY-передатчик (Core 0) ---    
 // Постановка текста + подъём TX; возврат в RX — в loop() по !rttytx_busy().    
-bool af_dsp_rttytx_start(const char* text) {    
+bool af_dsp_rttytx_start(const char* text) {
+    if (cwtx_busy() || jttytx_busy()) return false;
     if (cwtx_busy()) return false;         // взаимоисключение с CW-посылкой    
     if (!rttytx_send(text)) return false;  // очередь занята — TX не поднимаем    
     rttytx_started = true;    
@@ -1627,7 +1629,7 @@ bool af_dsp_rttytx_busy(void) { return rttytx_busy(); }
 // --- JTTY-передатчик (Core 0) ---  
 // Постановка текста + подъём TX; возврат в RX — в loop() по !jttytx_busy().  
 bool af_dsp_jttytx_start(const char* text) {  
-    if (cwtx_busy() || rttytx_busy()) return false;  // взаимоисключение  
+    if (cwtx_busy() || rttytx_busy() || tt_gen_busy() || af_rec_is_playing()) return false;  // взаимоисключение  
     if (!jttytx_send(text)) return false;  // упаковка не удалась — TX не поднимаем  
     jttytx_started = true;  
     af_dsp_set_tx(true);  
@@ -2032,7 +2034,7 @@ void __not_in_flash_func(af_dsp_poll)(void) {
 }    
 
 bool af_dsp_tt_start(uint32_t f1, uint32_t f2) {    
-    if (cwtx_busy() || rttytx_busy() || af_rec_is_playing()) return false;    
+    if (cwtx_busy() || rttytx_busy() || jttytx_busy() || af_rec_is_playing()) return false;    
     af_tx_tt_fir_design();          // вернуть тапсы 400..3200 (могли быть st)    
     tt_gen_set(f1, f2);    
     tt_gen_on(true);    
@@ -2041,7 +2043,7 @@ bool af_dsp_tt_start(uint32_t f1, uint32_t f2) {
 }    
 // Одиночный тон: узкая полоса FIR вокруг f, f2=0 -> один NCO.    
 bool af_dsp_st_start(uint32_t f_hz) {    
-    if (cwtx_busy() || rttytx_busy() || af_rec_is_playing()) return false;    
+    if (cwtx_busy() || rttytx_busy() || jttytx_busy() || af_rec_is_playing()) return false;    
     af_tx_st_fir_design(f_hz);      // полоса f±150 Гц вокруг тона  
     tt_gen_set1(f_hz);              // f2=0 -> один NCO, ~0.4 FS  
     tt_gen_on(true);    

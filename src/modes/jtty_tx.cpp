@@ -522,12 +522,6 @@ static volatile uint8_t tx_nframes;              // кадров в очеред
 static volatile uint8_t tx_fpos;                 // текущий кадр  
 static uint8_t  sym_idx;                         // текущий символ в кадре 0..58  
   
-// Эхо-строка исходного текста для OLED  
-#define JTTYTX_TEXT_LEN 82  
-static char     tx_echo[JTTYTX_TEXT_LEN];  
-static volatile uint8_t tx_elen;  
-static volatile uint8_t tx_epos;  
-  
 // Символьный слот: Core 0 кладёт (тон, длина), Core 1 подхватывает  
 // на границе символа — поток непрерывный.  
 static volatile uint8_t  tx_pend_tone;           // ожидающий тон 0..3  
@@ -596,9 +590,12 @@ void jttytx_poll(void) {
     // очередь пуста — хвост нижним тоном ~100 мс, потом конец передачи  
     if (!tail_tone) {  
         tail_tone = true;  
-        feed_tone(0);  
-        // переопределить длину хвоста: ровно 100 мс  
-        tx_pend_len = (AF_FS_OUT_HZ * 100u) / 1000u;  
+        // сначала длина, потом valid — Core 1 не подхватит слот наполовину  
+        sym_acc_q16 += sym_len_q16;  
+        sym_acc_q16 &= 0xFFFF;  
+        tx_pend_tone  = 0;  
+        tx_pend_len   = (AF_FS_OUT_HZ * 100u) / 1000u;   // ровно 100 мс  
+        tx_pend_valid = true;  
     } else if (tx_sym_rem == 0 && !tx_pend_valid) {  
         tx_active = false;                       // хвост доигран Core 1 — гасим  
     }  
@@ -624,7 +621,6 @@ void jttytx_init(void) {
     tx_active = false;  
     tx_nframes = tx_fpos = 0;  
     sym_idx = JTTY_NSYMS;  
-    tx_elen = tx_epos = 0;  
     tx_sym_rem = 0;  
     tx_pend_valid = false;  
     tail_tone = false;  
@@ -651,12 +647,6 @@ bool jttytx_send(const char* text) {
     for (int f = 0; f < fl.nframes; f++)  
         jtty_build_frame(fl.frames[f], tx_frames[f]);  
   
-    // Эхо-строка для OLED (нормализованный текст)  
-    uint8_t e = 0;  
-    for (uint8_t i = 0; text[i] && e < JTTYTX_TEXT_LEN - 1; i++)  
-        tx_echo[e++] = (char)toupper((unsigned char)text[i]);  
-    tx_elen = e; tx_epos = 0;  
-  
     tx_nframes = (uint8_t)fl.nframes;  
     tx_fpos = 0;  
     sym_idx = 0;  
@@ -679,7 +669,6 @@ void jttytx_abort(void) {
     tx_pend_valid = false;  
     tx_nframes = tx_fpos = 0;  
     sym_idx = JTTY_NSYMS;  
-    tx_elen = tx_epos = 0;  
     tail_tone = false;  
 }  
   
