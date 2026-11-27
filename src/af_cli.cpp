@@ -108,7 +108,7 @@ static void cli_help(void) {
     Serial.println("#   rtty abort        — оборвать посылку RTTY");
     Serial.println("#   jtty tx <текст>   — передать посылку JTTY (4-FSK 31.25 Бод, центр 1000 Гц, авто-возврат в RX)");  
     Serial.println("#   jtty abort        — оборвать посылку JTTY;  jtty test — эталонные вектора кодека");
-    Serial.println("#   mbcn on|off|abort — маяк: слот GP13/GP28 в его моде (CW.TXT), повтор 3 с; off/abort = обрыв");  
+    Serial.println("#   mbcn on [0..3]|off|abort — маяк: слот в его моде (CW.TXT), повтор 3 с; без N — слот с GP13/GP28");  
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
     Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
     Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
@@ -1733,9 +1733,21 @@ static void cli_exec(char* line) {
         // off — стоп по завершении полного цикла; abort — немедленный обрыв.  
         char* s = strtok(NULL, " \t");  
         if (s && strcmp(s, "on") == 0) {  
-            if (af_gpio_mbcn_set(true)) Serial.println("# OK mbcn on");  
-            else                        Serial.println("# ERR mbcn: slot empty");  
-        } else if (s && strcmp(s, "off") == 0) {    
+            char* n = strtok(NULL, " \t");  
+            bool ok;  
+            if (n) {  
+                int slot = (int)strtoul(n, NULL, 10);  
+                if (slot < 0 || slot >= AF_CW_MSGS) {  
+                    Serial.println("# ERR: mbcn on <0..3>");  
+                    return;  
+                }  
+                ok = af_gpio_mbcn_set_sel((uint8_t)slot);  
+            } else {  
+                ok = af_gpio_mbcn_set(true);  
+            }  
+            if (ok) Serial.println("# OK mbcn on");  
+            else    Serial.println("# ERR mbcn: slot empty");  
+        }   else if (s && strcmp(s, "off") == 0) {    
             af_gpio_mbcn_set(false);    
             Serial.println("# OK mbcn off");    
         } else if (s && strcmp(s, "abort") == 0) {  

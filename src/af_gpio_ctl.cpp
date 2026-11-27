@@ -87,6 +87,7 @@ static uint8_t  mbcn_sel      = 0;      // слот, зафиксированн�
 static uint8_t  mbcn_mode     = 0;      // мода, зафиксированная на посылку    
 static uint32_t mbcn_gap_ms   = 0;      // время следующей посылки    
 static uint32_t mbcn_stage_t0 = 0;      // millis() старта посылки (для лога)    
+static int8_t   mbcn_sel_ovr  = -1;     // слот из CLI: -1 = с пинов GP13/GP28 
 
 static uint32_t t_next_poll = 0;      
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
@@ -164,15 +165,16 @@ static void apply_nt(bool grounded) {
 
 // --- Маяк GP7: слот в его моде, повтор 3 с; off = немедленный обрыв ---  
 // on=true — запуск (слот NULL/пустой -> отказ), on=false — обрыв сразу.  
-bool af_gpio_mbcn_set(bool on) {  
-    if (on) {  
-        if (mbcn_on) return true;  
-        Serial.printf("[GPIO] GP%u GND -> mbcn on\n", ctl_bypass.pin);  
-        const uint8_t sel = af_gpio_msg_sel();  
-        if (af_cw_mode[sel] == AF_CW_MODE_NULL || af_cw_msgs[sel][0] == '\0') {  
-            Serial.printf("[GPIO] mbcn: slot %u empty\n", (unsigned)sel);  
-            return false;  
-        }  
+bool af_gpio_mbcn_set(bool on) {    
+    if (on) {    
+        if (mbcn_on) return true;    
+        Serial.printf("[GPIO] GP%u GND -> mbcn on\n", ctl_bypass.pin);    
+        const uint8_t sel = (mbcn_sel_ovr >= 0) ? (uint8_t)mbcn_sel_ovr    
+                                                : af_gpio_msg_sel();    
+        if (af_cw_mode[sel] == AF_CW_MODE_NULL || af_cw_msgs[sel][0] == '\0') {    
+            Serial.printf("[GPIO] mbcn: slot %u empty\n", (unsigned)sel);    
+            return false;    
+        }    
         beacon_on = false;                       // взаимоисключение маяков  
         vbcn_on   = false;  
         mbcn_on = true; mbcn_tx = false;  
@@ -184,13 +186,22 @@ bool af_gpio_mbcn_set(bool on) {
         return true;  
     }  
 }  
-bool af_gpio_mbcn_on(void) { return mbcn_on; }  
-  
-// Немедленный обрыв посылки и стоп маяка (вызывается и из mbcn_set(false)).    
-void af_gpio_mbcn_abort(void) {    
-    if (!mbcn_on && !mbcn_tx) return;  
-    mbcn_on = false;  
-    mbcn_tx = false;  
+bool af_gpio_mbcn_on(void) { return mbcn_on; }    
+    
+// Запуск маяка из CLI с явным слотом: mbcn on <0..3>.    
+// Пины GP13/GP28 игнорируются до стопа (abort сбрасывает override).    
+bool af_gpio_mbcn_set_sel(uint8_t slot) {    
+    if (slot >= AF_CW_MSGS) return false;    
+    mbcn_sel_ovr = (int8_t)slot;    
+    return af_gpio_mbcn_set(true);    
+}    
+    
+// Немедленный обрыв посылки и стоп маяка (вызывается и из mbcn_set(false)).      
+void af_gpio_mbcn_abort(void) {      
+    if (!mbcn_on && !mbcn_tx) return;    
+    mbcn_on = false;    
+    mbcn_tx = false;    
+    mbcn_sel_ovr = -1;               // слот снова с пинов GP13/GP28    
     cwtx_abort();  
     rttytx_abort();  
     jttytx_abort();  
@@ -617,9 +628,10 @@ void af_gpio_ctl_poll(void) {
     // Маяк GP7: слот GP13/GP28 в его моде (af_cw_mode), повтор каждые  
     // MBCN_GAP_MS пока пин LOW. Размыкание обрабатывает apply_mbcn ->  
     // af_gpio_mbcn_abort (немедленный обрыв) — здесь пин не проверяем.  
-    if (mbcn_on) {  
-        const uint8_t sel = af_gpio_msg_sel();  
-        const uint8_t mode = af_cw_mode[sel];  
+    if (mbcn_on) {    
+        const uint8_t sel = (mbcn_sel_ovr >= 0) ? (uint8_t)mbcn_sel_ovr    
+                                                : af_gpio_msg_sel();    
+        const uint8_t mode = af_cw_mode[sel];    
         const char* msg = af_cw_msgs[sel];  
         const char* mname = (mode == AF_CW_MODE_CW)   ? "CW"  
                           : (mode == AF_CW_MODE_RTTY) ? "RTTY" : "JTTY";  

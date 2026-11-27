@@ -35,6 +35,7 @@ bool    af_gpio_vbcn_on(void);
 bool af_gpio_mbcn_set(bool on);    // on=false — запрос стопа; false = отказ (пустой слот)  
 bool af_gpio_mbcn_on(void);  
 void af_gpio_mbcn_abort(void);     // немедленный обрыв посылки и маяка  
+bool af_gpio_mbcn_set_sel(uint8_t slot);   // mbcn on <0..3> — слот из CLI, не с пинов  
 
 bool    af_gpio_ptt_active(void);   // sw_ptt_active — PTT поднят софтом  
 bool    af_gpio_key_tx(void);       // key_tx — ключ держит TX  
