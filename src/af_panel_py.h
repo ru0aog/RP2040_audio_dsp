@@ -1516,7 +1516,7 @@ class Panel(tk.Tk):
   
   
 if __name__ == "__main__":    
-    Panel().mainloop()  
+    Panel().mainloop()
 )PANEL_EOF";  
   
 static const uint32_t af_panel_py_len = sizeof(af_panel_py) - 1;
