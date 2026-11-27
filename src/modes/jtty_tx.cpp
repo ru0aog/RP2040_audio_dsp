@@ -578,14 +578,15 @@ void jttytx_poll(void) {
         return;  
     }  
   
-    // следующий кадр из очереди  
-    if (tx_fpos + 1 < tx_nframes) {  
-        tx_fpos++;  
-        sym_idx = 0;  
-        // эхо на OLED: маркер кадра  
-        af_oled_putc('|');  
-        return;  
-    }  
+    // следующий кадр из очереди    
+    if (tx_fpos + 1 < tx_nframes) {    
+        tx_fpos++;    
+        sym_idx = 0;    
+        // эхо на OLED: маркер кадра    
+        af_oled_putc('|');    
+        Serial.write('|');                         // то же в порт  
+        return;    
+    }    
   
     // очередь пуста — хвост нижним тоном ~100 мс, потом конец передачи  
     if (!tail_tone) {  
@@ -596,9 +597,10 @@ void jttytx_poll(void) {
         tx_pend_tone  = 0;  
         tx_pend_len   = (AF_FS_OUT_HZ * 100u) / 1000u;   // ровно 100 мс  
         tx_pend_valid = true;  
-    } else if (tx_sym_rem == 0 && !tx_pend_valid) {  
-        tx_active = false;                       // хвост доигран Core 1 — гасим  
-    }  
+    } else if (tx_sym_rem == 0 && !tx_pend_valid) {    
+        tx_active = false;                       // хвост доигран Core 1 — гасим    
+        Serial.write('\n');                      // закрыть строку эха в порту  
+    }    
 }  
   
 // ---------------------------------------------------------------------------  
@@ -654,8 +656,9 @@ bool jttytx_send(const char* text) {
     tx_sym_rem = 0;  
     tx_pend_valid = false;  
     tail_tone = false;  
-    af_oled_putc('>');                           // префикс TX на экране, как у CW/RTTY  
-    tx_active = true;  
+    af_oled_putc('>');                           // префикс TX на экране, как у CW/RTTY    
+    Serial.write('>');                           // то же в порт  
+    tx_active = true;    
     return true;  
 }  
   

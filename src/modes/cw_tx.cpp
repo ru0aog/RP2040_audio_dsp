@@ -167,8 +167,10 @@ void cwtx_poll(void) {
         uint8_t c = (uint8_t)cwtx_text[cwtx_tpos++];      
         if (c == 0xD0 || c == 0xD1) {                    // кириллица UTF-8      
             uint8_t c2 = (uint8_t)cwtx_text[cwtx_tpos++];      
-            af_oled_putc((char)c);                       // эхо: исходные байты UTF-8 —    
-            af_oled_putc((char)c2);                      // на экране русская буква, как в RTTY    
+            af_oled_putc((char)c);                       // эхо: исходные байты UTF-8 —      
+            af_oled_putc((char)c2);                      // на экране русская буква  
+            Serial.write((char)c);                       // то же эхо в порт  
+            Serial.write((char)c2);  
             if (c == 0xD0 && c2 >= 0xB0 && c2 <= 0xBF) c2 -= 0x20;  // а..п -> А..П      
             else if (c == 0xD1 && c2 >= 0x80 && c2 <= 0x8F) { c = 0xD0; c2 += 0x20; } // р..я      
             uint16_t u = ((uint16_t)c2 << 8) | c;        // формат таблицы      
@@ -177,9 +179,10 @@ void cwtx_poll(void) {
             for (uint8_t i = 0; i < CWTX_RUS_LEN; i++)      
                 if (CWTX_RUS[i].u == u) { c = (uint8_t)CWTX_RUS[i].ch; break; }      
             if (c == 0) { cwtx_gap = 3; return; }        // неизвестная — пауза      
-        } else {    
-            af_oled_putc((char)c);                       // эхо: латиница/цифры как есть    
-        }    
+        } else {      
+            af_oled_putc((char)c);                       // эхо: латиница/цифры как есть      
+            Serial.write((char)c);                       // то же эхо в порт  
+        }      
         if (c >= 'a' && c <= 'z') c -= 32;      
         const cwtx_sym_t* s = NULL;      
         for (uint8_t i = 0; i < CWTX_TAB_LEN; i++)    
@@ -195,14 +198,15 @@ void cwtx_poll(void) {
     // очередь пуста — хвост ~7 точек тишины, потом конец передачи.    
     // Отдельный флаг: cwtx_gap нельзя использовать как метку —    
     // ветка паузы выше съест её и хвост зациклится.    
-    if (!cwtx_tail) {    
-        cwtx_tail = true;    
-        cwtx_key = false;    
-        cwtx_el_rem = 7 * cwtx_dot;   // тишина-хвост, доигрывается Core 1    
-    } else {    
-        cwtx_active = false;    
-        cwtx_key = false;    
-    }    
+    if (!cwtx_tail) {      
+        cwtx_tail = true;      
+        cwtx_key = false;      
+        cwtx_el_rem = 7 * cwtx_dot;   // тишина-хвост, доигрывается Core 1      
+    } else {      
+        cwtx_active = false;      
+        cwtx_key = false;      
+        Serial.write('\n');           // посылка кончилась — закрыть строку эха  
+    }      
 }    
   
 // ---------------------------------------------------------------------------  

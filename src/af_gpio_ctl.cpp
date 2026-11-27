@@ -82,9 +82,10 @@ static bool     vbcn_playing  = false;   // посылка идёт — пери
 // --- Мультимодовый маяк GP7: CW -> JTTY -> RTTY, пин проверяется по концу цикла ---  
 static bool     mbcn_on       = false;  
 static bool     mbcn_stop_req = false;  // запрос стопа (пин отпущен / mbcn off)  
-static uint8_t  mbcn_stage    = 0;      // 0=CW 1=JTTY 2=RTTY — текущий этап  
-static bool     mbcn_tx       = false;  // посылка текущего этапа идёт  
-static uint32_t mbcn_gap_ms   = 0;      // пауза между этапами  
+static uint8_t  mbcn_stage    = 0;      // 0=CW 1=JTTY 2=RTTY — текущий этап    
+static bool     mbcn_tx       = false;  // посылка текущего этапа идёт    
+static uint32_t mbcn_gap_ms   = 0;      // пауза между этапами    
+static uint32_t mbcn_stage_t0 = 0;      // millis() старта текущей посылки (для лога)    
 
 static uint32_t t_next_poll = 0;      
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
@@ -636,44 +637,54 @@ void af_gpio_ctl_poll(void) {
             mbcn_on = false; mbcn_stop_req = false;  
             af_gpio_ptt_tx_off();  
             Serial.println(F("[GPIO] mbcn: slot empty -> stop"));  
-        } else if (mbcn_tx) {  
-            // ждём конца текущей посылки  
-            bool busy = (mbcn_stage == 0) ? af_dsp_cwtx_busy()  
-                      : (mbcn_stage == 1) ? af_dsp_jttytx_busy()  
-                                          : af_dsp_rttytx_busy();  
-            if (!busy) {  
-                mbcn_tx = false;  
-                if (mbcn_stage == 2) {  
-                    // Цикл завершён (RTTY отыгран) — только теперь смотрим пин  
-                    if (!mbcn_stop_req && ctl_bypass.stable) {  
-                        mbcn_stage = 0;             // GP7 ещё LOW — повтор  
-                        mbcn_gap_ms = millis() + 500u;  
-                    } else {  
-                        mbcn_on = false; mbcn_stop_req = false;  
-                        af_gpio_ptt_tx_off();  
-                        Serial.println(F("[GPIO] mbcn: cycle done -> stop"));  
-                    }  
-                } else {  
-                    mbcn_stage++;  
-                    mbcn_gap_ms = millis() + 500u;  
-                }  
-            }  
-        } else if ((int32_t)(millis() - mbcn_gap_ms) >= 0) {  
-            if (!af_rec_is_playing() && !af_rec_is_recording() && !key_tx) {  
-                bool ok;  
-                if (mbcn_stage == 0)      ok = af_dsp_cwtx_start(msg);  
-                else if (mbcn_stage == 1) ok = af_dsp_jttytx_start(msg);  
-                else                      ok = af_dsp_rttytx_start(msg);  
-                if (ok) {  
-                    af_gpio_ptt_tx_on();            // PTT LOW на весь цикл  
-                    mbcn_tx = true;  
-                } else {  
-                    mbcn_gap_ms = millis() + 1000u; // занято — повтор через 1 с  
-                }  
-            } else {  
-                mbcn_gap_ms = millis() + 500u;  
-            }  
-        }  
+        } else if (mbcn_tx) {    
+            // ждём конца текущей посылки    
+            const char* mode = (mbcn_stage == 0) ? "CW"    
+                             : (mbcn_stage == 1) ? "JTTY" : "RTTY";  
+            bool busy = (mbcn_stage == 0) ? af_dsp_cwtx_busy()    
+                      : (mbcn_stage == 1) ? af_dsp_jttytx_busy()    
+                                          : af_dsp_rttytx_busy();    
+            if (!busy) {    
+                mbcn_tx = false;    
+                uint32_t dt = millis() - mbcn_stage_t0;   // длительность этапа  
+                Serial.printf("[GPIO] mbcn: %s done (%lu.%lu s)\n", mode,  
+                              (unsigned long)(dt / 1000u),  
+                              (unsigned long)((dt % 1000u) / 100u));  
+                if (mbcn_stage == 2) {    
+                    // Цикл завершён (RTTY отыгран) — только теперь смотрим пин    
+                    if (!mbcn_stop_req && ctl_bypass.stable) {    
+                        mbcn_stage = 0;             // GP7 ещё LOW — повтор    
+                        mbcn_gap_ms = millis() + 500u;    
+                    } else {    
+                        mbcn_on = false; mbcn_stop_req = false;    
+                        af_gpio_ptt_tx_off();    
+                        Serial.println(F("[GPIO] mbcn: cycle done -> stop"));    
+                    }    
+                } else {    
+                    mbcn_stage++;    
+                    mbcn_gap_ms = millis() + 500u;    
+                }    
+            }    
+        } else if ((int32_t)(millis() - mbcn_gap_ms) >= 0) {    
+            if (!af_rec_is_playing() && !af_rec_is_recording() && !key_tx) {    
+                bool ok;    
+                const char* mode;  
+                if (mbcn_stage == 0)      { ok = af_dsp_cwtx_start(msg);   mode = "CW";   }  
+                else if (mbcn_stage == 1) { ok = af_dsp_jttytx_start(msg); mode = "JTTY"; }  
+                else                      { ok = af_dsp_rttytx_start(msg); mode = "RTTY"; }  
+                if (ok) {    
+                    af_gpio_ptt_tx_on();            // PTT LOW на весь цикл    
+                    mbcn_tx = true;    
+                    mbcn_stage_t0 = millis();  
+                    Serial.printf("[GPIO] mbcn: %s tx '%s'\n", mode, msg);  
+                } else {    
+                    Serial.printf("[GPIO] mbcn: %s start failed, retry in 1s\n", mode);  
+                    mbcn_gap_ms = millis() + 1000u; // занято — повтор через 1 с    
+                }    
+            } else {    
+                mbcn_gap_ms = millis() + 500u;    
+            }    
+        }    
     }  
 }    
 

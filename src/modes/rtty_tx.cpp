@@ -130,16 +130,21 @@ void rttytx_poll(void) {
         // эхо на OLED: печатаем исходный символ, когда его коды начали звучать.  
         // Сдвиги эхо не дают — печать по исходному тексту, по одному символу  
         // на каждый НЕ-сдвиговый код.  
-        if (cur_code != RTTYTX_LTRS && cur_code != RTTYTX_FIGS &&    
-            cur_code != RTTYTX_RUS && tx_epos < tx_elen) {    
-            char c = tx_echo[tx_epos++];    
-            af_oled_putc(c);    
-            // UTF-8 кириллица — пара байт: допечатать второй сразу,    
-            // иначе эхо отстанет и хвост строки потеряется    
-            if ((uint8_t)c == 0xD0 || (uint8_t)c == 0xD1) {    
-                if (tx_epos < tx_elen) af_oled_putc(tx_echo[tx_epos++]);    
-            }    
-        }    
+        if (cur_code != RTTYTX_LTRS && cur_code != RTTYTX_FIGS &&      
+            cur_code != RTTYTX_RUS && tx_epos < tx_elen) {      
+            char c = tx_echo[tx_epos++];      
+            af_oled_putc(c);      
+            Serial.write(c);                          // то же эхо в порт  
+            // UTF-8 кириллица — пара байт: допечатать второй сразу,      
+            // иначе эхо отстанет и хвост строки потеряется      
+            if ((uint8_t)c == 0xD0 || (uint8_t)c == 0xD1) {      
+                if (tx_epos < tx_elen) {  
+                    char c2 = tx_echo[tx_epos++];  
+                    af_oled_putc(c2);  
+                    Serial.write(c2);  
+                }  
+            }      
+        }      
         return;  
     }  
   
@@ -147,9 +152,10 @@ void rttytx_poll(void) {
     if (!tail_mark) {    
         tail_mark = true;    
         feed_bit(true, (AF_FS_OUT_HZ * 100u) / 1000u);    
-    } else if (tx_bit_rem == 0 && !tx_pend_valid) {    
-        tx_active = false;               // хвост доигран Core 1 — гасим    
-    }    
+    } else if (tx_bit_rem == 0 && !tx_pend_valid) {      
+        tx_active = false;               // хвост доигран Core 1 — гасим      
+        Serial.write('\n');              // закрыть строку эха в порту  
+    }      
 }  
   
 // ---------------------------------------------------------------------------  
@@ -253,8 +259,9 @@ bool rttytx_send(const char* text) {
     tx_bit_rem = 0;    
     tx_pend_valid = false;    
     tail_mark = false;    
-    af_oled_putc('>');                  // префикс TX на экране, как у CW  
-    tx_active = true;  
+    af_oled_putc('>');                  // префикс TX на экране
+    Serial.write('>');                  // то же в порт  
+    tx_active = true;    
     return true;  
 }  
   
