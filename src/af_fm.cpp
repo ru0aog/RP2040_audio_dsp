@@ -922,10 +922,11 @@ int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {
                AF_FM_SECTOR_SIZE);      
         return (int32_t)AF_FM_SECTOR_SIZE;      
     }      
-    if (lba == AF_FM_CW_LBA) {                     // CW.TXT      
-        memcpy(buffer, fm_disk[AF_FM_CW_RAM], AF_FM_SECTOR_SIZE);        
-        return (int32_t)AF_FM_SECTOR_SIZE;        
-    }        
+    if (lba >= AF_FM_CW_LBA && lba < AF_FM_CW_LBA + AF_FM_CW_CLUSTERS) {  // CW.TXT  
+        memcpy(buffer, fm_disk[AF_FM_CW_RAM + (lba - AF_FM_CW_LBA)],  
+               AF_FM_SECTOR_SIZE);  
+        return (int32_t)AF_FM_SECTOR_SIZE;  
+    }  
     // AF_PANEL.PY: данные из rodata прошивки; хвост за концом файла — нули.      
     if (lba >= AF_FM_PANEL_LBA &&      
         lba < AF_FM_PANEL_LBA + AF_FM_PANEL_CLUSTERS) {      
@@ -1058,7 +1059,8 @@ int32_t af_fm_msc_write(uint32_t lba, uint8_t* buffer, uint32_t bufsize) {
     if (lba == AF_FM_DIR_LBA)                                          ram = AF_FM_DIR_RAM;    
     else if (lba >= AF_FM_SET_LBA &&    
              lba < AF_FM_SET_LBA + AF_FM_SET_CLUSTERS)                 ram = AF_FM_SET_RAM + (lba - AF_FM_SET_LBA);    
-    else if (lba == AF_FM_CW_LBA)                                      ram = AF_FM_CW_RAM;    
+    else if (lba >= AF_FM_CW_LBA &&  
+             lba < AF_FM_CW_LBA + AF_FM_CW_CLUSTERS)  ram = AF_FM_CW_RAM + (lba - AF_FM_CW_LBA);  
     else {      
         // Зазор между RAM-областью и WAV — проглотить с OK:      
         // отказ провоцирует ретраи хоста и remount.      

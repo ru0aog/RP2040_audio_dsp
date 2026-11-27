@@ -26,9 +26,13 @@
 // Дефолтный вызов для всех слотов при невалидном CW-блоке во flash      
 // (чистая плата / битый crc / старый ver). Пустая строка "" = дефолты      
 // не подставлять. Мода дефолтных слотов — AF_CW_MODE_CW.      
-#define AF_CW_DEFAULT  "VVV TESTING BEACON K"
-  
-// Дефолтные слоты при невалидном CW-блоке во flash (чистая плата /  
+#define AF_CW_DEFAULT  "VVV TESTING BEACON K"  
+    
+#define AF_STORE_VER      15  // было 14: +lo2_hz/hi2_hz/band2_on (пост-фильтр    
+                            // на выходе со своими границами band2).    
+                            // Старые банки невалидны.    
+    
+// Дефолтные слоты при невалидном CW-блоке во flash (чистая плата /    
 // битый crc / смена AF_CW_VER). Демонстрационный набор: все три моды  
 // + пустой слот NULL. Текст пустой строки "" = слот без сообщения.  
 static const struct { uint8_t mode; const char* text; } AF_CW_DEFAULTS[AF_CW_MSGS] = {  
