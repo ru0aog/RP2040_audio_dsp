@@ -31,9 +31,9 @@
 // битый crc / смена AF_CW_VER). Демонстрационный набор: все три моды  
 // + пустой слот NULL. Текст пустой строки "" = слот без сообщения.  
 static const struct { uint8_t mode; const char* text; } AF_CW_DEFAULTS[AF_CW_MSGS] = {  
-    { AF_CW_MODE_CW,   "CQ CQ CQ DE RU0AOG RU0AOG RU0AOG K" },  
-    { AF_CW_MODE_RTTY, "CQ DE RU0AOG K" },  
-    { AF_CW_MODE_JTTY, "CQ RU0AOG" },  
+    { AF_CW_MODE_CW,   "VVV TESTING BEACON TESTING BEACON K" },  
+    { AF_CW_MODE_RTTY, "VVV TESTING BEACON TESTING BEACON K" },  
+    { AF_CW_MODE_JTTY, "VVV TESTING BEACON TESTING BEACON K" },  
     { AF_CW_MODE_NULL, "" },  
 };  
 
