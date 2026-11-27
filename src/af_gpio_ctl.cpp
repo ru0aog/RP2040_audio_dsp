@@ -163,26 +163,28 @@ static void apply_nt(bool grounded) {
 // --- Мультимодовый маяк: CW -> JTTY -> RTTY, стоп по концу цикла ---  
 // on=true — запуск (пустой слот -> отказ), on=false — запрос остановки  
 // (фактический стоп после завершения текущего цикла, в poll).  
-void af_gpio_mbcn_set(bool on) {    
-    if (on) {    
-        if (mbcn_on) { mbcn_stop_req = false; return; }  // повторный LOW отменяет отложенный стоп  
-        Serial.printf("[GPIO] GP%u GND -> mbcn on\n", ctl_bypass.pin);  
-        if (af_cw_msgs[af_gpio_msg_sel()][0] == '\0') {    
-            Serial.println(F("[GPIO] mbcn: slot empty"));    
-            return;    
-        }    
+bool af_gpio_mbcn_set(bool on) {      
+    if (on) {      
+        if (mbcn_on) { mbcn_stop_req = false; return true; }  
+        Serial.printf("[GPIO] GP%u GND -> mbcn on\n", ctl_bypass.pin);    
+        if (af_cw_msgs[af_gpio_msg_sel()][0] == '\0') {      
+            Serial.println(F("[GPIO] mbcn: slot empty"));      
+            return false;      
+        }      
         beacon_on = false;                       // взаимоисключение маяков  
         vbcn_on   = false;  
         mbcn_on = true; mbcn_stop_req = false;  
         mbcn_stage = 0; mbcn_tx = false;  
         mbcn_gap_ms = millis();  
         Serial.println(F("[GPIO] mbcn on"));  
-    } else {  
-        if (!mbcn_on) return;  
-        Serial.printf("[GPIO] GP%u open -> mbcn stop req\n", ctl_bypass.pin);  
-        mbcn_stop_req = true;                    // стоп после конца цикла  
+        return true;  
+    } else {    
+        if (!mbcn_on) return true;    
+        Serial.printf("[GPIO] GP%u open -> mbcn stop req\n", ctl_bypass.pin);    
+        mbcn_stop_req = true;  
         Serial.println(F("[GPIO] mbcn: stop after cycle"));  
-    }  
+        return true;  
+    }    
 }  
 bool af_gpio_mbcn_on(void) { return mbcn_on; }  
   
