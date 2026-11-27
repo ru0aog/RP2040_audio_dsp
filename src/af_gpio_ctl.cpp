@@ -4,7 +4,9 @@
 //  
 //   GP2..GP4 — селектор банка настроек, 3 бита (LOW=1):  
 //     000 = ручной режим (консоль), 001..111 = ячейки 1..7 (af_store_load).  
-//   GP5 — LOW -> NR on,  GP6 — LOW -> NT on.  GP7 — LOW -> bypass on  
+//   GP5 — LOW -> NR on,  GP6 — LOW -> NT on.  
+//   GP7 — LOW -> мультимодовый маяк CW->JTTY->RTTY (слот GP13/GP28);  
+//     пин проверяется по концу полного цикла: LOW = повтор, open = стоп.  
 //   GP8 — LOW -> TX (PTT); при playback магнитофона — выход PTT (LOW).    
 //   GP9 — LOW -> запись: тракт -> TX (микрофон), без PTT.    
 //   GP10 — LOW -> передача сообщения: селектор GP13/GP28 выбирает 0..3.      
@@ -32,7 +34,10 @@
 #include "af_voice.h"
 #include "af_rec.h"        // af_rec_start/stop/play/play_stop — GP9/GP10
 #include "modes/cw_tx.h"   // cwtx_manual_*, cwtx_busy, cwtx_el_rem_free — ямбик  
-  
+#include "modes/rtty_tx.h"  // rttytx_abort — обрыв маяка mbcn
+#include "modes/jtty_tx.h"  // jttytx_abort — обрыв маяка mbcn
+
+
 struct gpio_ctl_t {  
     uint8_t  pin;  
     bool     stable;  
@@ -73,7 +78,14 @@ static bool     vbcn_on       = false;
 static uint32_t vbcn_period   = 0;       // мс, 0 = выкл    
 static uint32_t vbcn_next_ms  = 0;    
 static bool     vbcn_playing  = false;   // посылка идёт — период от конца    
-  
+
+// --- Мультимодовый маяк GP7: CW -> JTTY -> RTTY, пин проверяется по концу цикла ---  
+static bool     mbcn_on       = false;  
+static bool     mbcn_stop_req = false;  // запрос стопа (пин отпущен / mbcn off)  
+static uint8_t  mbcn_stage    = 0;      // 0=CW 1=JTTY 2=RTTY — текущий этап  
+static bool     mbcn_tx       = false;  // посылка текущего этапа идёт  
+static uint32_t mbcn_gap_ms   = 0;      // пауза между этапами  
+
 static uint32_t t_next_poll = 0;      
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
 static uint8_t  last_bank   = 1; // последний загруженный банк 1..7 (для af_rec)      
@@ -92,7 +104,10 @@ uint8_t af_gpio_msg_sel(void) {
     return (uint8_t)(ctl_sel[0].stable | (ctl_sel[1].stable << 1));    
 }    
 
-static void key_tx_off(void);   // forward: определена ниже    
+static void key_tx_off(void);   // forward: определена ниже  
+bool af_gpio_ptt_tx_on(void);   // forward: определена ниже  
+void af_gpio_ptt_tx_off(void);  // forward: определена ниже  
+
 // Режим ключа: 0=off, 1=iambic A, 2=iambic B, 3=straight. Для CLI 'cw key'.    
 void af_gpio_key_mode(uint8_t m) {    
     if (m > 3) return;    
@@ -145,13 +160,53 @@ static void apply_nt(bool grounded) {
     if (grounded) af_voice_play(VOICE_NT_ON);   // "автоматический режекторный фильтр включен"      
 }  
 
-static void apply_bypass(bool grounded) {    
-    af_dsp_set_bypass(grounded);    
-    Serial.printf("[GPIO] GP%u %s -> bypass=%s\n",    
-                  ctl_bypass.pin, grounded ? "GND" : "open",    
-                  grounded ? "on" : "off");    
-    if (grounded) af_voice_play(VOICE_BYPASS_ON);   // "режим обхода включен"  
-}
+// --- Мультимодовый маяк: CW -> JTTY -> RTTY, стоп по концу цикла ---  
+// on=true — запуск (пустой слот -> отказ), on=false — запрос остановки  
+// (фактический стоп после завершения текущего цикла, в poll).  
+void af_gpio_mbcn_set(bool on) {  
+    if (on) {  
+        if (mbcn_on) return;  
+        if (af_cw_msgs[af_gpio_msg_sel()][0] == '\0') {  
+            Serial.println(F("[GPIO] mbcn: slot empty"));  
+            return;  
+        }  
+        beacon_on = false;                       // взаимоисключение маяков  
+        vbcn_on   = false;  
+        mbcn_on = true; mbcn_stop_req = false;  
+        mbcn_stage = 0; mbcn_tx = false;  
+        mbcn_gap_ms = millis();  
+        Serial.println(F("[GPIO] mbcn on"));  
+    } else {  
+        if (!mbcn_on) return;  
+        mbcn_stop_req = true;                    // стоп после конца цикла  
+        Serial.println(F("[GPIO] mbcn: stop after cycle"));  
+    }  
+}  
+bool af_gpio_mbcn_on(void) { return mbcn_on; }  
+  
+// Немедленный обрыв: в отличие от mbcn_set(false) не ждёт конца цикла.  
+void af_gpio_mbcn_abort(void) {  
+    if (!mbcn_on && !mbcn_tx) return;  
+    mbcn_on = false; mbcn_stop_req = false;  
+    mbcn_tx = false; mbcn_stage = 0;  
+    cwtx_abort();  
+    rttytx_abort();  
+    jttytx_abort();  
+    af_gpio_ptt_tx_off();          // PTT отпустить сразу  
+    af_dsp_set_tx(false);          // посылки оборваны — тракт в RX сразу  
+    Serial.println(F("[GPIO] mbcn abort"));  
+}  
+  
+// GP7: LOW -> старт, open -> запрос стопа (цикл доигрывается до конца)  
+static void apply_mbcn(bool grounded) {  
+    if (grounded) {  
+        Serial.printf("[GPIO] GP%u GND -> mbcn on\n", ctl_bypass.pin);  
+        af_gpio_mbcn_set(true);  
+    } else {  
+        Serial.printf("[GPIO] GP%u open -> mbcn stop req\n", ctl_bypass.pin);  
+        af_gpio_mbcn_set(false);  
+    }  
+}  
 
 static void apply_ptt(bool grounded) {      
     if (sw_ptt_active) return;   // GP8 — выход PTT при playback, вход игнорируем    
@@ -285,7 +340,7 @@ static void poll_pin(gpio_ctl_t* c) {
                 c->stable = raw;  
                 if (c == &ctl_nr)          apply_nr(raw);  
                 else if (c == &ctl_nt)     apply_nt(raw);  
-                else if (c == &ctl_bypass) apply_bypass(raw);
+                else if (c == &ctl_bypass) apply_mbcn(raw);  
                 else if (c == &ctl_ptt)    apply_ptt(raw);    
                 else if (c == &ctl_rec)    apply_rec(raw);  
                 else if (c == &ctl_play)   apply_play(raw);    
@@ -433,7 +488,8 @@ void af_gpio_ctl_init(void) {
     // Теперь читаем реальное состояние пинов и применяем.  
     apply_nt(ctl_nt.stable);  
     apply_nr(ctl_nr.stable);  
-    apply_bypass(ctl_bypass.stable);
+    // apply_mbcn при старте не вызываем: маяк с замкнутого GP7 при boot  
+    // не нужен — как rec/play. Пин подействует при следующем изменении. 
     apply_ptt(ctl_ptt.stable);  
     // rec/play при старте не применяем: запись с замкнутого GP9 при boot  
     // не нужна, а play всё равно вернёт false — слот пуст.  
@@ -443,7 +499,7 @@ void af_gpio_ctl_init(void) {
     if (code != 0)    
         apply_bank(code);   // 000 = manual: настройки и bank_code не трогаем  
   
-    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u bypass=GP%u ptt=GP%u rec=GP%u play=GP%u sel=GP%u/GP%u (LOW=1/on)\n",      
+    Serial.printf("[GPIO] bank=GP%u..GP%u nr=GP%u nt=GP%u mbcn=GP%u ptt=GP%u rec=GP%u play=GP%u sel=GP%u/GP%u (LOW=1/on)\n",  
                   AF_PIN_BANK0, AF_PIN_BANK2, AF_PIN_NR, AF_PIN_NT, AF_PIN_BYPASS, AF_PIN_PTT,    
                   AF_PIN_REC, AF_PIN_PLAY, AF_MSG_SEL0_PIN, AF_MSG_SEL1_PIN);      
   
@@ -457,6 +513,7 @@ void af_gpio_beacon_set(const char* text, uint32_t period_s) {
         return;    
     }    
     if (vbcn_on) { vbcn_on = false; Serial.println("[VBCN] off (cw beacon on)"); }    
+    if (mbcn_on) { mbcn_on = false; mbcn_stop_req = false; Serial.println("[MBCN] off (cw beacon on)"); }
     strncpy(beacon_text, text, AF_CW_MSG_LEN - 1);    
     beacon_text[AF_CW_MSG_LEN - 1] = '\0';    
     beacon_period  = period_s * 1000u;    
@@ -478,6 +535,7 @@ void af_gpio_vbcn_set(uint32_t period_s) {
         return;    
     }    
     if (beacon_on) { beacon_on = false; Serial.println("[BEACON] off (vbcn on)"); }    
+    if (mbcn_on) { mbcn_on = false; mbcn_stop_req = false; Serial.println("[MBCN] off (vbcn on)"); }
     vbcn_period  = period_s * 1000u;    
     vbcn_next_ms = millis();              // первая посылка сразу    
     vbcn_playing = false;    
@@ -486,7 +544,9 @@ void af_gpio_vbcn_set(uint32_t period_s) {
 }    
     
 bool af_gpio_vbcn_on(void) { return vbcn_on; }    
-  
+
+
+// добиватель РТТ
 void af_gpio_ctl_poll(void) {    
     const uint32_t now = millis();    
     if ((int32_t)(now - t_next_poll) < 0) return;    
@@ -519,13 +579,14 @@ void af_gpio_ctl_poll(void) {
         }    
     }    
 
-    // Playback закончился по буферу (GP10 или CLI play voice_14) — отпускаем PTT/TX.          
-    // Для CW-вызова ждём конца посылки: cwtx_busy() держит PTT до последнего          
-    // элемента + послесвечение огибающей.          
-    if (sw_ptt_active && !af_rec_is_playing() && !af_dsp_cwtx_busy()) {          
-        af_gpio_ptt_tx_off();          
-        Serial.println("[GPIO] play end -> ptt/tx released");          
-    }          
+    // Playback/посылка закончилась — отпускаем PTT/TX.  
+    // !mbcn_on: в паузах между этапами маяка PTT держим на весь цикл.  
+    // busy всех трёх передатчиков — чтобы не отпустить PTT посреди посылки.  
+    if (sw_ptt_active && !mbcn_on && !af_rec_is_playing()  
+        && !af_dsp_cwtx_busy() && !af_dsp_rttytx_busy() && !af_dsp_jttytx_busy()) {  
+        af_gpio_ptt_tx_off();  
+        Serial.println("[GPIO] play end -> ptt/tx released");  
+    }  
     // Запись закончилась по буферу (авто-стоп), а GP9 ещё нажат — тракт в RX      
     if (ctl_rec.stable && !af_rec_is_recording() && !sw_ptt_active && af_dsp_tx_on()) {      
         af_dsp_set_tx(0);      
@@ -570,7 +631,53 @@ void af_gpio_ctl_poll(void) {
             }    
         }    
     }    
-    
+    // Мультимодовый маяк GP7: CW -> JTTY -> RTTY -> проверка пина -> повтор.  
+    // mbcn_stage — текущий этап; инкремент после завершения посылки.  
+    if (mbcn_on) {  
+        const char* msg = af_cw_msgs[af_gpio_msg_sel()];  
+        if (msg[0] == '\0') {                       // слот стёрли на ходу  
+            mbcn_on = false; mbcn_stop_req = false;  
+            af_gpio_ptt_tx_off();  
+            Serial.println(F("[GPIO] mbcn: slot empty -> stop"));  
+        } else if (mbcn_tx) {  
+            // ждём конца текущей посылки  
+            bool busy = (mbcn_stage == 0) ? af_dsp_cwtx_busy()  
+                      : (mbcn_stage == 1) ? af_dsp_jttytx_busy()  
+                                          : af_dsp_rttytx_busy();  
+            if (!busy) {  
+                mbcn_tx = false;  
+                if (mbcn_stage == 2) {  
+                    // Цикл завершён (RTTY отыгран) — только теперь смотрим пин  
+                    if (!mbcn_stop_req && ctl_bypass.stable) {  
+                        mbcn_stage = 0;             // GP7 ещё LOW — повтор  
+                        mbcn_gap_ms = millis() + 500u;  
+                    } else {  
+                        mbcn_on = false; mbcn_stop_req = false;  
+                        af_gpio_ptt_tx_off();  
+                        Serial.println(F("[GPIO] mbcn: cycle done -> stop"));  
+                    }  
+                } else {  
+                    mbcn_stage++;  
+                    mbcn_gap_ms = millis() + 500u;  
+                }  
+            }  
+        } else if ((int32_t)(millis() - mbcn_gap_ms) >= 0) {  
+            if (!af_rec_is_playing() && !af_rec_is_recording() && !key_tx) {  
+                bool ok;  
+                if (mbcn_stage == 0)      ok = af_dsp_cwtx_start(msg);  
+                else if (mbcn_stage == 1) ok = af_dsp_jttytx_start(msg);  
+                else                      ok = af_dsp_rttytx_start(msg);  
+                if (ok) {  
+                    af_gpio_ptt_tx_on();            // PTT LOW на весь цикл  
+                    mbcn_tx = true;  
+                } else {  
+                    mbcn_gap_ms = millis() + 1000u; // занято — повтор через 1 с  
+                }  
+            } else {  
+                mbcn_gap_ms = millis() + 500u;  
+            }  
+        }  
+    }  
 }    
 
 bool    af_gpio_ptt_active(void) { return sw_ptt_active; }  

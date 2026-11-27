@@ -31,6 +31,11 @@ bool    af_gpio_beacon_on(void);
 void    af_gpio_vbcn_set(uint32_t period_s);   // голосовой маяк, 0 = выкл    
 bool    af_gpio_vbcn_on(void);    
 
+// Мультимодовый маяк GP7: CW -> JTTY -> RTTY, стоп по концу цикла.  
+void af_gpio_mbcn_set(bool on);    // on=false — запрос стопа (цикл доиграется)  
+bool af_gpio_mbcn_on(void);  
+void af_gpio_mbcn_abort(void);     // немедленный обрыв посылки и маяка  
+
 bool    af_gpio_ptt_active(void);   // sw_ptt_active — PTT поднят софтом  
 bool    af_gpio_key_tx(void);       // key_tx — ключ держит TX  
 uint8_t af_gpio_key_mode(void);     // 0=off 1=iambicA 2=iambicB 3=straight  

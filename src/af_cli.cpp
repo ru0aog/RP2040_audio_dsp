@@ -107,7 +107,8 @@ static void cli_help(void) {
     Serial.println("#   rtty tx <текст>   — передать посылку RTTY 45.45/170 (центр 1000 Гц, авто-возврат в RX)");    
     Serial.println("#   rtty abort        — оборвать посылку RTTY");
     Serial.println("#   jtty tx <текст>   — передать посылку JTTY (4-FSK 31.25 Бод, центр 1000 Гц, авто-возврат в RX)");  
-    Serial.println("#   jtty abort        — оборвать посылку JTTY;  jtty test — эталонные вектора кодека");  
+    Serial.println("#   jtty abort        — оборвать посылку JTTY;  jtty test — эталонные вектора кодека");
+    Serial.println("#   mbcn on|off|abort — маяк CW->JTTY->RTTY (слот GP13/GP28); off = стоп по концу цикла, abort = обрыв");
     Serial.println("#   agc on|off        — АРУ (off -> ручное усиление, лимитер остаётся)");  
     Serial.println("#   agcref <1000..32767> — целевой уровень АРУ (SSB)");    
     Serial.println("#   agcmax <1..1000>  — потолок усиления АРУ, множитель");    
@@ -186,7 +187,7 @@ static void cli_help(void) {
     Serial.println("#   recs              — состояние слотов 1..4 (слот = селектор GP13/GP28)");      
     Serial.println("#   help / h / ?      — эта справка");      
     Serial.println("# === GPIO ===");    
-    Serial.println("# GPIO: GP2-4=банк GP5=NR GP6=NT GP7=bypass GP8=PTT GP9=rec GP10=play");  
+    Serial.println("# GPIO: GP2-4=банк GP5=NR GP6=NT GP7=mbcn GP8=PTT GP9=rec GP10=play");    
     Serial.println("#       GP11/GP12=ключ dit/dah  GP13/GP28=селектор сообщений 0..3");  
 }
 
@@ -1331,8 +1332,9 @@ static void cli_exec(char* line) {
             Serial.printf("R|ramp|%u\n",     af_dsp_ramp_on() ? 1 : 0);    
             Serial.printf("R|key mode|%u\n", (unsigned)af_gpio_key_mode());    
             Serial.printf("R|key tx|%u\n",   af_gpio_key_tx() ? 1 : 0);    
-            Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);      
-            Serial.printf("R|vbcn|%u\n",     af_gpio_vbcn_on() ? 1 : 0);      
+            Serial.printf("R|beacon|%u\n",   af_gpio_beacon_on() ? 1 : 0);        
+            Serial.printf("R|vbcn|%u\n",     af_gpio_vbcn_on() ? 1 : 0);        
+            Serial.printf("R|mbcn|%u\n",     af_gpio_mbcn_on() ? 1 : 0);        
             Serial.printf("R|cwtx|%u\n",     af_dsp_cwtx_busy() ? 1 : 0);    
             Serial.printf("R|rttytx|%u\n",   af_dsp_rttytx_busy() ? 1 : 0);      
             Serial.printf("R|jttytx|%u\n",   af_dsp_jttytx_busy() ? 1 : 0);      
@@ -1697,7 +1699,26 @@ static void cli_exec(char* line) {
         else {  
             Serial.println("# ERR: jtty tx <текст>|abort|test");  
         }  
+    }
+    else if (strcmp(cmd, "mbcn") == 0) {  
+        // Мультимодовый маяк GP7: CW -> JTTY -> RTTY из слота GP13/GP28.  
+        // off — стоп по завершении полного цикла; abort — немедленный обрыв.  
+        char* s = strtok(NULL, " \t");  
+        if (s && strcmp(s, "on") == 0) {  
+            af_gpio_mbcn_set(true);  
+            Serial.println("# OK mbcn on");  
+        } else if (s && strcmp(s, "off") == 0) {  
+            af_gpio_mbcn_set(false);  
+            Serial.println("# OK mbcn off (стоп после конца цикла)");  
+        } else if (s && strcmp(s, "abort") == 0) {  
+            af_gpio_mbcn_abort();  
+            Serial.println("# OK mbcn abort");  
+        } else {  
+            Serial.printf("# mbcn = %s\n", af_gpio_mbcn_on() ? "on" : "off");  
+        }  
     }  
+
+
     else if (strcmp(cmd, "save") == 0) {  
         char* v = strtok(NULL, " \t");  
         if (v == NULL) { Serial.println("# ERR: save <1..7>"); return; }  
