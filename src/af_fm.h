@@ -16,12 +16,13 @@
 // цепочки регулярные, сектор FAT генерируется формулой, RAM не тратится.  
 //   LBA 0        boot            
 //   LBA 1..80    FAT (80 секторов, 20480 записей по 2 Б — синтез)              
-//   LBA 81       root dir (8 записей: SET.TXT + CW.TXT + AF_PANEL.PY + README.TXT + REC1..REC4.WAV)                
+//   LBA 81       root dir (9 записей: SET.TXT + CW.TXT + AF_PANEL.PY + README.TXT + SHEM.GIF + REC1..REC4.WAV)
 //   LBA 82..97   SET.TXT (16 кластеров резерв, ~8 КБ)                
-//   LBA 98       CW.TXT (1 кластер, 4 строки сообщений магнитофона)              
-//   LBA 99..290  AF_PANEL.PY (192 кластера резерв, ~96 КБ)              
-//   LBA 291..338 README.TXT (48 кластеров резерв, ~24 КБ)              
-//   LBA 339..    REC1..REC4.WAV, каждый по AF_FM_WAV_CLUSTERS кластеров           
+//   LBA 98       CW.TXT (1 кластер, 4 строки сообщений магнитофона)                
+//   LBA 99..290  AF_PANEL.PY   LBA 291..338 README.TXT   LBA 339..498 SHEM.GIF   LBA 499.. REC1..REC4.WAV
+//   LBA 291..338 README.TXT (48 кластеров резерв, ~24 КБ)                
+//   LBA 339..498 SHEM.GIF (160 кластеров резерв, ~80 КБ)  
+//   LBA 499..    REC1..REC4.WAV, каждый по AF_FM_WAV_CLUSTERS кластеров                   
   
 // FAT16: 2 Б на запись. Диск 20480 секторов -> ~20398 кластеров ->  
 // FAT = 20398*2/512 ~= 80 секторов. FAT не хранится в RAM — сектор  
@@ -57,12 +58,17 @@
 #define AF_FM_PANEL_CLUSTERS  192u                                 // 96 КБ резерв      
 #define AF_FM_PANEL_LBA       (AF_FM_CW_LBA + AF_FM_CW_CLUSTERS)   // 99      
     
-// README.TXT — read-only текст, вшитый в прошивку (readme_txt.h).      
-// Резерв 24 КБ под текст ~20 КБ.      
-#define AF_FM_README_CLUSTERS 48u                                  // 24 КБ резерв      
-#define AF_FM_README_LBA      (AF_FM_PANEL_LBA + AF_FM_PANEL_CLUSTERS)   // 291      
-    
-#define AF_FM_WAV_LBA(i)    (AF_FM_README_LBA + AF_FM_README_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)   // 339+             
+// README.TXT — read-only текст, вшитый в прошивку (readme_txt.h).        
+// Резерв 24 КБ под текст ~20 КБ.        
+#define AF_FM_README_CLUSTERS 48u                                  // 24 КБ резерв        
+#define AF_FM_README_LBA      (AF_FM_PANEL_LBA + AF_FM_PANEL_CLUSTERS)   // 291        
+  
+// SHEM.GIF — read-only картинка, вшитая в прошивку (image_gif.h).  
+// Резерв 80 КБ под файл ~78 КБ; static_assert в af_fm.cpp ловит переполнение.  
+#define AF_FM_GIF_CLUSTERS    160u                                 // 80 КБ резерв  
+#define AF_FM_GIF_LBA         (AF_FM_README_LBA + AF_FM_README_CLUSTERS) // 339  
+  
+#define AF_FM_WAV_LBA(i)    (AF_FM_GIF_LBA + AF_FM_GIF_CLUSTERS + (i) * AF_FM_WAV_CLUSTERS)   // 499+                      
   
 // В RAM только boot+dir+SET+CW — 19 секторов (~10 КБ). FAT и WAV  
 // синтезируются в af_fm_msc_read. Маппинг LBA -> индекс fm_disk:  
@@ -92,8 +98,8 @@ void    af_fm_msc_flush(void);
 // копирование файла любого размера (проверка free space до записи).  
 // Записи хоста в пул проглатываются (кроме RECn.WAV -> аплоад).  
 #define AF_FM_SECTOR_COUNT   20480u  // 10 МБ    
-#define AF_FM_FREE_LBA       AF_FM_WAV_LBA(AF_FM_WAV_FILES)   // 3843      
-#define AF_FM_FREE_SECTORS   (AF_FM_SECTOR_COUNT - AF_FM_FREE_LBA)  // ~16637      
+#define AF_FM_FREE_LBA       AF_FM_WAV_LBA(AF_FM_WAV_FILES)   // 4003        
+#define AF_FM_FREE_SECTORS   (AF_FM_SECTOR_COUNT - AF_FM_FREE_LBA)  // ~16477        
 
 // Маппинг RAM-образа fm_disk[]: FAT в RAM не хранится (синтез).    
 #define AF_FM_DIR_RAM    1u    // fm_disk[1]  = root dir (LBA 81)    

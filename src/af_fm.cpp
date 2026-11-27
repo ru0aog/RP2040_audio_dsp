@@ -39,12 +39,15 @@
 #include "af_usb.h"          // af_usb_reenumerate — перемонтирование диска
 #include "af_store.h"        // af_cw_msgs, af_store_cw_save — CW.TXT 
 #include "af_panel_py.h"      // af_panel_py[] — вшитая копия tools/af_panel.py    
-#include "readme_txt.h"       // readme_txt[] — вшитый README.TXT    
+#include "readme_txt.h"       // readme_txt[] — вшитый README.TXT
+#include "image_gif.h"        // image_gif[] — вшитый SHEM.GIF (bin2h.py)
   
 static_assert(af_panel_py_len <= AF_FM_PANEL_CLUSTERS * AF_FM_SECTOR_SIZE,    
               "af_panel.py larger than AF_FM_PANEL_CLUSTERS reserve");    
 static_assert(readme_txt_len <= AF_FM_README_CLUSTERS * AF_FM_SECTOR_SIZE,    
               "README.TXT larger than AF_FM_README_CLUSTERS reserve");    
+static_assert(image_gif_len <= AF_FM_GIF_CLUSTERS * AF_FM_SECTOR_SIZE,  
+              "SHEM.GIF larger than AF_FM_GIF_CLUSTERS reserve");  
 
 // Рендер таблицы banks в буфер (af_cli.cpp — там AF_PARAMS/bank_field).    
 // Возвращает длину текста без NUL.    
@@ -52,7 +55,7 @@ extern size_t af_cli_format_banks(char* buf, size_t cap);
   
 #include "af_rec.h"          // af_rec_slot_len/data — WAV-экспорт    
 
-const uint32_t vid = 0xA0D5F005;       // bump: +README.TXT — иначе Windows    
+const uint32_t vid = 0xA0D5F006;       // bump: +SHEM.GIF — иначе Windows      
                                        // подставит кэш dir/FAT старого тома
                                        // остальное на строке 200
 
@@ -152,15 +155,16 @@ static void dir_track(const uint8_t* d) {
 // создаст каталог заново — цикл безвредный.    
 // Вызывается после memcpy dir-сектора в af_fm_msc_write, до dir_track. 
 static void dir_fix_foreign(uint8_t* d) {  
-    static const char known[8][12] = {      
-        "SET     TXT", "CW      TXT", "AF_PANELPY ", "README  TXT",      
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };      
+    static const char known[9][12] = {        
+        "SET     TXT", "CW      TXT", "AF_PANELPY ", "README  TXT",  
+        "SHEM    GIF",  
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" }; 
     for (uint8_t e = 0; e < 16; e++) {  
         uint8_t* p = d + e * 32;  
         if (p[0] == 0xE5 || p[0] == 0x00 || p[0] == 0x05) continue;  // удалённая/пустая  
         if (p[11] == 0x0F) continue;                                 // LFN-запись  
         bool ours = false;    
-        for (uint8_t i = 0; i < 8; i++)    
+        for (uint8_t i = 0; i < 9; i++)    
             if (memcmp(p, known[i], 11) == 0) { ours = true; break; }    
         if (ours) continue;      
         // Удалённая запись — chkdsk пропускает. Вместе с ней помечаем  
@@ -226,11 +230,15 @@ static uint16_t fat_entry(uint16_t n) {
     if (n >= cl && n < cl + AF_FM_PANEL_CLUSTERS)      
         return (n == cl + AF_FM_PANEL_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);      
     cl += AF_FM_PANEL_CLUSTERS;        
-    // README.TXT: цепочка AF_FM_README_CLUSTERS (read-only, rodata)        
-    if (n >= cl && n < cl + AF_FM_README_CLUSTERS)        
-        return (n == cl + AF_FM_README_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);        
-    cl += AF_FM_README_CLUSTERS;        
-    // RECn.WAV: фиксированная сетка AF_FM_WAV_CLUSTERS на файл        
+    // README.TXT: цепочка AF_FM_README_CLUSTERS (read-only, rodata)          
+    if (n >= cl && n < cl + AF_FM_README_CLUSTERS)          
+        return (n == cl + AF_FM_README_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);          
+    cl += AF_FM_README_CLUSTERS;          
+    // SHEM.GIF: цепочка AF_FM_GIF_CLUSTERS (read-only, rodata)  
+    if (n >= cl && n < cl + AF_FM_GIF_CLUSTERS)  
+        return (n == cl + AF_FM_GIF_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);  
+    cl += AF_FM_GIF_CLUSTERS;  
+    // RECn.WAV: фиксированная сетка AF_FM_WAV_CLUSTERS на файл          
     for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
         if (n >= cl && n < cl + AF_FM_WAV_CLUSTERS)    
             return (n == cl + AF_FM_WAV_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);    
@@ -271,20 +279,26 @@ static void fm_build_dir(uint32_t set_size, uint16_t set_clusters,
     dir_entry(&d[64], "AF_PANELPY ",        
               (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS),        
               af_panel_py_len);        
-    // README.TXT: первый кластер = 2+SET+CW+PANEL, размер = фактический        
-    dir_entry(&d[96], "README  TXT",        
-              (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS        
-                         + AF_FM_PANEL_CLUSTERS),        
-              readme_txt_len);        
-    static const char wav_names[AF_FM_WAV_FILES][12] = {        
-        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };     
-    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {          
-        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS        
-                                    + AF_FM_PANEL_CLUSTERS        
-                                    + AF_FM_README_CLUSTERS        
-                                    + i * AF_FM_WAV_CLUSTERS);          
-        dir_entry(&d[32 * (i + 4)], wav_names[i], wav_sizes[i] ? first : 0, wav_sizes[i]);        
-    }          
+    // README.TXT: первый кластер = 2+SET+CW+PANEL, размер = фактический          
+    dir_entry(&d[96], "README  TXT",          
+              (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS          
+                         + AF_FM_PANEL_CLUSTERS),          
+              readme_txt_len);          
+    // SHEM.GIF: первый кластер = 2+SET+CW+PANEL+README, размер = фактический  
+    dir_entry(&d[128], "SHEM    GIF",  
+              (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS  
+                         + AF_FM_PANEL_CLUSTERS + AF_FM_README_CLUSTERS),  
+              image_gif_len);  
+    static const char wav_names[AF_FM_WAV_FILES][12] = {          
+        "REC1    WAV", "REC2    WAV", "REC3    WAV", "REC4    WAV" };       
+    for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {            
+        uint16_t first = (uint16_t)(2 + AF_FM_SET_CLUSTERS + AF_FM_CW_CLUSTERS          
+                                    + AF_FM_PANEL_CLUSTERS          
+                                    + AF_FM_README_CLUSTERS  
+                                    + AF_FM_GIF_CLUSTERS  
+                                    + i * AF_FM_WAV_CLUSTERS);            
+        dir_entry(&d[32 * (i + 5)], wav_names[i], wav_sizes[i] ? first : 0, wav_sizes[i]);          
+    }              
 }    
   
 // ---------------------------------------------------------------------------  
@@ -874,9 +888,23 @@ int32_t af_fm_msc_read(uint32_t lba, void* buffer, uint32_t bufsize) {
         } else {        
             memset(buffer, 0, AF_FM_SECTOR_SIZE);        
         }        
-        return (int32_t)AF_FM_SECTOR_SIZE;        
-    }        
-    // WAV-область: определяем файл по диапазону LBA.              
+        return (int32_t)AF_FM_SECTOR_SIZE;          
+    }          
+    // SHEM.GIF: данные из rodata; хвост за концом файла — нули.  
+    if (lba >= AF_FM_GIF_LBA &&  
+        lba < AF_FM_GIF_LBA + AF_FM_GIF_CLUSTERS) {  
+        uint32_t off = (lba - AF_FM_GIF_LBA) * AF_FM_SECTOR_SIZE;  
+        if (off < image_gif_len) {  
+            uint32_t n = image_gif_len - off;  
+            if (n > AF_FM_SECTOR_SIZE) n = AF_FM_SECTOR_SIZE;  
+            memcpy(buffer, image_gif + off, n);  
+            memset((uint8_t*)buffer + n, 0, AF_FM_SECTOR_SIZE - n);  
+        } else {  
+            memset(buffer, 0, AF_FM_SECTOR_SIZE);  
+        }  
+        return (int32_t)AF_FM_SECTOR_SIZE;  
+    }  
+    // WAV-область: определяем файл по диапазону LBA.                           
     for (uint8_t i = 0; i < AF_FM_WAV_FILES; i++) {    
         uint32_t start = AF_FM_WAV_LBA(i);    
         if (lba >= start && lba < start + AF_FM_WAV_CLUSTERS) {    
