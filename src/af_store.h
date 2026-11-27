@@ -22,11 +22,6 @@
 #define AF_CW_MODE_CW    1  
 #define AF_CW_MODE_RTTY  2  
 #define AF_CW_MODE_JTTY  3  
-  
-// Дефолтный вызов для всех слотов при невалидном CW-блоке во flash      
-// (чистая плата / битый crc / старый ver). Пустая строка "" = дефолты      
-// не подставлять. Мода дефолтных слотов — AF_CW_MODE_CW.      
-#define AF_CW_DEFAULT  "VVV TESTING BEACON K"  
     
 #define AF_STORE_VER      15  // было 14: +lo2_hz/hi2_hz/band2_on (пост-фильтр    
                             // на выходе со своими границами band2).    

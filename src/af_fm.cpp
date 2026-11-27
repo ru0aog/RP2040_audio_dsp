@@ -225,9 +225,10 @@ static uint16_t fat_entry(uint16_t n) {
     if (n >= cl && n < cl + AF_FM_SET_CLUSTERS)    
         return (n == cl + AF_FM_SET_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);    
     cl += AF_FM_SET_CLUSTERS;    
-    // CW.TXT: 1 кластер      
-    if (n == cl) return 0xFFFF;      
-    cl += AF_FM_CW_CLUSTERS;      
+    // CW.TXT: цепочка AF_FM_CW_CLUSTERS (4 кластера, 2 КБ)  
+    if (n >= cl && n < cl + AF_FM_CW_CLUSTERS)  
+        return (n == cl + AF_FM_CW_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);  
+    cl += AF_FM_CW_CLUSTERS;  
     // AF_PANEL.PY: цепочка AF_FM_PANEL_CLUSTERS (read-only, rodata)      
     if (n >= cl && n < cl + AF_FM_PANEL_CLUSTERS)      
         return (n == cl + AF_FM_PANEL_CLUSTERS - 1) ? 0xFFFF : (uint16_t)(n + 1);      
