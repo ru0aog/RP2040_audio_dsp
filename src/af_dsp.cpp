@@ -556,13 +556,15 @@ static void eq_design(eq_biquad_t* q, int kind, int32_t db_x10,
         b2 =    A*((A+1) - (A-1)*cw - sq);  
         a1 =   -2*((A-1) + (A+1)*cw);  
         a2 =       (A+1) + (A-1)*cw - sq;  
-    } else if (kind == 2) {   // high-shelf (как af_tx_set_shelf)  
-        a0 = (A+1) - (A-1)*cw + sq;  
-        b0 =    A*((A+1) + (A-1)*cw + sq);  
-        b1 = -2*A*((A-1) + (A+1)*cw);  
-        b2 =    A*((A+1) + (A-1)*cw - sq);  
-        a1 =   -2*((A-1) - (A+1)*cw);  
-        a2 =       (A+1) - (A-1)*cw - sq;  
+    } else if (kind == 2) {   // high-shelf (RBJ)    
+        a0 = (A+1) - (A-1)*cw + sq;    
+        b0 =    A*((A+1) + (A-1)*cw + sq);    
+        b1 = -2*A*((A-1) + (A+1)*cw);    
+        b2 =    A*((A+1) + (A-1)*cw - sq);    
+        a1 =   -2*((A-1) + (A+1)*cw);   // было: -2*((A-1) - (A+1)*cw) —    
+                                      // неверный знак: полюса вне круга,    
+                                      // провал/звон вместо подъёма ВЧ    
+        a2 =       (A+1) - (A-1)*cw - sq;    
     } else {                  // peaking (RBJ)  
         a0 = 1.0f + al/A;  
         b0 = 1.0f + al*A;  
