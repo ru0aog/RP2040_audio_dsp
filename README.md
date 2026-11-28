@@ -424,7 +424,6 @@ rtty sql <0..1>            Сквелч
 ```markdown
 ### JTTY-команды
 
-```text
 jtty tx <текст>            Передать JTTY-посылку  
 jtty test                  Самотест кодека (encode/decode в Serial)  
 ```
