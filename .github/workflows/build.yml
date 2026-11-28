@@ -1,0 +1,54 @@
+name: Build UF2 + Panel EXE  
+  
+on:  
+  push:  
+    branches: [ main ]  
+  pull_request:  
+    branches: [ main ]  
+  workflow_dispatch:  
+  
+jobs:  
+  uf2:  
+    runs-on: ubuntu-latest  
+    steps:  
+      - uses: actions/checkout@v4  
+  
+      - name: Cache PlatformIO  
+        uses: actions/cache@v4  
+        with:  
+          path: ~/.platformio  
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}  
+  
+      - name: Install PlatformIO  
+        run: pip install platformio  
+  
+      - name: Build firmware  
+        run: pio run -e pico  
+  
+      - name: Upload UF2  
+        uses: actions/upload-artifact@v4  
+        with:  
+          name: RP2040_audio_dsp-uf2  
+          path: .pio/build/pico/firmware.uf2  
+  
+  panel-exe:  
+    runs-on: windows-latest  
+    steps:  
+      - uses: actions/checkout@v4  
+  
+      - name: Setup Python  
+        uses: actions/setup-python@v5  
+        with:  
+          python-version: '3.12'  
+  
+      - name: Install dependencies  
+        run: pip install pyinstaller sounddevice numpy pillow pyserial  
+  
+      - name: Build exe  
+        run: pyinstaller af_panel.spec --clean --noconfirm  
+  
+      - name: Upload EXE  
+        uses: actions/upload-artifact@v4  
+        with:  
+          name: af_panel-exe  
+          path: dist/af_panel.exe  
