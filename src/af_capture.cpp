@@ -194,29 +194,26 @@ static void __not_in_flash_func(af_bwpot_irq_service)(
     // второе гарантированно от ADC3. RESULT = последнее преобразование.          
     for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс          
     (void)adc_hw->result;                            // отбросить          
-    for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс          
-    bwpot_val = (uint16_t)(adc_hw->result & 0x0FFFu);          
-    adc_run(false);      
-    adc_fifo_drain();      
-    adc_select_input(af_adc_ch);           // вернуть рабочий канал      
-    adc_run(true);      
-    
-    
+    for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс
 
-    adc_run(false);    
-    adc_fifo_drain();    
-    adc_select_input(af_adc_ch);           // вернуть рабочий канал    
-    adc_run(true);    
+    bwpot_val = (uint16_t)(adc_hw->result & 0x0FFFu);            
+    adc_run(false);        
+    adc_fifo_drain();        
+    adc_select_input(af_adc_ch);           // вернуть рабочий канал        
+    adc_run(true);        
     
     // Позиция записи DMA в заполняемом буфере — там могут лежать    
     // отсчёты ADC3. Патчим окно [pos-2 .. pos+16] значением fill.    
     if (other >= 0 && cur != af_scratch_a && cur != af_scratch_b) {    
         const uintptr_t wa = (uintptr_t)dma_hw->ch[other].write_addr;    
         long pos = (long)((wa - (uintptr_t)cur) / 2u);    
-        long p0 = pos - 8;               // мусор ADC3 лежит позади write_addr    
-        if (p0 < 0) p0 = 0;      
-        long p1 = pos + 2;               // небольшой запас вперёд    
-        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;      
+        // Мусор ADC3 пишется DMA ВПЕРЁД от write_addr, пока мультиплексор      
+        // на ADC3 (~8 мкс ≈ 4 отсчёта). Патчим [pos-2 .. pos+10] с запасом.      
+        long p0 = pos - 8;        // мусор ADC3 лежит ПОЗАДИ pos: write_addr    
+        if (p0 < 0) p0 = 0;       // читается уже после ~8 мкс паузы (~4 отсчёта)    
+        long p1 = pos + 12;       // + запас вперёд на хвост FIFO    
+        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;          
+        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;        
         for (long i = p0; i < p1; ++i) cur[i] = fill;    
     }    
 }    
