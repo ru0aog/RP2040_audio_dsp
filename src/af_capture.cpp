@@ -83,9 +83,10 @@ static volatile uint8_t af_b_sel = 0;
 static volatile uint16_t* af_dma_a_target = af_buf_a0;  
 static volatile uint16_t* af_dma_b_target = af_buf_b0;  
   
-static int af_dma_a = -1;  
-static int af_dma_b = -1;  
-static volatile bool af_running = false;  
+static int af_dma_a = -1;    
+static int af_dma_b = -1;    
+static volatile bool af_running = false;    
+static volatile bool af_paused  = false;   // capture припаркован под flash-окно    
 
 // Диагностика для stats: сохраняются в af_capture_start.    
 static uint32_t af_clk_adc_hz = 0;    
@@ -276,9 +277,10 @@ void af_capture_start(void) {
     // ADC: два входа — GP26 (ADC0, RX) и GP27 (ADC1, TX), без round-robin.    
     // Активный канал выбирается af_capture_set_channel().    
     adc_init();    
-    adc_gpio_init(AF_ADC_PIN);    
-    adc_gpio_init(AF_TX_ADC_PIN);    
-    adc_select_input(AF_ADC_PIN - 26);      // GP26 -> input 0 (RX по умолчанию)    
+    adc_gpio_init(AF_ADC_PIN);      
+    adc_gpio_init(AF_TX_ADC_PIN);      
+    adc_gpio_init(AF_BWPOT_PIN);            // GP29 -> input 3 (ручка полосы)    
+    adc_select_input(AF_ADC_PIN - 26);      // GP26 -> input 0 (RX по умолчанию)      
     adc_fifo_setup(true, true, 1, false, false);  
     // DIV задаёт период выборки как (DIV+1) тактов clk_adc — off-by-one      
     // в регистре. Преобразование занимает 96 тактов: период < 96      
@@ -449,9 +451,10 @@ bool af_capture_is_running(void) {
 // af_capture_resume — после restore_interrupts: перезапуск цепочки A->B->A.  
 // ---------------------------------------------------------------------------
 // ===============   БЛОК ПАРКОВКИ DMA НА ПЕРИОД ФЛЭШ-ЗАПИСИ   ===============
-void af_capture_pause(void) {    
-    if (!af_running) return;    
-    adc_run(false);                          // ADC перестаёт давать DREQ    
+void af_capture_pause(void) {      
+    if (!af_running) return;      
+    af_paused = true;                        // чтение ADC3 запрещено до resume    
+    adc_run(false);                          // ADC перестаёт давать DREQ      
     irq_set_enabled(DMA_IRQ_0, false);    
     // Сначала разорвать chain_to (на самого себя = "не цеплять никого"),    
     // иначе abort одного канала может пнуть напарника — гонка на рестарте.    
@@ -516,10 +519,11 @@ void af_capture_resume(void) {
     dma_channel_set_irq0_enabled(af_dma_b, true);    
     irq_set_enabled(DMA_IRQ_0, true);    
     
-    dma_channel_start(af_dma_a);   // B стартует аппаратно по chain_to    
-    adc_run(true);    
-}    
-// ======================   КОНЕЦ БЛОКА DMA-ПАРКОВКИ   =======================
+    dma_channel_start(af_dma_a);   // B стартует аппаратно по chain_to      
+    adc_run(true);      
+    af_paused = false;      
+}      
+// ======================   КОНЕЦ БЛОКА DMA-ПАРКОВКИ   =======================  
 
 // ---------------------------------------------------------------------------    
 // Диагностика для stats (читается с Core 0, пишется при start/set_channel)    
@@ -527,3 +531,35 @@ void af_capture_resume(void) {
 uint32_t af_capture_clk_adc_hz(void) { return af_clk_adc_hz; }    
 float    af_capture_adc_div(void)    { return af_adc_div; }    
 uint8_t  af_capture_channel(void)    { return af_adc_ch; }    
+
+// ---------------------------------------------------------------------------    
+// Ручка полосы: однократное чтение ADC3 (GP29) с паузой основного захвата.    
+//    
+// ADC у нас не round-robin: канал выбирается adc_select_input, поток идёт    
+// непрерывно. Чтобы прочитать ADC3, приходится остановить ADC, переключить    
+// мультиплексор, прочитать и вернуть канал RX/TX обратно. Пауза ~10–20 мкс    
+// (одно преобразование 96 тактов clk_adc ≈ 2 мкс + переключение): DMA-цепочка    
+// просто ждёт DREQ, пропуска отсчётов в буферах НЕТ — поток сдвигается    
+// на длину паузы, что раз в 100 мс неслышно.    
+//    
+// Вызывать ТОЛЬКО с Core 0 (там же живёт DMA_IRQ_0), не чаще ~раза в 50–100 мс.    
+// Возвращает 0..4095 или 0xFFFF, если чтение сейчас нельзя выполнять    
+// (capture остановлен или припаркован под flash-окно).    
+// ---------------------------------------------------------------------------    
+uint16_t af_capture_read_bwpot(void) {    
+    if (!af_running || af_paused) return 0xFFFF;    
+    
+    adc_run(false);                 // ADC молчит — DMA ждёт DREQ    
+    adc_fifo_drain();               // выкинуть хвост текущего канала    
+    
+    adc_select_input(AF_BWPOT_PIN - 26);   // GP29 -> input 3    
+    adc_run(true);    
+    uint16_t v = (uint16_t)adc_read();     // одно преобразование ~2 мкс    
+    
+    adc_run(false);    
+    adc_fifo_drain();    
+    adc_select_input(af_adc_ch);    // вернуть рабочий канал (0=RX, 1=TX)    
+    adc_run(true);    
+    
+    return v & 0x0FFFu;    
+}    

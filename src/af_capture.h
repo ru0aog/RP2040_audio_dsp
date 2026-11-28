@@ -54,3 +54,4 @@ void af_capture_resume(void);
 uint32_t af_capture_clk_adc_hz(void);   // clk_adc на момент старта    
 float    af_capture_adc_div(void);      // adc_set_clkdiv (период-1 тактов)    
 uint8_t  af_capture_channel(void);      // 0=GP26/RX, 1=GP27/TX
+uint16_t af_capture_read_bwpot(void);   // ADC3/GP29, 0..4095; 0xFFFF — занято    

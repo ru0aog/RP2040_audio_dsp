@@ -77,7 +77,8 @@ static void cli_help(void) {
     Serial.println("#   nb thr <15..100>  — порог NB x10 над огибающей (30 = x3.0)");
     Serial.println("#   rx band on|off    — полосовой FIR RX (off = сигнал мимо фильтра)");
     Serial.println("#   band2 lo|hi <Hz>  — полоса пост-фильтра на выходе (после EQ)");    
-    Serial.println("#   rx band2 on|off   — пост-фильтр выхода (off = мимо)");    
+    Serial.println("#   rx band2 on|off   — пост-фильтр выхода (off = мимо)");      
+    Serial.println("#   bw pot on|off     — ручка полосы на GP29 (сужение к 700 Гц)");      
     Serial.println("#   rx shelf on|off   — low-shelf «бас» в тракте/мимо");  
     Serial.println("#   rxeq on|off       — 3-полосный EQ RX целиком");  
     Serial.println("#   rxeq lo|mid|hi <-120..120> — 3-полосный EQ RX, дБx10 (60=+6дБ, -60=-6дБ)");      
@@ -1324,7 +1325,8 @@ static void cli_exec(char* line) {
             Serial.printf("R|cw|%u\n",       af_dsp_cw_on() ? 1 : 0);    
             Serial.printf("R|nb|%u\n",       af_dsp_nb_on() ? 1 : 0);    
             Serial.printf("R|rxnotch|%u\n",  af_dsp_rxnotch_on() ? 1 : 0);
-            Serial.printf("R|rxband2|%u\n",  af_dsp_rxband2_on() ? 1 : 0);    
+            Serial.printf("R|rxband2|%u\n",  af_dsp_rxband2_on() ? 1 : 0);      
+            Serial.printf("R|bwpot|%u\n",    af_gpio_bwpot_on() ? 1 : 0);      
             Serial.printf("R|rxpres|%u\n",   af_dsp_rxpres_on() ? 1 : 0);    
             Serial.printf("R|rxexc|%u\n",    af_dsp_rxexc_on() ? 1 : 0);    
             Serial.printf("R|rtty|%u\n",     af_dsp_rtty_on() ? 1 : 0);    
@@ -1376,16 +1378,28 @@ static void cli_exec(char* line) {
         }  
         uint32_t lo = (uint32_t)strtoul(s_lo, NULL, 10);  
         uint32_t hi = (uint32_t)strtoul(s_hi, NULL, 10);  
-        if (af_dsp_set_band(lo, hi)) {    
-            Serial.printf("# OK band=%lu..%lu Hz\n",    
-                          (unsigned long)af_dsp_band_lo_hz(),    
-                          (unsigned long)af_dsp_band_hi_hz());    
+        if (af_dsp_set_band(lo, hi)) {      
+            Serial.printf("# OK band=%lu..%lu Hz\n",      
+                          (unsigned long)af_dsp_band_lo_hz(),      
+                          (unsigned long)af_dsp_band_hi_hz());      
+        } else {      
+            Serial.println("# band: rejected (CW on — полоса следует за f0)");      
+        }   
+    }  
+  
+    else if (strcmp(cmd, "bw") == 0) {    
+        char* sub = strtok(NULL, " \t");    
+        if (sub && strcmp(sub, "pot") == 0) {    
+            char* v = strtok(NULL, " \t");    
+            if (v && strcmp(v, "on") == 0)       { af_gpio_bwpot_set(true);  Serial.println("# OK bw pot=on"); }    
+            else if (v && strcmp(v, "off") == 0) { af_gpio_bwpot_set(false); Serial.println("# OK bw pot=off"); }    
+            else Serial.println("# ERR: bw pot on|off");    
         } else {    
-            Serial.println("# band: rejected (CW on — полоса следует за f0)");    
-        } 
-    }
-
-    else if (strcmp(cmd, "nt") == 0) {  
+            Serial.println("# ERR: bw pot on|off");    
+        }    
+    }  
+  
+    else if (strcmp(cmd, "nt") == 0) {    
         char* s = strtok(NULL, " \t");  
         if (s == NULL) { Serial.println("# ERR: nt on|off"); return; }  
         bool on = (strcmp(s, "on") == 0);  

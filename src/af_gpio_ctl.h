@@ -40,3 +40,7 @@ bool af_gpio_mbcn_set_sel(uint8_t slot);   // mbcn on <0..3> — слот из C
 bool    af_gpio_ptt_active(void);   // sw_ptt_active — PTT поднят софтом  
 bool    af_gpio_key_tx(void);       // key_tx — ключ держит TX  
 uint8_t af_gpio_key_mode(void);     // 0=off 1=iambicA 2=iambicB 3=straight  
+
+uint16_t af_capture_read_bwpot(void);   // если не в af_capture.h — см. ниже    
+void     af_gpio_bwpot_set(bool on);    
+bool     af_gpio_bwpot_on(void);    

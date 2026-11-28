@@ -89,8 +89,14 @@ static uint32_t mbcn_gap_ms   = 0;      // время следующей пос�
 static uint32_t mbcn_stage_t0 = 0;      // millis() старта посылки (для лога)    
 static int8_t   mbcn_sel_ovr  = -1;     // слот из CLI: -1 = с пинов GP13/GP28 
 
-static uint32_t t_next_poll = 0;      
-static uint8_t  bank_code   = 0; // текущий применённый код 0..7      
+static uint32_t t_next_poll = 0;        
+static uint8_t  bank_code   = 0; // текущий применённый код 0..7        
+  
+// --- Ручка полосы: потенциометр на GP29 (ADC3) ---    
+static bool     bwpot_on      = AF_BWPOT_ON_DEFAULT;    
+static uint32_t bwpot_next_ms = 0;      // время следующего чтения    
+static uint16_t bwpot_ema     = 0xFFFF; // EMA отсчёта, 0xFFFF = не инициализир.    
+static uint16_t bwpot_last    = 0xFFFF; // последнее применённое значение    
 static uint8_t  last_bank   = 1; // последний загруженный банк 1..7 (для af_rec)      
 static bool     sw_ptt_active = false;  // GP8 — выход PTT (playback магнитофона)      
     
@@ -414,8 +420,49 @@ static void key_iambic_poll(void) {
     }    
 }    
 
-// ---------------------------------------------------------------------------  
-void af_gpio_ctl_init(void) {  
+// --- Ручка полосы: чтение ADC3 раз в AF_BWPOT_PERIOD_MS, EMA, гистерезис.    
+// Полоса сужается симметрично к AF_BWPOT_CENTER_HZ:    
+//   raw=0 -> AF_FIR_LO..AF_FIR_HI (широкая), raw=4095 -> центр ±50 Гц.    
+// af_capture_read_bwpot возвращает 0xFFFF во время flash-окна — цикл    
+// пропускается, ручка «замирает» до конца записи.    
+static void bwpot_poll(void) {    
+    if (!bwpot_on) return;    
+    const uint32_t now = millis();    
+    if ((int32_t)(now - bwpot_next_ms) < 0) return;    
+    bwpot_next_ms = now + AF_BWPOT_PERIOD_MS;    
+    
+    const uint16_t raw = af_capture_read_bwpot();    
+    if (raw == 0xFFFF) return;                    // flash-окно — пропуск    
+    
+    if (bwpot_ema == 0xFFFF) bwpot_ema = raw;     // первый отсчёт — посев    
+    else bwpot_ema += (uint16_t)((raw - bwpot_ema) >> 3);   // EMA 1/8    
+    
+    if (bwpot_last != 0xFFFF    
+        && (uint16_t)abs((int)bwpot_ema - (int)bwpot_last) < AF_BWPOT_HYST)    
+        return;                                   // джиттер — не пересчитываем    
+    bwpot_last = bwpot_ema;    
+    
+    // Сужение к центру: lo растёт от AF_FIR_LO_HZ_DEFAULT к центру-50,    
+    // hi падает от AF_FIR_HI_HZ_DEFAULT к центру+50.    
+    const uint32_t ctr = AF_BWPOT_CENTER_HZ;    
+    const uint32_t lo  = AF_FIR_LO_HZ_DEFAULT    
+        + (uint32_t)(((uint64_t)(ctr - 50u - AF_FIR_LO_HZ_DEFAULT) * bwpot_ema) / 4095u);    
+    const uint32_t hi  = AF_FIR_HI_HZ_DEFAULT    
+        - (uint32_t)(((uint64_t)(AF_FIR_HI_HZ_DEFAULT - (ctr + 50u)) * bwpot_ema) / 4095u);    
+    af_dsp_set_band(lo, hi);    
+}    
+    
+// Вкл/выкл ручки полосы (CLI 'bw pot'). При включении — перезахват EMA,    
+// чтобы не было скачка от устаревшего значения.    
+void af_gpio_bwpot_set(bool on) {    
+    bwpot_on = on;    
+    if (on) { bwpot_ema = 0xFFFF; bwpot_last = 0xFFFF; }    
+    Serial.printf("[GPIO] bwpot=%s\n", on ? "on" : "off");    
+}    
+bool af_gpio_bwpot_on(void) { return bwpot_on; }    
+    
+// ---------------------------------------------------------------------------    
+void af_gpio_ctl_init(void) {    
     ctl_bank[0] = { AF_PIN_BANK0, false, false, 0 };  
     ctl_bank[1] = { AF_PIN_BANK1, false, false, 0 };  
     ctl_bank[2] = { AF_PIN_BANK2, false, false, 0 };  
@@ -556,10 +603,12 @@ void af_gpio_ctl_poll(void) {
     poll_pin(&ctl_ptt);    
     poll_pin(&ctl_rec);    
     poll_pin(&ctl_play);
-    poll_pin(&ctl_sel[0]);
-    poll_pin(&ctl_sel[1]);
-
-    // Ямбический ключ: опрос педалей и автомат элементов    
+    poll_pin(&ctl_sel[0]);  
+    poll_pin(&ctl_sel[1]);  
+  
+    bwpot_poll();   // ручка полосы GP29 — свой период 100 мс внутри    
+  
+    // Ямбический ключ: опрос педалей и автомат элементов      
     if (key_mode != 0) {    
         key_read(AF_KEY_DIT_PIN, &dit_db, &dit_lvl);    
         key_read(AF_KEY_DAH_PIN, &dah_db, &dah_lvl);    
