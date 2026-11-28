@@ -93,10 +93,11 @@ static uint32_t t_next_poll = 0;
 static uint8_t  bank_code   = 0; // текущий применённый код 0..7        
   
 // --- Ручка полосы: потенциометр на GP29 (ADC3) ---    
-static bool     bwpot_on      = AF_BWPOT_ON_DEFAULT;    
-static uint32_t bwpot_next_ms = 0;      // время следующего чтения    
-static uint16_t bwpot_ema     = 0xFFFF; // EMA отсчёта, 0xFFFF = не инициализир.    
-static uint16_t bwpot_last    = 0xFFFF; // последнее применённое значение    
+static bool     bwpot_on      = AF_BWPOT_ON_DEFAULT;      
+static uint32_t bwpot_next_ms = 0;      // время следующего чтения      
+static uint16_t bwpot_ema     = 0xFFFF; // EMA отсчёта, 0xFFFF = не инициализир.      
+static uint16_t bwpot_last    = 0xFFFF; // последнее применённое значение      
+static bool     bwpot_armed   = false;  // ручка сдвинулась от стартового положения      
 static uint8_t  last_bank   = 1; // последний загруженный банк 1..7 (для af_rec)      
 static bool     sw_ptt_active = false;  // GP8 — выход PTT (playback магнитофона)      
     
@@ -434,13 +435,25 @@ static void bwpot_poll(void) {
     const uint16_t raw = af_capture_read_bwpot();    
     if (raw == 0xFFFF) return;                    // flash-окно — пропуск    
     
-    if (bwpot_ema == 0xFFFF) bwpot_ema = raw;     // первый отсчёт — посев    
-    else bwpot_ema += (uint16_t)((raw - bwpot_ema) >> 3);   // EMA 1/8    
-    
-    if (bwpot_last != 0xFFFF    
-        && (uint16_t)abs((int)bwpot_ema - (int)bwpot_last) < AF_BWPOT_HYST)    
-        return;                                   // джиттер — не пересчитываем    
-    bwpot_last = bwpot_ema;    
+    if (bwpot_ema == 0xFFFF) {                    // первый отсчёт — базовая линия  
+        bwpot_ema  = raw;  
+        bwpot_last = raw;                         // зафиксировать стартовое положение  
+        return;                                   // полосу НЕ применяем  
+    }  
+    bwpot_ema += (uint16_t)((raw - bwpot_ema) >> 3);   // EMA 1/8      
+      
+    if (!bwpot_armed) {  
+        // Ручка ещё не трогалась: ждём сдвига от стартового положения  
+        // дальше гистерезиса. До этого band из банка/CLI имеет приоритет.  
+        if ((uint16_t)abs((int)bwpot_ema - (int)bwpot_last) < AF_BWPOT_HYST)  
+            return;  
+        bwpot_armed = true;  
+        Serial.println("[GPIO] bwpot: engaged");  
+    }  
+      
+    if ((uint16_t)abs((int)bwpot_ema - (int)bwpot_last) < AF_BWPOT_HYST)      
+        return;                                   // джиттер — не пересчитываем      
+    bwpot_last = bwpot_ema;      
     
     // Сужение к центру: lo растёт от AF_FIR_LO_HZ_DEFAULT к центру-50,    
     // hi падает от AF_FIR_HI_HZ_DEFAULT к центру+50.    
@@ -461,7 +474,7 @@ static void bwpot_poll(void) {
 // чтобы не было скачка от устаревшего значения.    
 void af_gpio_bwpot_set(bool on) {    
     bwpot_on = on;    
-    if (on) { bwpot_ema = 0xFFFF; bwpot_last = 0xFFFF; }    
+    if (on) { bwpot_ema = 0xFFFF; bwpot_last = 0xFFFF; bwpot_armed = false; }      
     Serial.printf("[GPIO] bwpot=%s\n", on ? "on" : "off");    
 }    
 bool af_gpio_bwpot_on(void) { return bwpot_on; }    
