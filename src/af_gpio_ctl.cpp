@@ -425,7 +425,7 @@ static void key_iambic_poll(void) {
 
 // --- Ручка полосы: чтение ADC3 раз в AF_BWPOT_PERIOD_MS, EMA, гистерезис.    
 // Полоса сужается симметрично к AF_BWPOT_CENTER_HZ:    
-//   raw=0 -> AF_FIR_LO..AF_FIR_HI (широкая), raw=4095 -> центр ±50 Гц.    
+//   raw=0 -> AF_FIR_LO..AF_FIR_HI (широкая), raw=4095 -> центр ±40 Гц.      
 // af_capture_read_bwpot возвращает 0xFFFF во время flash-окна — цикл    
 // пропускается, ручка «замирает» до конца записи.    
 static void bwpot_poll(void) {    
@@ -457,13 +457,13 @@ static void bwpot_poll(void) {
         return;                                   // джиттер — не пересчитываем      
     bwpot_last = bwpot_ema;      
     
-    // Сужение к центру: lo растёт от AF_FIR_LO_HZ_DEFAULT к центру-50,    
-    // hi падает от AF_FIR_HI_HZ_DEFAULT к центру+50.    
-    const uint32_t ctr = AF_BWPOT_CENTER_HZ;    
-    const uint32_t lo  = AF_FIR_LO_HZ_DEFAULT    
-        + (uint32_t)(((uint64_t)(ctr - 50u - AF_FIR_LO_HZ_DEFAULT) * bwpot_ema) / 4095u);    
+    // Сужение к центру: lo растёт от AF_FIR_LO_HZ_DEFAULT к центру-40,      
+    // hi падает от AF_FIR_HI_HZ_DEFAULT к центру+40 (минимум 80 Гц).      
+    const uint32_t ctr = AF_BWPOT_CENTER_HZ;      
+    const uint32_t lo  = AF_FIR_LO_HZ_DEFAULT      
+        + (uint32_t)(((uint64_t)(ctr - 40u - AF_FIR_LO_HZ_DEFAULT) * bwpot_ema) / 4095u);      
     const uint32_t hi  = AF_FIR_HI_HZ_DEFAULT        
-        - (uint32_t)(((uint64_t)(AF_FIR_HI_HZ_DEFAULT - (ctr + 50u)) * bwpot_ema) / 4095u);        
+        - (uint32_t)(((uint64_t)(AF_FIR_HI_HZ_DEFAULT - (ctr + 40u)) * bwpot_ema) / 4095u);             
   
     // --- Авто-CW: полоса сузилась к AF_BWPOT_CW_HZ -> телеграфный фильтр.    
     // Гистерезис AF_BWPOT_CW_HYST от дребезга на границе.    
@@ -497,14 +497,19 @@ static void bwpot_poll(void) {
     }        
     bwpot_below = below;        
     
-    if (af_dsp_cw_on()) {  
-        // В CW полосой владеет f0/bw — ручку мапим на 'cw bw':  
-        // продолжение сужения = тот же width, кламп внутри set_cw_bw.  
-        if (bwpot_cw) {                       // только свой CW  
-            af_dsp_set_cw_bw(width);  
-            Serial.printf("R|cw bw|%lu\n", (unsigned long)width);  
-        }  
-    } else if (af_dsp_set_band(lo, hi)) {          
+    if (af_dsp_cw_on()) {    
+        // В CW полосой владеет f0/bw — ручку мапим на 'cw bw':    
+        // продолжение сужения = тот же width, кламп внутри set_cw_bw.    
+        if (bwpot_cw) {                       // только свой CW    
+            af_dsp_set_cw_bw(width);    
+            Serial.printf("R|cw bw|%lu\n", (unsigned long)width);    
+            // Маркеры спектра: фактическая полоса = f0 ± width/2    
+            const uint32_t f0 = AF_BWPOT_CENTER_HZ;    
+            Serial.printf("R|band lo|%lu\nR|band hi|%lu\n",    
+                          (unsigned long)(f0 - width / 2u),    
+                          (unsigned long)(f0 + width / 2u));    
+        }    
+    } else if (af_dsp_set_band(lo, hi)) {    
         // Пуш в панель: R|-строки вне state dump — панель ловит их          
         // и обновляет виджеты band lo/hi на лету.          
         Serial.printf("R|band lo|%lu\nR|band hi|%lu\n",          
