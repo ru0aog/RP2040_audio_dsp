@@ -203,10 +203,14 @@ static void __not_in_flash_func(af_bwpot_irq_service)(
     (void)adc_hw->result;                            // отбросить            
     for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс  
   
-    bwpot_val = (uint16_t)(adc_hw->result & 0x0FFFu);                
-    adc_run(false);            
-    adc_select_input(af_adc_ch);           // вернуть рабочий канал            
-    adc_run(true);            
+    bwpot_val = (uint16_t)(adc_hw->result & 0x0FFFu);                  
+    adc_run(false);              
+    adc_fifo_drain();   // безопасно: мультиплексор ещё на ADC3 — в FIFO      
+                        // ТОЛЬКО отсчёты потенциометра, аудио не крадём.      
+                        // Убирает хвостовые ADC3-отсчёты до того, как      
+                        // DMA их допишет в буфер.      
+    adc_select_input(af_adc_ch);           // вернуть рабочий канал              
+    adc_run(true);                  
       
     // Патчим ТОЛЬКО отсчёты, записанные за паузу: [pos0 .. pos].      
     // Валидный звук левее pos0 не трогаем — иначе сам патч = щелчок.      
@@ -215,10 +219,9 @@ static void __not_in_flash_func(af_bwpot_irq_service)(
         long pos = (long)((wa - (uintptr_t)cur) / 2u);      
         long p0 = pos0 - 1;                       // 1 отсчёт запаса слева      
         if (p0 < 0) p0 = 0;        
-        long p1 = pos + 3;          // +1 гонка write_addr, +1..2 хвостовое      
-                                    // преобразование ADC3: adc_run(false)      
-                                    // завершает начатое — оно падает в FIFO      
-                                    // и DMA пишет его уже после чтения pos      
+        long p1 = pos + 1;          // +1 на гонку write_addr; хвостовых        
+                                    // ADC3-отсчётов больше нет — их снял        
+                                    // дренаж выше (mux ещё был на ADC3)            
         if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;            
         for (long i = p0; i < p1; ++i) cur[i] = fill;        
     }      
