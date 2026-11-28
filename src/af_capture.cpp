@@ -184,38 +184,44 @@ static void __not_in_flash_func(af_bwpot_irq_service)(
     volatile uint16_t* cur = channel_a ? af_dma_b_target : af_dma_a_target;    
     const uint16_t fill = completed[AF_BLOCK_SAMPLES - 1];    
     
-    adc_run(false);      
-    adc_fifo_drain();      
-    adc_select_input(AF_BWPOT_PIN - 26);   // GP29 -> input 3          
-    adc_run(true);          
-    // READY при включённом FIFO ненадёжен — просто выжидаем.          
-    // Преобразование = 97 тактов clk_adc ≈ 2 мкс. Первое после смены          
-    // мультиплексора может быть от старого канала — отбрасываем,          
-    // второе гарантированно от ADC3. RESULT = последнее преобразование.          
-    for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс          
-    (void)adc_hw->result;                            // отбросить          
-    for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс
-
-    bwpot_val = (uint16_t)(adc_hw->result & 0x0FFFu);            
-    adc_run(false);        
-    adc_fifo_drain();        
-    adc_select_input(af_adc_ch);           // вернуть рабочий канал        
-    adc_run(true);        
-    
-    // Позиция записи DMA в заполняемом буфере — там могут лежать    
-    // отсчёты ADC3. Патчим окно [pos-2 .. pos+16] значением fill.    
-    if (other >= 0 && cur != af_scratch_a && cur != af_scratch_b) {    
-        const uintptr_t wa = (uintptr_t)dma_hw->ch[other].write_addr;    
-        long pos = (long)((wa - (uintptr_t)cur) / 2u);    
-        // Мусор ADC3 пишется DMA ВПЕРЁД от write_addr, пока мультиплексор      
-        // на ADC3 (~8 мкс ≈ 4 отсчёта). Патчим [pos-2 .. pos+10] с запасом.      
-        long p0 = pos - 8;        // мусор ADC3 лежит ПОЗАДИ pos: write_addr    
-        if (p0 < 0) p0 = 0;       // читается уже после ~8 мкс паузы (~4 отсчёта)    
-        long p1 = pos + 12;       // + запас вперёд на хвост FIFO    
-        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;          
-        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;        
-        for (long i = p0; i < p1; ++i) cur[i] = fill;    
-    }    
+    // Позиция записи DMA ДО паузы: всё, что попадёт в буфер дальше —      
+    // отсчёты ADC3, записанные за время переключения мультиплексора.      
+    long pos0 = -1;      
+    if (other >= 0 && cur != af_scratch_a && cur != af_scratch_b) {      
+        const uintptr_t wa0 = (uintptr_t)dma_hw->ch[other].write_addr;      
+        pos0 = (long)((wa0 - (uintptr_t)cur) / 2u);      
+    }      
+      
+    adc_run(false);          
+    // БЕЗ adc_fifo_drain: дренаж крадёт у DMA отсчёты — дыра = щелчок.      
+    adc_select_input(AF_BWPOT_PIN - 26);   // GP29 -> input 3              
+    adc_run(true);              
+  
+    // Преобразование = 97 тактов clk_adc ≈ 2 мкс. Первое после смены      
+    // мультиплексора может быть от старого канала — отбрасываем.      
+    for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс            
+    (void)adc_hw->result;                            // отбросить            
+    for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс  
+  
+    bwpot_val = (uint16_t)(adc_hw->result & 0x0FFFu);                
+    adc_run(false);            
+    adc_select_input(af_adc_ch);           // вернуть рабочий канал            
+    adc_run(true);            
+      
+    // Патчим ТОЛЬКО отсчёты, записанные за паузу: [pos0 .. pos].      
+    // Валидный звук левее pos0 не трогаем — иначе сам патч = щелчок.      
+    if (pos0 >= 0) {      
+        const uintptr_t wa = (uintptr_t)dma_hw->ch[other].write_addr;      
+        long pos = (long)((wa - (uintptr_t)cur) / 2u);      
+        long p0 = pos0 - 1;                       // 1 отсчёт запаса слева      
+        if (p0 < 0) p0 = 0;        
+        long p1 = pos + 3;          // +1 гонка write_addr, +1..2 хвостовое      
+                                    // преобразование ADC3: adc_run(false)      
+                                    // завершает начатое — оно падает в FIFO      
+                                    // и DMA пишет его уже после чтения pos      
+        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;            
+        for (long i = p0; i < p1; ++i) cur[i] = fill;        
+    }      
 }    
 
 // ---------------------------------------------------------------------------  
