@@ -195,7 +195,7 @@ class Panel(tk.Tk):
     def __init__(self):  
         super().__init__()  
         self.title("RP2040 audio DSP by RU0AOG 2026 — панель настроек")  
-        self.geometry("1200x860")    
+        self.geometry("1250x900")    
   
         self.w = SerialWorker()  
         self.params = {}          # label -> {"type":..., "var":...}  
@@ -208,8 +208,15 @@ class Panel(tk.Tk):
         self._state_lines = []  
         self._state_active = False  
         self._pending = []        # очередь команд после connect        
-        self._save_pending = False  # ждём "# OK saved" -> рестарт монитора      
-        self._save_timer = None     # after-id страховочного рестарта      
+        self._save_pending = False  # ждём "# OK saved" -> рестарт монитора        
+        self._save_timer = None     # after-id страховочного рестарта        
+        self._auto_reconnect = True   # автопоиск платы после обрыва    
+        self._reconnect_id = None     # after-id тикера переподключения    
+        self._last_port = None        # последний рабочий порт    
+        self._last_rx = 0.0           # время последней строки от платы    
+        self._wd_probe = False        # watchdog: "version" уже послан      
+        self._audio_was_on = False    # монитор был включён до обрыва — вернуть после реконнекта      
+        self._audio_retry = 0         # осталось попыток рестарта монитора (UAC поднимается с задержкой)    
         self.audio_in = None    # sd.InputStream при активном мониторинге  
         self.audio_out = None   # sd.OutputStream  
         self.audio_q = queue.Queue(maxsize=16)  # блоки вход->выход;  
@@ -252,8 +259,9 @@ class Panel(tk.Tk):
         self.paned.pack(fill="both", expand=True)    
         self._build_table()    
         self._build_bottom()      
-        self.after(50, self._poll_rx)      
-        self.after(400, self._auto_start)   # автовыбор порта/микрофона + старт  
+        self.after(50, self._poll_rx)        
+        self.after(1000, self._watchdog)    # контроль молчания порта    
+        self.after(400, self._auto_start)   # автовыбор порта/микрофона + старт    
   
     # --- layout -------------------------------------------------------------  
     def _build_top(self):  
@@ -400,26 +408,120 @@ class Panel(tk.Tk):
     def _refresh_ports(self):  
         self.port_cb["values"] = self._ports()  
 
+    def _find_board_port(self):    
+        # Порт платы: сначала по VID RP2040 (0x2E8A), затем прежний порт,    
+        # затем первый кроме COM1.    
+        ports = list(list_ports.comports())    
+        for p in ports:    
+            if p.vid == 0x2E8A:    
+                return p.device    
+        names = [p.device for p in ports]    
+        if self._last_port in names:    
+            return self._last_port    
+        return next((n for n in names if n.upper() != "COM1"), None)    
+    
+    def _find_audio_input(self, prev_sel):    
+        # Перепоиск входа после реконнекта: индекс устройства мог смениться.    
+        # Приоритет: точное совпадение имени (без индекса) -> "usb" -> prev_sel.    
+        devs = self._audio_inputs()    
+        self.audio_cb["values"] = devs    
+        if not devs:    
+            return None    
+        prev_name = prev_sel.split(":", 1)[1].strip() if ":" in prev_sel else ""    
+        if prev_name:    
+            for d in devs:    
+                if d.split(":", 1)[1].strip() == prev_name:    
+                    return d    
+        return next((d for d in devs if "usb" in d.lower()), None)    
+  
+    def _on_disconnect(self):    
+        # Обрыв порта: закрыть worker, остановить аудио, запустить автопоиск.    
+        self.w.close()    
+        self._rec_stop()    
+        self._audio_was_on = (self.audio_in is not None)  # до _audio_stop      
+        self._audio_retry = 0         # отменить недошедшие попытки рестарта    
+        self._audio_stop()      
+        self.btn_conn["text"] = "Подключить"  
+        if not self._auto_reconnect:  
+            self.status_var.set("порт потерян")  
+            return  
+        self.status_var.set("поиск платы…")  
+        self._schedule_reconnect()  
+  
+    def _schedule_reconnect(self):  
+        if self._reconnect_id is None:  
+            self._reconnect_id = self.after(1500, self._reconnect_tick)  
+  
+    def _reconnect_tick(self):  
+        self._reconnect_id = None  
+        if self.w.ser or not self._auto_reconnect:  
+            return  
+        port = self._find_board_port()  
+        if port is None:  
+            self._schedule_reconnect()  
+            return  
+        try:    
+            self.w.open(port)    
+        except Exception:    
+            self._schedule_reconnect()    
+            return    
+        self._last_port = port    
+        self._last_rx = time.monotonic()   # новый порт — отсчёт тишины заново    
+        self._wd_probe = False    
+        self.port_var.set(port)  
+        self.port_cb["values"] = self._ports()  
+        self.btn_conn["text"] = "Отключить"  
+        self.status_var.set(f"{port}: handshake…")  
+        self._pending = ["version", "params dump", "state dump"]    
+        self._send_next()    
+        if self._audio_was_on:          # монитор был включён до обрыва        
+            self._audio_was_on = False        
+            # UAC-устройство поднимается позже COM-порта — до 6 попыток    
+            # с шагом 1 с, иначе _probe_fs падает с "нет частоты".    
+            self._audio_retry = 6    
+            self.after(1000, self._audio_restore_tick)    
+  
+    def _audio_restore_tick(self):    
+        # Отложенный рестарт монитора после реконнекта: перепоиск входа    
+        # по имени + тихий старт; при неудаче — повтор через 1 с.    
+        if self.w.ser is None or self.audio_in is not None:    
+            self._audio_retry = 0    
+            return    
+        self._audio_retry -= 1    
+        if sd is not None:    
+            sel = self._find_audio_input(self.audio_var.get())    
+            if sel:    
+                if sel != self.audio_var.get():    
+                    self._log(f"# audio: устройство переехало -> {sel}")    
+                self.audio_var.set(sel)    
+                if self._audio_toggle(quiet=True):    
+                    self._audio_retry = 0    
+                    return    
+        if self._audio_retry > 0:    
+            self.after(1000, self._audio_restore_tick)    
+        else:    
+            self._log("# audio: монитор не восстановлен — вход не поднялся")        
+
     def _auto_start(self):  
         # Автостарт: первый порт кроме COM1 + USB-микрофон -> connect + монитор.  
         # Порт: пропускаем COM1 (системный), берём первый оставшийся.  
-        if self.w.ser is None:  
-            ports = self._ports()  
-            port = next((p for p in ports if p.upper() != "COM1"), None)  
+        if self.w.ser is None:    
+            port = self._find_board_port()    
             if port:  
                 self.port_var.set(port)  
                 self._connect()  
-            else:  
-                self._log("# auto: COM-порт не найден (кроме COM1)")  
-        # Микрофон: первое устройство с "usb" в имени.  
-        if sd is not None and self.audio_in is None:  
-            devs = self.audio_cb["values"]  
-            mic = next((d for d in devs if "usb" in d.lower()), None)  
-            if mic:  
-                self.audio_var.set(mic)  
-                self._audio_toggle()  
-            else:  
-                self._log("# auto: USB-микрофон не найден")  
+            else:    
+                self._log("# auto: COM-порт не найден — жду плату")    
+                self.status_var.set("поиск платы…")    
+                self._schedule_reconnect()   # тикер сам подключится, когда плата появится    
+        # Микрофон: тот же перепоиск, что и при реконнекте.    
+        if sd is not None and self.audio_in is None:    
+            mic = self._find_audio_input(self.audio_var.get())    
+            if mic:    
+                self.audio_var.set(mic)    
+                self._audio_toggle()    
+            else:    
+                self._log("# auto: USB-микрофон не найден")    
 
     def _log(self, s):      
         self.log.insert("end", s + "\n")      
@@ -487,17 +589,26 @@ class Panel(tk.Tk):
                 continue  
         return None  
 
-    def _audio_toggle(self):    
-        if self.audio_in is not None:    
-            self._audio_stop()  
-            self._log("# audio: монитор выкл")    
-            return    
-        sel = self.audio_var.get()    
-        if not sel:    
-            messagebox.showerror("Аудио", "Выберите аудиоустройство")    
-            return    
-        idx = int(sel.split(":")[0])        
-        try:        
+    def _audio_toggle(self, quiet=False):      
+        # quiet=True — автовосстановление: ошибки в лог, без messagebox.    
+        # Возвращает True при успешном старте монитора.    
+        if self.audio_in is not None:      
+            self._audio_stop()    
+            self._log("# audio: монитор выкл")      
+            return True      
+        sel = self.audio_var.get()      
+        if not sel:      
+            if quiet:    
+                self._log("# audio: устройство не выбрано")    
+            else:    
+                messagebox.showerror("Аудио", "Выберите аудиоустройство")      
+            return False      
+        try:    
+            idx = int(sel.split(":")[0])          
+        except (ValueError, IndexError):    
+            self._log(f"# audio: не могу разобрать устройство '{sel}'")    
+            return False    
+        try:          
             info = sd.query_devices(idx)        
             ch = min(2, int(info["max_input_channels"])) or 1        
             # WASAPI shared mode принимает только частоту, настроенную  
@@ -569,12 +680,16 @@ class Panel(tk.Tk):
             self.spec_on = True    
             self._spec_draw()    
             self._log(f"# audio: {info['name']} fs={fs} ch={ch}")    
-        except Exception as ex:      
-            self._audio_stop()  
-            messagebox.showerror("Аудио", str(ex))      
-            return      
-        self.audio_btn.configure(text="Стоп")    
-        self._log(f"# audio: монитор <- {sel}")    
+        except Exception as ex:        
+            self._audio_stop()    
+            if quiet:    
+                self._log(f"# audio: {ex}")    
+            else:    
+                messagebox.showerror("Аудио", str(ex))        
+            return False        
+        self.audio_btn.configure(text="Стоп")      
+        self._log(f"# audio: монитор <- {sel}")      
+        return True    
   
     def _audio_stop(self):  
         for attr in ("audio_in", "audio_out"):  
@@ -1161,31 +1276,43 @@ class Panel(tk.Tk):
         except tk.TclError as e:  
             self._log(f"# скрин не удался: {e}")  
 
-    def _on_close(self):        
-        # Освободить аудио и порт, иначе процесс может повиснуть.        
-        self._rec_stop()        
-        self._audio_stop()      
-        self.w.close()        
-        self.destroy()        
+    def _on_close(self):          
+        self._auto_reconnect = False    
+        if self._reconnect_id is not None:    
+            self.after_cancel(self._reconnect_id)    
+            self._reconnect_id = None    
+        self._rec_stop()          
+        self._audio_stop()        
+        self.w.close()          
+        self.destroy()          
 
-    def _connect(self):  
-        if self.w.ser:          
-            self.w.close()            
-            self._rec_stop()        
-            self._audio_stop()      
-            self.btn_conn["text"] = "Подключить"      
-            self.status_var.set("не подключено")    
-            return    
+    def _connect(self):    
+        if self.w.ser:            
+            self._auto_reconnect = False   # ручной стоп — не искать заново    
+            if self._reconnect_id is not None:    
+                self.after_cancel(self._reconnect_id)    
+                self._reconnect_id = None    
+            self.w.close()                
+            self._rec_stop()            
+            self._audio_was_on = False  # ручной стоп — монитор не восстанавливать    
+            self._audio_stop()          
+            self.btn_conn["text"] = "Подключить"        
+            self.status_var.set("не подключено")      
+            return      
+        self._auto_reconnect = True        # ручной connect — автопоиск снова активен    
         port = self.port_var.get()  
         if not port:  
             messagebox.showerror("Порт", "Выберите COM-порт")  
             return  
-        try:  
-            self.w.open(port)  
-        except Exception as ex:  
-            messagebox.showerror("Порт", str(ex))  
-            return  
-        self.btn_conn["text"] = "Отключить"  
+        try:    
+            self.w.open(port)    
+            self._last_port = port      
+        except Exception as ex:    
+            messagebox.showerror("Порт", str(ex))    
+            return    
+        self._last_rx = time.monotonic()   # отсчёт тишины — с момента открытия    
+        self._wd_probe = False    
+        self.btn_conn["text"] = "Отключить"    
         self.status_var.set(f"{port}: handshake…")  
         self._pending = ["version", "params dump", "state dump"]  
         self._send_next()  
@@ -1240,17 +1367,31 @@ class Panel(tk.Tk):
         try:  
             while True:  
                 item = self.w.rxq.get_nowait()  
-                if item[0] == "__disconnected__":  
-                    self.status_var.set("порт потерян")  
-                    self.btn_conn["text"] = "Подключить"  
-                    continue  
+                if item[0] == "__disconnected__":    
+                    self._on_disconnect()    
+                    continue    
                 self._on_line(item[1])  
         except queue.Empty:  
             pass  
         self.after(50, self._poll_rx)  
-  
-    def _on_line(self, line):  
-        self._log(line)  
+
+    def _watchdog(self):  
+        # Порт открыт, но плата молчит >5 с (зависла/ребут без разрыва  
+        # USB): пробный "version", ещё 3 с тишины -> эмуляция обрыва.  
+        if self.w.ser:  
+            idle = time.monotonic() - self._last_rx  
+            if idle > 8.0 and self._wd_probe:    
+                self.w.rxq.put(("__disconnected__",))    
+                self.w.close()    
+            elif idle > 5.0 and not self._wd_probe:  
+                self._wd_probe = True  
+                self.w.send("version")  
+        self.after(1000, self._watchdog)  
+
+    def _on_line(self, line):    
+        self._last_rx = time.monotonic()    
+        self._wd_probe = False    
+        self._log(line)    
   
         # --- params dump frame ---  
         if line.startswith("# params begin"):  
