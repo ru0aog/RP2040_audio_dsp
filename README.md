@@ -428,7 +428,7 @@ txsetdef                   Сброс профиля передачи к деф�
 
 ## Подключение
 
-![ADV](doc/RP2040_DSP v1_61 SCH.GIF)
+![ADV](doc/RP2040_DSP_v1_61_SCH.GIF)
 
 ### Основные GPIO
 
