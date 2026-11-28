@@ -184,11 +184,25 @@ static void __not_in_flash_func(af_bwpot_irq_service)(
     volatile uint16_t* cur = channel_a ? af_dma_b_target : af_dma_a_target;    
     const uint16_t fill = completed[AF_BLOCK_SAMPLES - 1];    
     
-    adc_run(false);    
-    adc_fifo_drain();    
-    adc_select_input(AF_BWPOT_PIN - 26);   // GP29 -> input 3    
-    adc_run(true);    
-    bwpot_val = (uint16_t)adc_read();      // одно преобразование ~2 мкс    
+    adc_run(false);      
+    adc_fifo_drain();      
+    adc_select_input(AF_BWPOT_PIN - 26);   // GP29 -> input 3          
+    adc_run(true);          
+    // READY при включённом FIFO ненадёжен — просто выжидаем.          
+    // Преобразование = 97 тактов clk_adc ≈ 2 мкс. Первое после смены          
+    // мультиплексора может быть от старого канала — отбрасываем,          
+    // второе гарантированно от ADC3. RESULT = последнее преобразование.          
+    for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс          
+    (void)adc_hw->result;                            // отбросить          
+    for (volatile uint32_t t = 0; t < 400; ++t) {}   // ~4 мкс          
+    bwpot_val = (uint16_t)(adc_hw->result & 0x0FFFu);          
+    adc_run(false);      
+    adc_fifo_drain();      
+    adc_select_input(af_adc_ch);           // вернуть рабочий канал      
+    adc_run(true);      
+    
+    
+
     adc_run(false);    
     adc_fifo_drain();    
     adc_select_input(af_adc_ch);           // вернуть рабочий канал    
@@ -199,10 +213,10 @@ static void __not_in_flash_func(af_bwpot_irq_service)(
     if (other >= 0 && cur != af_scratch_a && cur != af_scratch_b) {    
         const uintptr_t wa = (uintptr_t)dma_hw->ch[other].write_addr;    
         long pos = (long)((wa - (uintptr_t)cur) / 2u);    
-        long p0 = pos - 2;    
-        if (p0 < 0) p0 = 0;    
-        long p1 = pos + 16;    
-        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;    
+        long p0 = pos - 8;               // мусор ADC3 лежит позади write_addr    
+        if (p0 < 0) p0 = 0;      
+        long p1 = pos + 2;               // небольшой запас вперёд    
+        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;      
         for (long i = p0; i < p1; ++i) cur[i] = fill;    
     }    
 }    
