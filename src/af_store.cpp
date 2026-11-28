@@ -630,7 +630,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].rtty_on = 0;  b[i].rtty_scan = 1;  b[i].rtty_rsid = 1;  
         b[i].rtty_rev = 0; b[i].rtty_ctr = 0;   b[i].rtty_sql_x100 = 15;    
         b[i].rtty_dbg = 0;   // диагностика выключена по умолчанию    
-        b[i].agc_on = 1;  b[i].gain_pct = 256;  b[i].voice_vol = 300;      
+        b[i].agc_on = 1;  b[i].gain_pct = 25600;  b[i].voice_vol = 300;    // gain x100  
         b[i].agc_ref = AGC_REF;      
         b[i].agc_max_x100 = (uint32_t)(AGC_MAX_GAIN * 100.0f + 0.5f);          
         b[i].agc_min_x100 = (uint32_t)(AGC_MIN_GAIN * 100.0f + 0.5f);          
@@ -639,7 +639,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].nr_depth = NR_DEPTH_Q15;  b[i].nr_makeup = NR_MAKEUP_Q15;      
         b[i].nt_mu = NOTCH_MU_Q;  b[i].nr_mu = NR_MU_Q;  
         b[i].rx_pres_on   = AF_RX_PRES_ON_DEFAULT;    
-        b[i].rx_presmax   = 15;                    // +1.5 дБ    
+        b[i].rx_presmax   = 30;                    // +3.0 дБ    
         b[i].rx_pres_freq = AF_RX_PRES_FREQ_HZ;    // 2300    
         b[i].rx_pres_q    = AF_RX_PRES_Q_X100;     // 100    
         b[i].nb_on        = AF_NB_ON_DEFAULT;      // 0 — выключен      
@@ -650,7 +650,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].rx_exc_on     = AF_RX_EXC_ON_DEFAULT;        // 0 — выключен        
         b[i].rx_exc_mix    = AF_RX_EXC_MIX_PCT_DEFAULT;   // 10 = 10%  
         // Bypass-флаги блоков: по умолчанию всё в тракте (поведение как раньше)  
-        b[i].rxband_on = 1;  b[i].rxeq_on = 1;  b[i].rxshelf_on = 1;    
+        b[i].rxband_on = 1;  b[i].rxeq_on = 0;  b[i].rxshelf_on = 0;
         // Пост-фильтр на выходе: по умолчанию выключен, полоса = широкая.  
         b[i].lo2_hz = 100;  b[i].hi2_hz = 3100;  b[i].band2_on = 0;  
         b[i].txband_on = 1;  b[i].txeq_on = 1;  b[i].txagc_on = 1;  
