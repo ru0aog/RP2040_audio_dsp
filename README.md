@@ -60,6 +60,8 @@ RP2040_audio_dsp объединяет приёмный и передающий D
 - GPIO, PTT, Serial CLI и базовый Kenwood-подобный CAT.
 - Телеметрия загрузки ядер и состояния аудиоочередей.
 
+[Документация (PDF)](https://github.com/ru0aog/RP2040_audio_dsp/blob/main/doc/RP2040_audio_dsp_GUIDE.pdf) 
+
 ---
 
 ## Архитектура
