@@ -934,7 +934,7 @@ static volatile int64_t boost_est_q16 = (int64_t)1 << 16;   // старт x1.0
 static volatile int32_t agc_gain_blk_q16 = (int32_t)1 << 16;  
 
 static volatile bool     agc_on    = true;    // АРУ on/off (Core 0 пишет)    
-static volatile uint32_t gain_q15  = 32768;   // ручное усиление, Q15 (32768 = ×1.0)  
+static volatile uint32_t gain_q15 = (uint32_t)(AF_GAIN_DEFAULT * 32768.0f + 0.5f);  
 static volatile bool     bypass_on = false;   // обход всего тракта  
 static volatile bool     dsp_reset_req = false; // запрос сброса состояния (после save)  
   

@@ -238,14 +238,23 @@ void af_store_init(void) {
         s_sector_img[1] = AF_STORE_MAGIC1;        
         s_sector_img[2] = AF_STORE_VER;        
         s_sector_img[3] = 0xFF;        
-        for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {        
-            af_bank_rec_t r;        
-            r.d = def[i - 1];        
-            r.crc = crc8(&r.d, sizeof(r.d));        
-            memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));        
-        }        
-        s_need_defaults = true;            
-        Serial.println("[STORE] sector blank/foreign — defaults pending");              
+        for (uint8_t i = 1; i <= AF_STORE_BANKS; i++) {          
+            af_bank_rec_t r;          
+            r.d = def[i - 1];          
+            r.crc = crc8(&r.d, sizeof(r.d));          
+            memcpy(&s_sector_img[rec_addr(i)], &r, sizeof(r));          
+        }          
+        s_need_defaults = true;              
+        // Применить дефолтный банк 1 к тракту сразу — иначе до первого    
+        // load/пинов DSP работает на статических инициализаторах    
+        // (gain x1, rxeq/rxshelf on), а не на дефолтах таблицы.    
+        // af_store_load читает из s_sector_img — он уже заполнен.    
+        if (af_store_load(1)) {    
+            af_gpio_set_bank_code(1);   // stats 'bank=' = дефолтный банк    
+            Serial.println("[STORE] sector blank/foreign — defaults applied (bank 1)");    
+        } else {    
+            Serial.println("[STORE] sector blank/foreign — defaults pending");    
+        }             
     } else {      
         s_need_defaults = false;      
         // Автозагрузка последнего сохранённого банка (байт [3]).    
@@ -778,7 +787,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
     // горячий ref + высокий потолок — реальный gain держит пиковый кламп  
     // lim_ceil/(pk·B), клипов нет. gain=5 — ручной на случай agc off.  
     b[0].agc_ref         = 28000;  
-    b[0].agc_max_x100    = 200000;   // x2000 — потолок почти не работает  
+    b[0].agc_max_x100    = 60000;    // x600 — потолок держит пиковый кламп  
     b[0].cw_agc_max_x100 = 20000;    // x200  
     b[0].agc_min_x100    = 25;       // x0.25  
     b[0].lim_ceil        = 30000;  
