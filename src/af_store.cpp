@@ -782,11 +782,11 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
     b[0].cw_agc_max_x100 = 20000;    // x200  
     b[0].agc_min_x100    = 25;       // x0.25  
     b[0].lim_ceil        = 30000;  
-    b[0].gain_pct        = 1280;     // gain = 5.00 (x256)  
+    b[0].gain_pct        = 25600;    // gain = 100.00
     // RX EQ: +24 дБ НЧ-полка — B-петля АРУ (boost_est) сама дожимает gain,  
     // насыщения rx_soft_clip в установившемся режиме нет.  
     b[0].rxeq_on    = 0;  
-    b[0].rxeq_lo_db = 0;           // +24.0 дБ @ 300 Гц  
+    b[0].rxeq_lo_db = 0;
     // RX shelf/exciter — выключены (дефолт rx_shelf_db=30 заменяем на 0).  
     b[0].rx_shelf_db = 0;  
     b[0].rx_exc_on   = 0;  

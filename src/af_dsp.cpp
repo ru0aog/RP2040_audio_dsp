@@ -486,7 +486,7 @@ static void __not_in_flash_func(rx_pres_block_update)(void) {
 static volatile int32_t  rx_shelf_db_x10  = AF_RX_SHELF_DB_X10_DEFAULT;    
 static volatile uint32_t rx_shelf_freq_hz = AF_RX_SHELF_FREQ_HZ;    
 static volatile uint32_t rx_shelf_q_x100  = AF_RX_SHELF_Q_X100;    
-static volatile bool     rxshelf_on       = true;   // 0 = полка не применяется  
+static volatile bool     rxshelf_on       = false;   // 0 = полка не применяется  
   
 static int32_t rxs_b0 = 32768, rxs_b1 = 0, rxs_b2 = 0,  
                rxs_a1 = 0,     rxs_a2 = 0;   // старт = байпас  
@@ -531,7 +531,7 @@ static volatile uint32_t rxeq_lo_f  = 300;    // НЧ-полка, Гц
 static volatile uint32_t rxeq_mid_f = 1000;   // центр пика, Гц  
 static volatile uint32_t rxeq_hi_f  = 2500;   // ВЧ-полка, Гц  
 static volatile uint32_t rxeq_mid_q = 100;    // Q пика x100    
-static volatile bool     rxeq_on    = true;   // 0 = весь 3-полосный EQ мимо  
+static volatile bool     rxeq_on    = false;   // 0 = весь 3-полосный EQ мимо  
   
 typedef struct { int32_t b0,b1,b2,a1,a2, x1,x2,y1,y2; } eq_biquad_t;  
 static eq_biquad_t rxeq[3];   // 0=low-shelf 1=peaking 2=high-shelf  
