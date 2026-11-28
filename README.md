@@ -384,6 +384,9 @@ cw txwpm <5..60>           Скорость CW, WPM
 cw abort                   Немедленный обрыв посылки  
 cw dec on|off              CW-декодер: текст в Serial (при cw on)  
 cw wpm <5..60>             Скорость декодера  
+cw msg <0..3> [cw|rtty|jtty|null] <текст>   Записать слот маяка  
+cw msgs                    Состояние слотов (мода + текст)  
+cw clr                     Сброс слотов на дефолты 
 cw beacon <5..3600> <текст>|off   Периодический CW-маяк  
 vbcn <период_с> on|off     Голосовой маяк (воспроизведение слота)  
 ```
@@ -421,11 +424,13 @@ rtty sql <0..1>            Сквелч
 - `jtty tx <текст>` — разовая посылка; `jtty abort` — обрыв; `jtty test` — самотест кодека.  
 - Декодируется WSJT-X 3.3 (режим JTTY). Только передача.
 
-```markdown
+
 ### JTTY-команды
 
-jtty tx <текст>            Передать JTTY-посылку  
-jtty test                  Самотест кодека (encode/decode в Serial)  
+```text
+jtty tx <текст>            Передать JTTY-посылку    
+jtty abort                 Обрыв посылки    
+jtty test                  Самотест кодека (encode/decode в Serial) 
 ```
 
 ### Маяк  
@@ -439,10 +444,10 @@ jtty test                  Самотест кодека (encode/decode в Seria
 ### CW-ключ  
   
 - `GP11` — dit, `GP12` — dah (замыкание на GND).  
-- `cw key off` — выключен.  
 - `cw key iambic_a` — ямбик A (память педалей сбрасывается после элемента).  
 - `cw key iambic_b` — ямбик B (дополнительный противоположный элемент).  
 - `cw key straight` — прямой ключ.  
+- `cw key off` — выключен.  
 - Скорость общая с `cw txwpm <5..60>`.  
 
 ---
