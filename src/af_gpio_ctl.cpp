@@ -447,10 +447,15 @@ static void bwpot_poll(void) {
     const uint32_t ctr = AF_BWPOT_CENTER_HZ;    
     const uint32_t lo  = AF_FIR_LO_HZ_DEFAULT    
         + (uint32_t)(((uint64_t)(ctr - 50u - AF_FIR_LO_HZ_DEFAULT) * bwpot_ema) / 4095u);    
-    const uint32_t hi  = AF_FIR_HI_HZ_DEFAULT    
-        - (uint32_t)(((uint64_t)(AF_FIR_HI_HZ_DEFAULT - (ctr + 50u)) * bwpot_ema) / 4095u);    
-    af_dsp_set_band(lo, hi);    
-}    
+    const uint32_t hi  = AF_FIR_HI_HZ_DEFAULT      
+        - (uint32_t)(((uint64_t)(AF_FIR_HI_HZ_DEFAULT - (ctr + 50u)) * bwpot_ema) / 4095u);      
+    if (af_dsp_set_band(lo, hi)) {      
+        // Пуш в панель: R|-строки вне state dump — панель ловит их      
+        // и обновляет виджеты band lo/hi на лету.      
+        Serial.printf("R|band lo|%lu\nR|band hi|%lu\n",      
+                      (unsigned long)lo, (unsigned long)hi);      
+    }      
+}      
     
 // Вкл/выкл ручки полосы (CLI 'bw pot'). При включении — перезахват EMA,    
 // чтобы не было скачка от устаревшего значения.    

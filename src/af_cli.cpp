@@ -1326,6 +1326,10 @@ static void cli_exec(char* line) {
             Serial.printf("R|nb|%u\n",       af_dsp_nb_on() ? 1 : 0);    
             Serial.printf("R|rxnotch|%u\n",  af_dsp_rxnotch_on() ? 1 : 0);
             Serial.printf("R|rxband2|%u\n",  af_dsp_rxband2_on() ? 1 : 0);      
+            // Текущие границы полосы — runtime: ручка BW (GP29) меняет их      
+            // мимо params dump, панель обновляет виджеты по этим строкам.      
+            Serial.printf("R|band lo|%u\n",  (unsigned)af_dsp_band_lo_hz());        
+            Serial.printf("R|band hi|%u\n",  (unsigned)af_dsp_band_hi_hz());         
             Serial.printf("R|bwpot|%u\n",    af_gpio_bwpot_on() ? 1 : 0);      
             Serial.printf("R|rxpres|%u\n",   af_dsp_rxpres_on() ? 1 : 0);    
             Serial.printf("R|rxexc|%u\n",    af_dsp_rxexc_on() ? 1 : 0);    

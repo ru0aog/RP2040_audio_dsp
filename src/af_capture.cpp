@@ -85,8 +85,13 @@ static volatile uint16_t* af_dma_b_target = af_buf_b0;
   
 static int af_dma_a = -1;    
 static int af_dma_b = -1;    
-static volatile bool af_running = false;    
-static volatile bool af_paused  = false;   // capture припаркован под flash-окно    
+static volatile bool af_running = false;      
+static volatile bool af_paused  = false;   // capture припаркован под flash-окно      
+  
+// Ручка полосы: запрос на чтение ADC3 выставляет Core 0 (af_gpio_ctl),      
+// выполняется в DMA IRQ на границе блока — пауза попадает в мёртвое время.      
+static volatile bool     bwpot_req = false;    
+static volatile uint16_t bwpot_val = 0xFFFF; // последний отсчёт / 0xFFFF    
 
 // Диагностика для stats: сохраняются в af_capture_start.    
 static uint32_t af_clk_adc_hz = 0;    
@@ -160,7 +165,48 @@ static void __not_in_flash_func(af_rearm_channel)(int channel, bool channel_a) {
     dma_channel_set_write_addr(channel, (void*)target, false);  
     dma_channel_set_trans_count(channel, AF_BLOCK_TRANSFERS, false);  
 }  
-  
+
+// ---------------------------------------------------------------------------    
+// Чтение ADC3 (ручка полосы) в IRQ, сразу после rearm завершившегося канала.    
+//    
+// Пауза ~10 мкс попадает в мёртвое время: напарник только что стартовал по    
+// chain_to и ждёт DREQ. НО: пока мультиплексор стоит на ADC3, 1–2 отсчёта    
+// потенциометра успевают попасть в FIFO и DMA пишет их в поток — игла на    
+// осциллограмме. Подменяем окно вокруг текущей позиции записи DMA    
+// последним валидным сэмплом завершившегося блока.    
+// ---------------------------------------------------------------------------    
+static void __not_in_flash_func(af_bwpot_irq_service)(    
+    const volatile uint16_t* completed, bool channel_a)    
+{    
+    bwpot_req = false;    
+    
+    const int other = channel_a ? af_dma_b : af_dma_a;    
+    volatile uint16_t* cur = channel_a ? af_dma_b_target : af_dma_a_target;    
+    const uint16_t fill = completed[AF_BLOCK_SAMPLES - 1];    
+    
+    adc_run(false);    
+    adc_fifo_drain();    
+    adc_select_input(AF_BWPOT_PIN - 26);   // GP29 -> input 3    
+    adc_run(true);    
+    bwpot_val = (uint16_t)adc_read();      // одно преобразование ~2 мкс    
+    adc_run(false);    
+    adc_fifo_drain();    
+    adc_select_input(af_adc_ch);           // вернуть рабочий канал    
+    adc_run(true);    
+    
+    // Позиция записи DMA в заполняемом буфере — там могут лежать    
+    // отсчёты ADC3. Патчим окно [pos-2 .. pos+16] значением fill.    
+    if (other >= 0 && cur != af_scratch_a && cur != af_scratch_b) {    
+        const uintptr_t wa = (uintptr_t)dma_hw->ch[other].write_addr;    
+        long pos = (long)((wa - (uintptr_t)cur) / 2u);    
+        long p0 = pos - 2;    
+        if (p0 < 0) p0 = 0;    
+        long p1 = pos + 16;    
+        if (p1 > AF_BLOCK_SAMPLES) p1 = AF_BLOCK_SAMPLES;    
+        for (long i = p0; i < p1; ++i) cur[i] = fill;    
+    }    
+}    
+
 // ---------------------------------------------------------------------------  
 // Обработка одного завершившегося канала  
 // ---------------------------------------------------------------------------  
@@ -218,11 +264,15 @@ static void __not_in_flash_func(af_handle_completed)(int channel, bool channel_a
     
     // High-water заполнения очереди: если упёрлось в ёмкость —    
     // Core 1 систематически не успевает, дропы вопрос времени.    
-    const uint8_t fill = (uint8_t)((next - af_q_tail + AF_QUEUE_DEPTH) % AF_QUEUE_DEPTH);    
-    if (fill > af_q_fill_max) af_q_fill_max = fill;    
-    
-    af_rearm_channel(channel, channel_a);    
-}  
+    const uint8_t fill = (uint8_t)((next - af_q_tail + AF_QUEUE_DEPTH) % AF_QUEUE_DEPTH);      
+    if (fill > af_q_fill_max) af_q_fill_max = fill;      
+      
+    af_rearm_channel(channel, channel_a);      
+      
+    // Ручка полосы: чтение ADC3 в мёртвое время на границе блока.    
+    if (bwpot_req && !af_paused)    
+        af_bwpot_irq_service(completed, channel_a);    
+}    
   
 // ---------------------------------------------------------------------------  
 // ISR DMA_IRQ_0 (Core 0)  
@@ -366,9 +416,11 @@ void af_capture_start(void) {
 // ---------------------------------------------------------------------------  
 // Останов DMA+ADC  
 // ---------------------------------------------------------------------------  
-void af_capture_stop(void) {  
-    af_running = false;  
-    adc_run(false);  
+void af_capture_stop(void) {    
+    af_running = false;    
+    af_paused  = false;          // снять гейт flash-окна    
+    bwpot_req  = false;          // висящий запрос не выполнять    
+    adc_run(false);    
     irq_set_enabled(DMA_IRQ_0, false);  
   
     if (af_dma_a >= 0) {  
@@ -451,9 +503,10 @@ bool af_capture_is_running(void) {
 // af_capture_resume — после restore_interrupts: перезапуск цепочки A->B->A.  
 // ---------------------------------------------------------------------------
 // ===============   БЛОК ПАРКОВКИ DMA НА ПЕРИОД ФЛЭШ-ЗАПИСИ   ===============
-void af_capture_pause(void) {      
-    if (!af_running) return;      
-    af_paused = true;                        // чтение ADC3 запрещено до resume    
+void af_capture_pause(void) {        
+    if (!af_running) return;        
+    af_paused = true;                        // чтение ADC3 запрещено до resume      
+    bwpot_req = false;                       // висящий запрос не выполнять    
     adc_run(false);                          // ADC перестаёт давать DREQ      
     irq_set_enabled(DMA_IRQ_0, false);    
     // Сначала разорвать chain_to (на самого себя = "не цеплять никого"),    
@@ -546,20 +599,12 @@ uint8_t  af_capture_channel(void)    { return af_adc_ch; }
 // Возвращает 0..4095 или 0xFFFF, если чтение сейчас нельзя выполнять    
 // (capture остановлен или припаркован под flash-окно).    
 // ---------------------------------------------------------------------------    
-uint16_t af_capture_read_bwpot(void) {    
-    if (!af_running || af_paused) return 0xFFFF;    
-    
-    adc_run(false);                 // ADC молчит — DMA ждёт DREQ    
-    adc_fifo_drain();               // выкинуть хвост текущего канала    
-    
-    adc_select_input(AF_BWPOT_PIN - 26);   // GP29 -> input 3    
-    adc_run(true);    
-    uint16_t v = (uint16_t)adc_read();     // одно преобразование ~2 мкс    
-    
-    adc_run(false);    
-    adc_fifo_drain();    
-    adc_select_input(af_adc_ch);    // вернуть рабочий канал (0=RX, 1=TX)    
-    adc_run(true);    
-    
-    return v & 0x0FFFu;    
+// Вызывается с Core 0 (af_gpio_ctl_poll): выставляет запрос, реальное      
+// чтение делает af_bwpot_irq_service в DMA IRQ на границе блока.      
+// Возвращает последний измеренный отсчёт (0..4095) или 0xFFFF,      
+// если capture остановлен/припаркован или отсчёта ещё не было.      
+uint16_t af_capture_read_bwpot(void) {      
+    if (!af_running || af_paused) return 0xFFFF;      
+    bwpot_req = true;               // обслужит ближайший DMA IRQ    
+    return bwpot_val;               // кэш; свежесть <= одного блока (~4 мс)    
 }    
