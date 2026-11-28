@@ -1435,21 +1435,29 @@ class Panel(tk.Tk):
             self._dump_lines.append(line)  
             return  
   
-        # --- state dump frame ---  
-        if line.startswith("# state begin"):  
-            self._state_active = True  
-            self._state_lines = []  
-            return  
-        if self._state_active:  
-            if line.startswith("# state end"):  
-                self._state_active = False  
-                self._show_state(self._state_lines)  
-                self._send_next()  
-                return  
-            self._state_lines.append(line)  
-            return  
-  
-        # --- version ---  
+        # --- state dump frame ---    
+        if line.startswith("# state begin"):    
+            self._state_active = True    
+            self._state_lines = []    
+            return    
+        if self._state_active:    
+            if line.startswith("# state end"):    
+                self._state_active = False    
+                self._show_state(self._state_lines)    
+                self._send_next()    
+                return    
+            self._state_lines.append(line)    
+            return    
+    
+        # --- одиночный R| вне фрейма: пуш от ручки BW (af_gpio_ctl.cpp) ---    
+        # Прошивка шлёт "R|band lo|N" / "R|band hi|N" при смене полосы    
+        # потенциометром — без обёртки state begin/end. Скармливаем в    
+        # _show_state как однострочный дамп: виджеты и маркеры обновятся.    
+        if line.startswith("R|"):    
+            self._show_state([line])    
+            return    
+    
+        # --- version ---    
         if line.startswith("# version:"):  
             self._on_version(line)  
             self._send_next()  
@@ -1644,20 +1652,38 @@ class Panel(tk.Tk):
         self._pending += ["params dump", "state dump"]    
         self.after(300, self._send_next)    
   
-    def _show_state(self, lines):    
-        parts = []    
-        for ln in lines:    
-            if ln.startswith("R|"):    
-                _, name, val = (ln.split("|") + ["", ""])[:3]    
-                parts.append(f"{name}={val}")  
-                # Синхронизировать флажки рамки "Режимы" с живым состоянием  
-                if name in self.mode_vars:  
-                    self._mode_updating = True  
-                    try:  
-                        self.mode_vars[name].set(1 if val == "1" else 0)  
-                    finally:  
-                        self._mode_updating = False  
-        self.state_var.set("  ".join(parts))    
+    # R|name| из state dump -> метка параметра в таблице.    
+    # Прошивка шлёт живые границы полосы (ручка BW на GP29, cw_band_follow) —    
+    # обновляем виджеты без params dump.    
+    _STATE_TO_PARAM = {    
+        "band lo": "band lo",    
+        "band hi": "band hi",    
+    }    
+    
+    def _show_state(self, lines):      
+        parts = []      
+        for ln in lines:      
+            if ln.startswith("R|"):      
+                _, name, val = (ln.split("|") + ["", ""])[:3]      
+                parts.append(f"{name}={val}")    
+                # Синхронизировать флажки рамки "Режимы" с живым состоянием    
+                if name in self.mode_vars:    
+                    self._mode_updating = True    
+                    try:    
+                        self.mode_vars[name].set(1 if val == "1" else 0)    
+                    finally:    
+                        self._mode_updating = False    
+                # Живые значения параметров (полоса от ручки BW и т.п.) —    
+                # в var виджета; маркеры спектра читают их же.    
+                label = self._STATE_TO_PARAM.get(name)    
+                if label:    
+                    p = self.params.get(label)    
+                    if p:    
+                        try:    
+                            p["var"].set(int(val))    
+                        except (ValueError, tk.TclError):    
+                            pass    
+        self.state_var.set("  ".join(parts))      
   
   
 if __name__ == "__main__":    
