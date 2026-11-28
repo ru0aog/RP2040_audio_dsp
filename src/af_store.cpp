@@ -648,7 +648,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
         b[i].nr_depth = NR_DEPTH_Q15;  b[i].nr_makeup = NR_MAKEUP_Q15;      
         b[i].nt_mu = NOTCH_MU_Q;  b[i].nr_mu = NR_MU_Q;  
         b[i].rx_pres_on   = AF_RX_PRES_ON_DEFAULT;    
-        b[i].rx_presmax   = 30;                    // +3.0 дБ    
+        b[i].rx_presmax   = 60;                    // +6.0 дБ      
         b[i].rx_pres_freq = AF_RX_PRES_FREQ_HZ;    // 2300    
         b[i].rx_pres_q    = AF_RX_PRES_Q_X100;     // 100    
         b[i].nb_on        = AF_NB_ON_DEFAULT;      // 0 — выключен      
@@ -764,7 +764,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
     //       rx_pres_freq (Гц, кламп 1000..4000), rx_pres_q (x100, кламп 30..300).  
     // 1: presence выключен — рабочий банк под текущую панель.    
     b[0].rx_pres_on   = 0;    
-    b[0].rx_presmax   = 15;    
+    b[0].rx_presmax   = 60;
     b[0].rx_pres_freq = 2300;    
     b[0].rx_pres_q    = 100;    
     // 2: тёплый низ — широкий мягкий пик +3 дБ на 1.2 кГц, Q=0.6.  
@@ -797,7 +797,7 @@ void af_store_fill_defaults(af_bank_t b[AF_STORE_BANKS]) {
     b[0].rxeq_on    = 0;  
     b[0].rxeq_lo_db = 0;
     // RX shelf/exciter — выключены (дефолт rx_shelf_db=30 заменяем на 0).  
-    b[0].rx_shelf_db = 0;  
+    b[0].rx_shelf_db = 30;  
     b[0].rx_exc_on   = 0;  
     b[0].rx_exc_mix  = 50;           // 50% (новая семантика — проценты)
     // Пост-фильтр на выходе: финальная полоса 100..3100 под динамик.  

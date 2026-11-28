@@ -65,7 +65,7 @@ static void cli_help(void) {
     Serial.println("#   nrmakeup <q15>    — makeup-gain NR (65536 = x2)");    
     Serial.println("#   rxnotch on|off    — узкие нотчи 1/2/3/4 кГц в RX (дефолт on)");  
     Serial.println("#   rx pres on|off    — dynamic presence EQ RX (подъём ВЧ по SNR)");  
-    Serial.println("#   rx presmax <дБx10> — потолок подъёма (15=+1.5дБ, 60=+6дБ)");  
+    Serial.println("#   rx presmax <дБx10> — потолок подъёма (15=+1.5дБ, 120=+12дБ)");    
     Serial.println("#   rx pres f <1000..4000> — центр presence-пика, Гц");  
     Serial.println("#   rx pres q <30..300> — добротность x100 (100 = 1.00)");  
     Serial.println("#   rx shelf <дБx10>  — low-shelf «бас» в конце тракта (0=off, 30=+3дБ)");  

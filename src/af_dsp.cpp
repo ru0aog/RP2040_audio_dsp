@@ -347,7 +347,7 @@ static volatile bool     rx_pres_on      = (AF_RX_PRES_ON_DEFAULT != 0);
 static volatile uint32_t rx_pres_freq_hz = AF_RX_PRES_FREQ_HZ;  
 static volatile uint32_t rx_pres_q_x100  = AF_RX_PRES_Q_X100;  
 static volatile int32_t  rx_pres_max_q15 = AF_RX_PRES_MAX_Q15;  
-static int32_t           rx_presmax_db_x10 = 15;   // дБ x10 — для stats и банка  
+static int32_t           rx_presmax_db_x10 = 60;   // дБ x10 — для stats и банка    
 
 // --- Noise Blanker RX (125 ksps, после CIC до HB) ---  
 static volatile bool nb_on = AF_NB_ON_DEFAULT;  
@@ -1291,7 +1291,7 @@ void af_dsp_set_rxpres(bool on) {
 bool     af_dsp_rxpres_on(void)  { return rx_pres_on; }  
 void     af_dsp_set_rxpresmax(int32_t db_x10) {  
     if (db_x10 < 0)  db_x10 = 0;  
-    if (db_x10 > 60) db_x10 = 60;         // потолок +6 дБ  
+    if (db_x10 > 120) db_x10 = 120;       // потолок +12 дБ    
     rx_presmax_db_x10 = db_x10;           // для геттера/stats/банка  
     // дБx10 -> Q15 приращения: gain_q15 = 32768*(10^(dB/20) - 1)  
     rx_pres_max_q15 = (int32_t)lrintf((powf(10.0f, db_x10 / 200.0f) - 1.0f) * 32768.0f);  

@@ -126,11 +126,11 @@
 #define AF_RX_PRES_K_REL_Q24    15000u  // спад ~72 мс
 #define AF_RX_PRES_FREQ_HZ      2300u   // центр presence-пика  
 #define AF_RX_PRES_Q_X100       100u    // Q = 1.00  
-#define AF_RX_PRES_MAX_Q15      (int32_t)(0.1885f * 32768.0f)  // +1.5 дБ дефолт  
+#define AF_RX_PRES_MAX_Q15      (int32_t)(0.9953f * 32768.0f)  // +6.0 дБ дефолт    
 #define AF_RX_PRES_ON_DEFAULT   0  
 
 // --- RX low-shelf («бас» в конце тракта) ---  
-#define AF_RX_SHELF_DB_X10_DEFAULT    0     // басс-шелф по умолчанию отключен, было +3.0 дБ  
+#define AF_RX_SHELF_DB_X10_DEFAULT   30     // басс-шелф +3.0 дБ по умолчанию  
 #define AF_RX_SHELF_FREQ_HZ         450     // частота среза шелфа  
 #define AF_RX_SHELF_Q_X100           70     // Q = 0.70  
   
