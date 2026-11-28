@@ -96,8 +96,10 @@ static uint8_t  bank_code   = 0; // текущий применённый код
 static bool     bwpot_on      = AF_BWPOT_ON_DEFAULT;      
 static uint32_t bwpot_next_ms = 0;      // время следующего чтения      
 static uint16_t bwpot_ema     = 0xFFFF; // EMA отсчёта, 0xFFFF = не инициализир.      
-static uint16_t bwpot_last    = 0xFFFF; // последнее применённое значение      
-static bool     bwpot_armed   = false;  // ручка сдвинулась от стартового положения      
+static uint16_t bwpot_last    = 0xFFFF; // последнее применённое значение        
+static bool     bwpot_armed   = false;  // ручка сдвинулась от стартового положения        
+static bool     bwpot_below   = false;  // полоса ниже порога AF_BWPOT_CW_HZ (фронт)        
+static bool     bwpot_cw      = false;  // CW включён именно ручкой (чужой не трогаем)        
 static uint8_t  last_bank   = 1; // последний загруженный банк 1..7 (для af_rec)      
 static bool     sw_ptt_active = false;  // GP8 — выход PTT (playback магнитофона)      
     
@@ -460,21 +462,62 @@ static void bwpot_poll(void) {
     const uint32_t ctr = AF_BWPOT_CENTER_HZ;    
     const uint32_t lo  = AF_FIR_LO_HZ_DEFAULT    
         + (uint32_t)(((uint64_t)(ctr - 50u - AF_FIR_LO_HZ_DEFAULT) * bwpot_ema) / 4095u);    
-    const uint32_t hi  = AF_FIR_HI_HZ_DEFAULT      
-        - (uint32_t)(((uint64_t)(AF_FIR_HI_HZ_DEFAULT - (ctr + 50u)) * bwpot_ema) / 4095u);      
-    if (af_dsp_set_band(lo, hi)) {      
-        // Пуш в панель: R|-строки вне state dump — панель ловит их      
-        // и обновляет виджеты band lo/hi на лету.      
-        Serial.printf("R|band lo|%lu\nR|band hi|%lu\n",      
-                      (unsigned long)lo, (unsigned long)hi);      
-    }      
-}      
+    const uint32_t hi  = AF_FIR_HI_HZ_DEFAULT        
+        - (uint32_t)(((uint64_t)(AF_FIR_HI_HZ_DEFAULT - (ctr + 50u)) * bwpot_ema) / 4095u);        
+  
+    // --- Авто-CW: полоса сузилась к AF_BWPOT_CW_HZ -> телеграфный фильтр.    
+    // Гистерезис AF_BWPOT_CW_HYST от дребезга на границе.    
+    // В CW af_dsp_set_band отклоняется (полоса следует за f0) —    
+    // поэтому set_band вызываем только вне CW.    
+    const uint32_t width = hi - lo;      
+    const bool below = (width <= AF_BWPOT_CW_HZ);      
+    
+    // Вход в CW — по ФРОНТУ (полоса пересекла порог сверху вниз).      
+    // Уровневое условие включало бы CW обратно каждые 100 мс после      
+    // ручного 'cw off' — ручка переспорила бы оператора.      
+    if (below && !bwpot_below && !af_dsp_cw_on()) {          
+        af_dsp_set_cw_freq(AF_BWPOT_CENTER_HZ);   // центр CW = центр ручки (700)          
+        af_dsp_set_cw_agcmax(af_dsp_agcmax());    // потолок АРУ как в SSB —          
+                                                  // без провала усиления          
+        af_dsp_set_cw(true);          
+        if (af_dsp_cw_on()) {          
+            bwpot_cw = true;                   // CW включён именно ручкой          
+            Serial.println("R|cw|1");          
+        }             
+    } else if (bwpot_cw && !af_dsp_cw_on()) {      
+        bwpot_cw = false;                      // оператор выключил CW вручную —      
+                                               // отпускаем, не навязываем обратно      
+    } else if (bwpot_cw && width > AF_BWPOT_CW_HZ + AF_BWPOT_CW_HYST) {        
+        // Выход — только из CW, включённого ручкой (чужой не трогаем)        
+        af_dsp_set_cw(false);        
+        if (!af_dsp_cw_on()) {        
+            bwpot_cw = false;        
+            Serial.println("R|cw|0");        
+        }        
+    }        
+    bwpot_below = below;        
+    
+    if (af_dsp_cw_on()) {  
+        // В CW полосой владеет f0/bw — ручку мапим на 'cw bw':  
+        // продолжение сужения = тот же width, кламп внутри set_cw_bw.  
+        if (bwpot_cw) {                       // только свой CW  
+            af_dsp_set_cw_bw(width);  
+            Serial.printf("R|cw bw|%lu\n", (unsigned long)width);  
+        }  
+    } else if (af_dsp_set_band(lo, hi)) {          
+        // Пуш в панель: R|-строки вне state dump — панель ловит их          
+        // и обновляет виджеты band lo/hi на лету.          
+        Serial.printf("R|band lo|%lu\nR|band hi|%lu\n",          
+                      (unsigned long)lo, (unsigned long)hi);          
+    }          
+}            
     
 // Вкл/выкл ручки полосы (CLI 'bw pot'). При включении — перезахват EMA,    
 // чтобы не было скачка от устаревшего значения.    
 void af_gpio_bwpot_set(bool on) {    
     bwpot_on = on;    
-    if (on) { bwpot_ema = 0xFFFF; bwpot_last = 0xFFFF; bwpot_armed = false; }      
+    if (on) { bwpot_ema = 0xFFFF; bwpot_last = 0xFFFF; bwpot_armed = false;    
+              bwpot_cw = false; bwpot_below = false; }        
     Serial.printf("[GPIO] bwpot=%s\n", on ? "on" : "off");    
 }    
 bool af_gpio_bwpot_on(void) { return bwpot_on; }    

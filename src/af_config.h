@@ -475,3 +475,5 @@
 #define AF_BWPOT_CENTER_HZ      700u        // центр сужения, Гц  
 #define AF_BWPOT_ON_DEFAULT     1           // 1 = ручка активна при старте  
 
+#define AF_BWPOT_CW_HZ          500u        // ширина, при которой включается CW  
+#define AF_BWPOT_CW_HYST        10u         // гистерезис выхода из CW, Гц  

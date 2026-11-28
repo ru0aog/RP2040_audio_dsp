@@ -732,9 +732,12 @@ static void cw_design(void) {
 
 
 // Подтяжка FIR под центральную частоту CW: f0 ± 250 Гц.  
-static void cw_band_follow(void) {      
-    int32_t lo = (int32_t)cw_f0 - 250;      
-    int32_t hi = (int32_t)cw_f0 + 250;      
+static void cw_band_follow(void) {        
+    // FIR под фактическую полосу CW: f0 ± bw/2 — маркеры спектра        
+    // совпадают с реальной полосой пропускания.        
+    const int32_t half = (int32_t)(cw_bw / 2u);        
+    int32_t lo = (int32_t)cw_f0 - half;        
+    int32_t hi = (int32_t)cw_f0 + half;           
     if (lo < 50)   lo = 50;      
     if (hi > 7000) hi = 7000;      
     af_lo_hz = (uint32_t)lo;      
