@@ -213,8 +213,9 @@ class Panel(tk.Tk):
         self._auto_reconnect = True   # автопоиск платы после обрыва    
         self._reconnect_id = None     # after-id тикера переподключения    
         self._last_port = None        # последний рабочий порт    
-        self._last_rx = 0.0           # время последней строки от платы    
-        self._wd_probe = False        # watchdog: "version" уже послан      
+        self._last_rx = 0.0           # время последней строки от платы      
+        self._wd_probe = False        # watchdog: "version" уже послан        
+        self._last_version = None     # последняя показанная строка "# version:"    
         self._audio_was_on = False    # монитор был включён до обрыва — вернуть после реконнекта      
         self._audio_retry = 0         # осталось попыток рестарта монитора (UAC поднимается с задержкой)    
         self.audio_in = None    # sd.InputStream при активном мониторинге  
@@ -259,9 +260,8 @@ class Panel(tk.Tk):
         self.paned.pack(fill="both", expand=True)    
         self._build_table()    
         self._build_bottom()      
-        self.after(50, self._poll_rx)        
-        self.after(1000, self._watchdog)    # контроль молчания порта    
-        self.after(400, self._auto_start)   # автовыбор порта/микрофона + старт    
+        self.after(50, self._poll_rx)          
+        self.after(400, self._auto_start)   # автовыбор порта/микрофона + старт      
   
     # --- layout -------------------------------------------------------------  
     def _build_top(self):  
@@ -436,9 +436,10 @@ class Panel(tk.Tk):
   
     def _on_disconnect(self):    
         # Обрыв порта: закрыть worker, остановить аудио, запустить автопоиск.    
-        self.w.close()    
-        self._rec_stop()    
-        self._audio_was_on = (self.audio_in is not None)  # до _audio_stop      
+        self.w.close()      
+        self._rec_stop()      
+        self.schema_ok = False            # до version — команды не отправлять    
+        self._audio_was_on = (self.audio_in is not None)  # до _audio_stop        
         self._audio_retry = 0         # отменить недошедшие попытки рестарта    
         self._audio_stop()      
         self.btn_conn["text"] = "Подключить"  
@@ -465,9 +466,10 @@ class Panel(tk.Tk):
         except Exception:    
             self._schedule_reconnect()    
             return    
-        self._last_port = port    
-        self._last_rx = time.monotonic()   # новый порт — отсчёт тишины заново    
-        self._wd_probe = False    
+        self._last_port = port      
+        self._last_rx = time.monotonic()   # новый порт — отсчёт тишины заново      
+        self._wd_probe = False      
+        self._dump_retries = 0             # новый порт — повторы дампа заново    
         self.port_var.set(port)  
         self.port_cb["values"] = self._ports()  
         self.btn_conn["text"] = "Отключить"  
@@ -1304,14 +1306,15 @@ class Panel(tk.Tk):
         if not port:  
             messagebox.showerror("Порт", "Выберите COM-порт")  
             return  
-        try:    
-            self.w.open(port)    
-            self._last_port = port      
-        except Exception as ex:    
-            messagebox.showerror("Порт", str(ex))    
-            return    
-        self._last_rx = time.monotonic()   # отсчёт тишины — с момента открытия    
-        self._wd_probe = False    
+        try:      
+            self.w.open(port)      
+            self._last_port = port        
+        except Exception as ex:      
+            messagebox.showerror("Порт", str(ex))      
+            return      
+        self._last_rx = time.monotonic()   # отсчёт тишины — с момента открытия      
+        self._wd_probe = False      
+        self._dump_retries = 0             # новый порт — повторы дампа заново    
         self.btn_conn["text"] = "Отключить"    
         self.status_var.set(f"{port}: handshake…")  
         self._pending = ["version", "params dump", "state dump"]  
@@ -1375,23 +1378,24 @@ class Panel(tk.Tk):
             pass  
         self.after(50, self._poll_rx)  
 
-    def _watchdog(self):  
-        # Порт открыт, но плата молчит >5 с (зависла/ребут без разрыва  
-        # USB): пробный "version", ещё 3 с тишины -> эмуляция обрыва.  
-        if self.w.ser:  
-            idle = time.monotonic() - self._last_rx  
-            if idle > 8.0 and self._wd_probe:    
-                self.w.rxq.put(("__disconnected__",))    
-                self.w.close()    
-            elif idle > 5.0 and not self._wd_probe:  
-                self._wd_probe = True  
-                self.w.send("version")  
-        self.after(1000, self._watchdog)  
+    def _watchdog(self):    
+        # ОТКЛЮЧЁН: периодические пробы "version" засоряли лог.    
+        # Обрыв порта ловится _reader -> "__disconnected__" -> _on_disconnect.    
+        # Если понадобится детект зависшей платы с живым портом — вернуть    
+        # тикер с интервалом 30-60 с вместо 5 с.    
+        pass    
 
-    def _on_line(self, line):    
-        self._last_rx = time.monotonic()    
-        self._wd_probe = False    
-        self._log(line)    
+    def _on_line(self, line):      
+        self._last_rx = time.monotonic()      
+        self._wd_probe = False      
+        # Повторные "# version:" (пробы watchdog/поллинг) — в лог не пишем,    
+        # но строка ниже всё равно доходит до парсера схемы.    
+        if line.startswith("# version:"):    
+            if line != self._last_version:    
+                self._last_version = line    
+                self._log(line)    
+        else:    
+            self._log(line)      
   
         # --- params dump frame ---  
         if line.startswith("# params begin"):  
