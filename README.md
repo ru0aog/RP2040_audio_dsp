@@ -702,6 +702,7 @@ RP2040_audio_dsp/
 ## Лицензия
 
 Проект распространяется на условиях **GNU Affero General Public License v3.0 (AGPL-3.0)**. См. [LICENSE](LICENSE).
+
 Содержит адаптированные алгоритмы из WSJT-X и fldigi (оба под GPL). 
 
 ## Автор и проект
